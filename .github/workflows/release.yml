@@ -36,17 +36,6 @@ jobs:
             exit 1
           }
           tail -20 pack/package.log
-      - name: Debug dump（失败时推送产物状态到 ci-debug 分支）
-        if: failure()
-        shell: bash
-        run: |
-          git config user.email ci@agenthub.local
-          git config user.name ci
-          git checkout -B ci-debug
-          git add -A pack package-failed.log 2>/dev/null || git add -A pack || true
-          if git diff --cached --quiet; then echo "pack 无内容"; exit 0; fi
-          git commit -m "ci-debug: release run ${{ github.run_id }} package 状态"
-          git push -f origin ci-debug
       - name: GitHub Release
         uses: softprops/action-gh-release@v2
         with:

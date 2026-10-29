@@ -6,17 +6,18 @@ cd "$(dirname "$0")/../pack" || exit 9
 
 for p in agenthub_linux-amd64 agenthub_linux-arm64 agenthub_windows-amd64.exe; do
   base=${p%.exe}; base=${base#agenthub_} # linux-amd64 / windows-amd64
-  mkdir -p "agenthub_$base" || exit 1
-  cp "$p" "agenthub_$base/agenthub${p#agenthub_$base}" || exit 1
-  cp ../README.md "agenthub_$base/" || exit 1
+  dir="agenthub-$base" # 目录名用连字符：避免与二进制文件重名（mkdir File exists）
+  mkdir -p "$dir" || exit 1
+  cp "$p" "$dir/agenthub${p#agenthub_$base}" || exit 1
+  cp ../README.md "$dir/" || exit 1
 done
 
-tar czf agenthub_linux-amd64.tar.gz agenthub_linux-amd64 || exit 1
-tar czf agenthub_linux-arm64.tar.gz agenthub_linux-arm64 || exit 1
-python3 -m zipfile -c agenthub_windows-amd64.zip agenthub_windows-amd64/ || exit 1
+tar czf agenthub-linux-amd64.tar.gz agenthub-linux-amd64 || exit 1
+tar czf agenthub-linux-arm64.tar.gz agenthub-linux-arm64 || exit 1
+python3 -m zipfile -c agenthub-windows-amd64.zip agenthub-windows-amd64/ || exit 1
 
-rm -rf agenthub_linux-amd64 agenthub_linux-arm64 agenthub_windows-amd64
+rm -rf agenthub-linux-amd64 agenthub-linux-arm64 agenthub-windows-amd64
 rm -f agenthub_linux-amd64 agenthub_linux-arm64 agenthub_windows-amd64.exe
 
-sha256sum agenthub_*.tar.gz agenthub_*.zip > SHA256SUMS || exit 1
+sha256sum agenthub-*.tar.gz agenthub-*.zip > SHA256SUMS || exit 1
 ls -l
