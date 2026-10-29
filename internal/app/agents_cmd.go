@@ -8,13 +8,13 @@ import (
 	"fmt"
 	"io"
 
-	"agenthub/internal/agent"
-	"agenthub/internal/store"
+	"yardmaster/internal/agent"
+	"yardmaster/internal/store"
 )
 
 func runAgents(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "用法: agenthub agents <list|preview|wire|unwind|drift> [参数]")
+		fmt.Fprintln(stderr, "用法: yardmaster agents <list|preview|wire|unwind|drift> [参数]")
 		return ErrUsage
 	}
 	paths, err := store.DefaultPaths()
@@ -70,7 +70,7 @@ func agentsPreview(m *agent.Manager, args []string, stdout, stderr io.Writer) er
 		return ErrUsage
 	}
 	if fs.NArg() != 1 || *model == "" {
-		fmt.Fprintln(stderr, "用法: agenthub agents preview [-addr URL] -model <模型> <agent-id>")
+		fmt.Fprintln(stderr, "用法: yardmaster agents preview [-addr URL] -model <模型> <agent-id>")
 		return ErrUsage
 	}
 	m.Addr = *addr
@@ -102,7 +102,7 @@ func agentsWire(m *agent.Manager, args []string, stdout, stderr io.Writer) error
 		return ErrUsage
 	}
 	if fs.NArg() != 1 || *model == "" {
-		fmt.Fprintln(stderr, "用法: agenthub agents wire [-addr URL] -model <模型> [-yes] <agent-id>")
+		fmt.Fprintln(stderr, "用法: yardmaster agents wire [-addr URL] -model <模型> [-yes] <agent-id>")
 		return ErrUsage
 	}
 	m.Addr = *addr
@@ -136,7 +136,7 @@ func agentsWire(m *agent.Manager, args []string, stdout, stderr io.Writer) error
 
 func agentsUnwind(m *agent.Manager, args []string, stdout, stderr io.Writer) error {
 	if len(args) != 1 {
-		fmt.Fprintln(stderr, "用法: agenthub agents unwind <agent-id>")
+		fmt.Fprintln(stderr, "用法: yardmaster agents unwind <agent-id>")
 		return ErrUsage
 	}
 	def, ok := agent.ByID(args[0])
@@ -153,7 +153,7 @@ func agentsUnwind(m *agent.Manager, args []string, stdout, stderr io.Writer) err
 
 func agentsDrift(m *agent.Manager, args []string, stdout, stderr io.Writer) error {
 	if len(args) != 1 {
-		fmt.Fprintln(stderr, "用法: agenthub agents drift <agent-id>")
+		fmt.Fprintln(stderr, "用法: yardmaster agents drift <agent-id>")
 		return ErrUsage
 	}
 	def, ok := agent.ByID(args[0])

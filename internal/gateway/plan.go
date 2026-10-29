@@ -17,8 +17,8 @@ import (
 	"sync"
 	"time"
 
-	"agenthub/internal/provider"
-	"agenthub/internal/store"
+	"yardmaster/internal/provider"
+	"yardmaster/internal/store"
 )
 
 // Candidate 是一次尝试的最小服务单元：成员模型 × 一个账号。

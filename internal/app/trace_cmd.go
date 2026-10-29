@@ -8,13 +8,13 @@ import (
 	"io"
 	"strings"
 
-	"agenthub/internal/gateway"
-	"agenthub/internal/store"
+	"yardmaster/internal/gateway"
+	"yardmaster/internal/store"
 )
 
 func runTrace(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "用法: agenthub trace <list|show> [参数]")
+		fmt.Fprintln(stderr, "用法: yardmaster trace <list|show> [参数]")
 		return ErrUsage
 	}
 	paths, err := store.DefaultPaths()
@@ -95,7 +95,7 @@ func traceList(paths store.Paths, args []string, stdout, stderr io.Writer) error
 
 func traceShow(paths store.Paths, args []string, stdout, stderr io.Writer) error {
 	if len(args) != 1 {
-		fmt.Fprintln(stderr, "用法: agenthub trace show <trace-id>")
+		fmt.Fprintln(stderr, "用法: yardmaster trace show <trace-id>")
 		return ErrUsage
 	}
 	traces, err := gateway.LoadTraceFiles(paths.TraceDir(), 0)

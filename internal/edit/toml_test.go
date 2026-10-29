@@ -52,16 +52,16 @@ func TestSetTOMLNewKeyInExistingTable(t *testing.T) {
 }
 
 func TestSetTOMLMissingTableAppended(t *testing.T) {
-	out, err := SetTOML([]byte(sampleTOML), []string{"model_providers", "agenthub"}, "base_url", "http://127.0.0.1:8317/v1")
+	out, err := SetTOML([]byte(sampleTOML), []string{"model_providers", "yardmaster"}, "base_url", "http://127.0.0.1:8317/v1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := string(out)
-	if !strings.Contains(s, "[model_providers.agenthub]") ||
+	if !strings.Contains(s, "[model_providers.yardmaster]") ||
 		!strings.Contains(s, `base_url = "http://127.0.0.1:8317/v1"`) {
 		t.Fatalf("缺表未补建\n%s", s)
 	}
-	if strings.Contains(s, "[model_providers.agenthub]") && strings.Index(s, "[model_providers.agenthub]") < strings.Index(s, "[profiles.work]") {
+	if strings.Contains(s, "[model_providers.yardmaster]") && strings.Index(s, "[model_providers.yardmaster]") < strings.Index(s, "[profiles.work]") {
 		t.Fatalf("新表应追加在文件末尾\n%s", s)
 	}
 }
@@ -103,11 +103,11 @@ func TestGetTOMLRoundtrip(t *testing.T) {
 }
 
 func TestSetTOMLThenGetRoundtrip(t *testing.T) {
-	out, err := SetTOML([]byte(sampleTOML), []string{"model_providers", "agenthub"}, "api_key", "gw-codex")
+	out, err := SetTOML([]byte(sampleTOML), []string{"model_providers", "yardmaster"}, "api_key", "gw-codex")
 	if err != nil {
 		t.Fatal(err)
 	}
-	v, ok := GetTOML(out, []string{"model_providers", "agenthub"}, "api_key")
+	v, ok := GetTOML(out, []string{"model_providers", "yardmaster"}, "api_key")
 	if !ok || v != "gw-codex" {
 		t.Fatalf("roundtrip = %v %v", v, ok)
 	}

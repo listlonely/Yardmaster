@@ -341,7 +341,7 @@ func writeErr(p ClientProto, status int, msg string) (int, []byte) {
 		})
 	} else {
 		body, _ = json.Marshal(map[string]any{
-			"error": map[string]any{"message": msg, "type": "agenthub_error"},
+			"error": map[string]any{"message": msg, "type": "yardmaster_error"},
 		})
 	}
 	return status, body

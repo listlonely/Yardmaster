@@ -41,9 +41,9 @@
 
 - trace 记录时机：路由判定起（解析失败/全败也留痕，Outcome=fail）；候选链逐次尝试记录结果分类（ok/net/quota/5xx/cred/client）、状态码、原因摘要（错误响应片段，`netproxy.Snippet` 截断）、耗时、实际代理出口（脱敏）。
 - 首字节（ttfb_ms）= 请求进入到上游 2xx 响应头到达；total_ms = 到响应写完。token：非流式与流式均尽力从上游响应体提取（usage 正则、取最后一次出现；流式只扫尾部 8KB 窗口，usage 跨块截断时可能漏计——尽力而为语义）。
-- 观测通道：`GET /api/trace?limit=&agent=&result=(ok|fail|switch)`；CLI `agenthub trace list [-agent -result -limit]` / `trace show <id>`（失败链 ✗ 标注原因，成功 ✓）。
+- 观测通道：`GET /api/trace?limit=&agent=&result=(ok|fail|switch)`；CLI `yardmaster trace list [-agent -result -limit]` / `trace show <id>`（失败链 ✗ 标注原因，成功 ✓）。
 - 落盘：`<数据目录>/trace/trace-YYYYMMDD.jsonl`（0600）；启动时清理 + 跨天滚动时清理；只存元数据与失败原因，永不落盘对话内容（§4.4）。
-- 用量：`NoteUsage` 累计（内存 + 账号快照字段，跨日按 UsageDay 重置）；`FlushUsage` 重读 providers.json 只更新跟踪账号（不覆盖运行期 CLI 编辑），serve 期间每分钟 + 退出前各一次；`agenthub provider quota <p> <acc> <tokens|0>` 配置账号当日额度，>0 后 smart 策略按剩余比例排序。
+- 用量：`NoteUsage` 累计（内存 + 账号快照字段，跨日按 UsageDay 重置）；`FlushUsage` 重读 providers.json 只更新跟踪账号（不覆盖运行期 CLI 编辑），serve 期间每分钟 + 退出前各一次；`yardmaster provider quota <p> <acc> <tokens|0>` 配置账号当日额度，>0 后 smart 策略按剩余比例排序。
 
 ## 约束与失效行为
 

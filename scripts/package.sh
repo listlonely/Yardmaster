@@ -4,20 +4,20 @@
 set -x
 cd "$(dirname "$0")/../pack" || exit 9
 
-for p in agenthub_linux-amd64 agenthub_linux-arm64 agenthub_windows-amd64.exe; do
-  base=${p%.exe}; base=${base#agenthub_} # linux-amd64 / windows-amd64
-  dir="agenthub-$base" # 目录名用连字符：避免与二进制文件重名（mkdir File exists）
+for p in yardmaster_linux-amd64 yardmaster_linux-arm64 yardmaster_windows-amd64.exe; do
+  base=${p%.exe}; base=${base#yardmaster_} # linux-amd64 / windows-amd64
+  dir="yardmaster-$base" # 目录名用连字符：避免与二进制文件重名（mkdir File exists）
   mkdir -p "$dir" || exit 1
-  cp "$p" "$dir/agenthub${p#agenthub_$base}" || exit 1
+  cp "$p" "$dir/yardmaster${p#yardmaster_$base}" || exit 1
   cp ../README.md "$dir/" || exit 1
 done
 
-tar czf agenthub-linux-amd64.tar.gz agenthub-linux-amd64 || exit 1
-tar czf agenthub-linux-arm64.tar.gz agenthub-linux-arm64 || exit 1
-python3 -m zipfile -c agenthub-windows-amd64.zip agenthub-windows-amd64/ || exit 1
+tar czf yardmaster-linux-amd64.tar.gz yardmaster-linux-amd64 || exit 1
+tar czf yardmaster-linux-arm64.tar.gz yardmaster-linux-arm64 || exit 1
+python3 -m zipfile -c yardmaster-windows-amd64.zip yardmaster-windows-amd64/ || exit 1
 
-rm -rf agenthub-linux-amd64 agenthub-linux-arm64 agenthub-windows-amd64
-rm -f agenthub_linux-amd64 agenthub_linux-arm64 agenthub_windows-amd64.exe
+rm -rf yardmaster-linux-amd64 yardmaster-linux-arm64 yardmaster-windows-amd64
+rm -f yardmaster_linux-amd64 yardmaster_linux-arm64 yardmaster_windows-amd64.exe
 
-sha256sum agenthub-*.tar.gz agenthub-*.zip > SHA256SUMS || exit 1
+sha256sum yardmaster-*.tar.gz yardmaster-*.zip > SHA256SUMS || exit 1
 ls -l

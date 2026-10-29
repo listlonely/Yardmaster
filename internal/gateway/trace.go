@@ -21,7 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"agenthub/internal/netproxy"
+	"yardmaster/internal/netproxy"
 )
 
 // Trace 保留与内存缓冲参数。

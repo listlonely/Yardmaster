@@ -30,7 +30,7 @@ func WriteAtomic(path string, data []byte) error {
 		return fmt.Errorf("stat %s: %w", path, err)
 	}
 
-	tmp, err := os.CreateTemp(dir, ".agenthub-edit-*")
+	tmp, err := os.CreateTemp(dir, ".yardmaster-edit-*")
 	if err != nil {
 		return fmt.Errorf("create temp in %s: %w", dir, err)
 	}

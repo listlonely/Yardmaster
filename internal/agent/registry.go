@@ -52,11 +52,11 @@ func Registry() []Def {
 			Ops: func(addr, key, model string) []Op {
 				return []Op{
 					{Desc: "model → 默认模型", TOMLKey: "model", Value: model},
-					{Desc: "model_provider → agenthub", TOMLKey: "model_provider", Value: "agenthub"},
-					{Desc: "[model_providers.agenthub].name", TOMLTable: []string{"model_providers", "agenthub"}, TOMLKey: "name", Value: "AgentHub"},
-					{Desc: "[model_providers.agenthub].base_url", TOMLTable: []string{"model_providers", "agenthub"}, TOMLKey: "base_url", Value: strings.TrimSuffix(addr, "/") + "/v1"},
-					{Desc: "[model_providers.agenthub].api_key", TOMLTable: []string{"model_providers", "agenthub"}, TOMLKey: "api_key", Value: key},
-					{Desc: "[model_providers.agenthub].wire_api", TOMLTable: []string{"model_providers", "agenthub"}, TOMLKey: "wire_api", Value: "chat"},
+					{Desc: "model_provider → yardmaster", TOMLKey: "model_provider", Value: "yardmaster"},
+					{Desc: "[model_providers.yardmaster].name", TOMLTable: []string{"model_providers", "yardmaster"}, TOMLKey: "name", Value: "yardmaster"},
+					{Desc: "[model_providers.yardmaster].base_url", TOMLTable: []string{"model_providers", "yardmaster"}, TOMLKey: "base_url", Value: strings.TrimSuffix(addr, "/") + "/v1"},
+					{Desc: "[model_providers.yardmaster].api_key", TOMLTable: []string{"model_providers", "yardmaster"}, TOMLKey: "api_key", Value: key},
+					{Desc: "[model_providers.yardmaster].wire_api", TOMLTable: []string{"model_providers", "yardmaster"}, TOMLKey: "wire_api", Value: "chat"},
 				}
 			},
 		},
@@ -74,10 +74,10 @@ func Registry() []Def {
 			},
 			Ops: func(addr, key, model string) []Op {
 				return []Op{
-					{Desc: "provider.agenthub.npm", JSONPath: []string{"provider", "agenthub", "npm"}, Value: "@ai-sdk/openai-compatible"},
-					{Desc: "provider.agenthub.options.baseURL", JSONPath: []string{"provider", "agenthub", "options", "baseURL"}, Value: strings.TrimSuffix(addr, "/") + "/v1"},
-					{Desc: "provider.agenthub.options.apiKey", JSONPath: []string{"provider", "agenthub", "options", "apiKey"}, Value: key},
-					{Desc: "model → agenthub/<模型>", JSONPath: []string{"model"}, Value: "agenthub/" + model},
+					{Desc: "provider.yardmaster.npm", JSONPath: []string{"provider", "yardmaster", "npm"}, Value: "@ai-sdk/openai-compatible"},
+					{Desc: "provider.yardmaster.options.baseURL", JSONPath: []string{"provider", "yardmaster", "options", "baseURL"}, Value: strings.TrimSuffix(addr, "/") + "/v1"},
+					{Desc: "provider.yardmaster.options.apiKey", JSONPath: []string{"provider", "yardmaster", "options", "apiKey"}, Value: key},
+					{Desc: "model → yardmaster/<模型>", JSONPath: []string{"model"}, Value: "yardmaster/" + model},
 				}
 			},
 		},

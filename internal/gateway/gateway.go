@@ -24,8 +24,8 @@ import (
 	"strings"
 	"time"
 
-	"agenthub/internal/netproxy"
-	"agenthub/internal/provider"
+	"yardmaster/internal/netproxy"
+	"yardmaster/internal/provider"
 )
 
 // webIndex 是 W2 快照管理页（/）；完整管理页于后续周实现。
@@ -67,7 +67,7 @@ func (s *Server) Handler() http.Handler {
 	s.started = time.Now()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, map[string]string{"name": "agenthub", "status": "ok"})
+		writeJSON(w, map[string]string{"name": "yardmaster", "status": "ok"})
 	})
 	mux.HandleFunc("GET /v1/models", s.handleModels)
 	mux.HandleFunc("POST /v1/chat/completions", s.handleInference(ProtoChat))
@@ -257,7 +257,7 @@ func (s *Server) handleInference(client ClientProto) http.HandlerFunc {
 		if target == "" {
 			tr.RoutePath = "none"
 			st, b := writeErr(client, http.StatusNotFound,
-				"未指定模型且调用方无默认模型绑定（用 `agenthub keys bind` 配置）")
+				"未指定模型且调用方无默认模型绑定（用 `yardmaster keys bind` 配置）")
 			writeRaw(w, st, b)
 			recordFail(st)
 			return

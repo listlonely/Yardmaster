@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"agenthub/internal/provider"
+	"yardmaster/internal/provider"
 )
 
 type recordedReq struct {

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"agenthub/internal/provider"
+	"yardmaster/internal/provider"
 )
 
 func TestProbeAccountChat(t *testing.T) {

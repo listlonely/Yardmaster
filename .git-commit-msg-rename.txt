@@ -1,0 +1,15 @@
+refactor!: 产品更名 agenthub → Yardmaster
+
+意象定名「调车长」：Agent 只管发车，Yardmaster 按任务规则把每趟请求
+拨上正确的股道（模型），堵了自动改线，全程有行车日志（trace）。
+命名经同赛道撞名核查（Junction 撞 junctionpanel.dev 弃用；Yardmaster
+仅两个无活跃度小项目，通过）。
+
+- Go module 与全部 import：agenthub/* → yardmaster/*
+- 二进制与 release 产物：agenthub(.exe) → yardmaster(.exe)
+- 协议文案：错误 type agenthub_error → yardmaster_error；healthz name
+- 数据目录：~/.agenthub → ~/.yardmaster
+- README 重写为正式产品文档；docs/subsystems 同步
+- 不变：X-Gw-* 响应头（语义不绑品牌）、端口 8317、gw-<agent> key 约定
+
+BREAKING CHANGE: 数据目录迁移为 ~/.yardmaster；旧版配置需手动改名迁移。

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"agenthub/internal/store"
-	"agenthub/internal/testenv"
+	"yardmaster/internal/store"
+	"yardmaster/internal/testenv"
 )
 
 const userClaudeSettings = `{
@@ -107,8 +107,8 @@ func TestWireCodexTOMLAndDrift(t *testing.T) {
 	s := string(out)
 	for _, want := range []string{
 		`model = "siliconflow/zai-org/GLM-5.3"`,
-		"model_provider = \"agenthub\"",
-		"[model_providers.agenthub]",
+		"model_provider = \"yardmaster\"",
+		"[model_providers.yardmaster]",
 		`base_url = "http://127.0.0.1:8317/v1"`,
 		`api_key = "gw-codex"`,
 		"# codex 用户配置",
@@ -172,7 +172,7 @@ func TestWireOpencodeCreatesAndUnsets(t *testing.T) {
 		t.Fatalf("配置文件应被创建: %v", err)
 	}
 	s := string(out)
-	if !strings.Contains(s, "agenthub/siliconflow/deepseek-ai/DeepSeek-V4.1-Flash") ||
+	if !strings.Contains(s, "yardmaster/siliconflow/deepseek-ai/DeepSeek-V4.1-Flash") ||
 		!strings.Contains(s, "http://127.0.0.1:8317/v1") {
 		t.Fatalf("内容异常\n%s", s)
 	}
@@ -185,7 +185,7 @@ func TestWireOpencodeCreatesAndUnsets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(restored), "agenthub") {
+	if strings.Contains(string(restored), "yardmaster") {
 		t.Fatalf("名下键未删除\n%s", restored)
 	}
 }

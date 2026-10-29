@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"agenthub/internal/provider"
+	"yardmaster/internal/provider"
 )
 
 // twoProviders 构造两个各含两账号的 chat provider（账号名全局唯一便于断言）。

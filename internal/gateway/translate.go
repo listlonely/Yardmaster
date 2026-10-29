@@ -169,7 +169,7 @@ func chatResponseToMessages(mr *MessagesRequest, cc *ChatChunk) *MessagesRespons
 		ms.Usage.OutputTokens = cc.Usage.CompletionTokens
 	}
 	if ms.ID == "" {
-		ms.ID = "msg_agenthub"
+		ms.ID = "msg_yardmaster"
 	}
 	return ms
 }

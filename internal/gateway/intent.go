@@ -18,8 +18,8 @@ import (
 	"sync"
 	"time"
 
-	"agenthub/internal/classify"
-	"agenthub/internal/store"
+	"yardmaster/internal/classify"
+	"yardmaster/internal/store"
 )
 
 // L1Caller 是 L1 分类的注入回调：调用小模型并返回其原始文本输出。

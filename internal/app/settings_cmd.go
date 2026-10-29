@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"agenthub/internal/netproxy"
-	"agenthub/internal/store"
+	"yardmaster/internal/netproxy"
+	"yardmaster/internal/store"
 )
 
 func runSettings(args []string, stdout, stderr io.Writer) error {
@@ -21,7 +21,7 @@ func runSettings(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "用法: agenthub settings <get|set> [键 值]；当前支持键：global_proxy、l1_classifier、l1_timeout_ms")
+		fmt.Fprintln(stderr, "用法: yardmaster settings <get|set> [键 值]；当前支持键：global_proxy、l1_classifier、l1_timeout_ms")
 		return ErrUsage
 	}
 	switch args[0] {
@@ -48,7 +48,7 @@ func runSettings(args []string, stdout, stderr io.Writer) error {
 			return ErrUsage
 		}
 		if fs.NArg() != 2 {
-			fmt.Fprintln(stderr, "用法: agenthub settings set <键> <值>")
+			fmt.Fprintln(stderr, "用法: yardmaster settings set <键> <值>")
 			return ErrUsage
 		}
 		key, val := fs.Arg(0), fs.Arg(1)

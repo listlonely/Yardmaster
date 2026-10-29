@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"agenthub/internal/netproxy"
-	"agenthub/internal/provider"
+	"yardmaster/internal/netproxy"
+	"yardmaster/internal/provider"
 )
 
 // probeTimeout 是预检的硬上限。

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"agenthub/internal/provider"
+	"yardmaster/internal/provider"
 )
 
 type conf struct {
@@ -14,7 +14,7 @@ type conf struct {
 }
 
 func TestSaveLoadRoundtrip(t *testing.T) {
-	p := Paths{AppDir: filepath.Join(t.TempDir(), ".agenthub")}
+	p := Paths{AppDir: filepath.Join(t.TempDir(), ".yardmaster")}
 	if err := SaveJSON(p.SettingsPath(), conf{Port: 8317}); err != nil {
 		t.Fatalf("SaveJSON: %v", err)
 	}

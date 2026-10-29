@@ -1,4 +1,4 @@
-module agenthub
+module yardmaster
 
 go 1.27
 

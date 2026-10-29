@@ -1,4 +1,4 @@
-# AgentHub 开发命令（开发文档 §10.C）
+# yardmaster 开发命令（开发文档 §10.C）
 # Windows 下若未安装 make，直接运行等价的 go 命令即可；
 # 本机 Go 不在 PATH 时：set GO=C:\Users\<you>\tools\go\bin\go.exe
 
@@ -21,7 +21,7 @@ vet:
 	GOOS=linux $(GO) vet ./...
 
 build:
-	$(GO) build -trimpath -o bin/ ./cmd/agenthub
+	$(GO) build -trimpath -o bin/ ./cmd/yardmaster
 
 clean:
 	-$(RM) -r bin

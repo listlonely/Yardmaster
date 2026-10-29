@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"agenthub/internal/store"
+	"yardmaster/internal/store"
 )
 
 // Rule 是一条任务规则。条件字段（Intent/Regex/MaxTokens/CallerKey）

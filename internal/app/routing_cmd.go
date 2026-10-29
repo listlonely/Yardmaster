@@ -13,16 +13,16 @@ import (
 	"regexp"
 	"strings"
 
-	"agenthub/internal/classify"
-	"agenthub/internal/gateway"
-	"agenthub/internal/store"
+	"yardmaster/internal/classify"
+	"yardmaster/internal/gateway"
+	"yardmaster/internal/store"
 )
 
 // ---------- rules ----------
 
 func runRules(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "用法: agenthub rules <list|add|rm> [参数]")
+		fmt.Fprintln(stderr, "用法: yardmaster rules <list|add|rm> [参数]")
 		return ErrUsage
 	}
 	paths, err := store.DefaultPaths()
@@ -46,13 +46,13 @@ func rulesList(paths store.Paths, stdout io.Writer) error {
 	f, err := gateway.LoadRulesFile(paths.RulesPath())
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			fmt.Fprintln(stdout, "（无任务规则；用 `agenthub rules add` 添加）")
+			fmt.Fprintln(stdout, "（无任务规则；用 `yardmaster rules add` 添加）")
 			return nil
 		}
 		return err
 	}
 	if len(f.Rules) == 0 {
-		fmt.Fprintln(stdout, "（无任务规则；用 `agenthub rules add` 添加）")
+		fmt.Fprintln(stdout, "（无任务规则；用 `yardmaster rules add` 添加）")
 		return nil
 	}
 	for _, r := range f.Rules {
@@ -131,7 +131,7 @@ func rulesAdd(paths store.Paths, args []string, stdout, stderr io.Writer) error 
 
 func rulesRemove(paths store.Paths, args []string, stdout, stderr io.Writer) error {
 	if len(args) != 1 {
-		fmt.Fprintln(stderr, "用法: agenthub rules rm <rule-id>")
+		fmt.Fprintln(stderr, "用法: yardmaster rules rm <rule-id>")
 		return ErrUsage
 	}
 	f, err := gateway.LoadRulesFile(paths.RulesPath())
@@ -167,7 +167,7 @@ func rulesRemove(paths store.Paths, args []string, stdout, stderr io.Writer) err
 
 func runKeys(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "用法: agenthub keys <list|bind|unbind> [参数]")
+		fmt.Fprintln(stderr, "用法: yardmaster keys <list|bind|unbind> [参数]")
 		return ErrUsage
 	}
 	paths, err := store.DefaultPaths()
@@ -191,13 +191,13 @@ func keysList(paths store.Paths, stdout io.Writer) error {
 	f, err := gateway.LoadKeysFile(paths.KeysPath())
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			fmt.Fprintln(stdout, "（无绑定；用 `agenthub keys bind` 添加）")
+			fmt.Fprintln(stdout, "（无绑定；用 `yardmaster keys bind` 添加）")
 			return nil
 		}
 		return err
 	}
 	if len(f.Bindings) == 0 {
-		fmt.Fprintln(stdout, "（无绑定；用 `agenthub keys bind` 添加）")
+		fmt.Fprintln(stdout, "（无绑定；用 `yardmaster keys bind` 添加）")
 		return nil
 	}
 	for _, b := range f.Bindings {
@@ -241,7 +241,7 @@ func keysBind(paths store.Paths, args []string, stdout, stderr io.Writer) error 
 
 func keysUnbind(paths store.Paths, args []string, stdout, stderr io.Writer) error {
 	if len(args) != 1 {
-		fmt.Fprintln(stderr, "用法: agenthub keys unbind <key>")
+		fmt.Fprintln(stderr, "用法: yardmaster keys unbind <key>")
 		return ErrUsage
 	}
 	f, err := gateway.LoadKeysFile(paths.KeysPath())
@@ -277,7 +277,7 @@ func keysUnbind(paths store.Paths, args []string, stdout, stderr io.Writer) erro
 
 func runIntents(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "用法: agenthub intents <list|add> [参数]")
+		fmt.Fprintln(stderr, "用法: yardmaster intents <list|add> [参数]")
 		return ErrUsage
 	}
 	paths, err := store.DefaultPaths()
@@ -312,7 +312,7 @@ func intentsList(paths store.Paths, stdout io.Writer) error {
 		return err
 	}
 	if len(s.Intents) == 0 {
-		fmt.Fprintln(stdout, "（无自定义意图；用 `agenthub intents add` 添加）")
+		fmt.Fprintln(stdout, "（无自定义意图；用 `yardmaster intents add` 添加）")
 		return nil
 	}
 	for _, d := range s.Intents {

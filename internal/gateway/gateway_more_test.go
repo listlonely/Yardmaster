@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"agenthub/internal/provider"
+	"yardmaster/internal/provider"
 )
 
 func newBufReader(r io.Reader) *bufio.Reader { return bufio.NewReader(r) }

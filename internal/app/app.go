@@ -15,12 +15,12 @@ import (
 	"syscall"
 	"time"
 
-	"agenthub/internal/gateway"
-	"agenthub/internal/netproxy"
-	"agenthub/internal/store"
+	"yardmaster/internal/gateway"
+	"yardmaster/internal/netproxy"
+	"yardmaster/internal/store"
 )
 
-// Version 由 release 流程注入（-ldflags -X agenthub/internal/app.Version=…），
+// Version 由 release 流程注入（-ldflags -X yardmaster/internal/app.Version=…），
 // 开发态为 dev（开发文档 §8.2）。
 var Version = "dev"
 
@@ -36,7 +36,7 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	case "serve":
 		return runServe(stdout)
 	case "version":
-		fmt.Fprintln(stdout, "agenthub "+Version)
+		fmt.Fprintln(stdout, "yardmaster "+Version)
 		return nil
 	case "provider":
 		return runProvider(args[1:], stdout, stderr)
@@ -103,7 +103,7 @@ func runServe(stdout io.Writer) error {
 		}
 	}()
 
-	fmt.Fprintf(stdout, "agenthub %s · 网关监听 http://%s · 数据目录 %s\n", Version, srv.Addr, paths.AppDir)
+	fmt.Fprintf(stdout, "yardmaster %s · 网关监听 http://%s · 数据目录 %s\n", Version, srv.Addr, paths.AppDir)
 	if settings.GlobalProxy != "" {
 		fmt.Fprintf(stdout, "  全局代理: %s\n", netproxy.Redact(settings.GlobalProxy))
 	}

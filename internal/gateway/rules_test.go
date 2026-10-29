@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"agenthub/internal/provider"
+	"yardmaster/internal/provider"
 )
 
 func writeRules(t *testing.T, json string) string {

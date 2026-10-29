@@ -8,7 +8,7 @@
 | 接线引擎 | `Preview/Wire/Unwire/Drift/StateOf`：预览 diff、备份栈、原子写、审计 | [`wiring.go`](../../internal/agent/wiring.go) |
 | TOML 编辑 | 行级拼接：表定位、键替换/插入/删除、行尾注释保留、CRLF 保留 | [`edit/toml.go`](../../internal/edit/toml.go) |
 | JSONC 编辑 | 区间拼接 + `Get`（漂移比对） | [`edit/jsonc.go`](../../internal/edit/jsonc.go) |
-| CLI | `agenthub agents list/preview/wire/unwind/drift`；wire 缺省只打印预览（F4 强制预览+确认） | [`app/agents_cmd.go`](../../internal/app/agents_cmd.go) |
+| CLI | `yardmaster agents list/preview/wire/unwind/drift`；wire 缺省只打印预览（F4 强制预览+确认） | [`app/agents_cmd.go`](../../internal/app/agents_cmd.go) |
 
 ## 运行路径
 

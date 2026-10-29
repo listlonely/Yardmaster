@@ -2,7 +2,7 @@
 // 落盘）共用同一 schema，避免双处定义漂移。
 package store
 
-import "agenthub/internal/provider"
+import "yardmaster/internal/provider"
 
 // ProvidersFile 是 providers.json 的文件形态。
 type ProvidersFile struct {

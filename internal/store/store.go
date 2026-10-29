@@ -8,19 +8,19 @@ import (
 	"os"
 	"path/filepath"
 
-	"agenthub/internal/edit"
+	"yardmaster/internal/edit"
 )
 
 // Paths 聚合本机数据目录布局。AppDir 可注入以便 testenv 沙箱。
 type Paths struct{ AppDir string }
 
-// DefaultPaths 返回当前用户的默认数据目录：<用户目录>/.agenthub。
+// DefaultPaths 返回当前用户的默认数据目录：<用户目录>/.yardmaster。
 func DefaultPaths() (Paths, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return Paths{}, fmt.Errorf("resolve home: %w", err)
 	}
-	return Paths{AppDir: filepath.Join(home, ".agenthub")}, nil
+	return Paths{AppDir: filepath.Join(home, ".yardmaster")}, nil
 }
 
 // SettingsPath 返回 settings.json 路径（网关地址、开关等）。

@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"agenthub/internal/edit"
-	"agenthub/internal/store"
+	"yardmaster/internal/edit"
+	"yardmaster/internal/store"
 )
 
 // Manager 是接线引擎；Addr 为网关地址（含 scheme）。
@@ -356,7 +356,7 @@ func isEmptyConfig(data []byte) bool {
 }
 
 // pruneJSONDoc 递归删除变为空对象的容器（仅用于本软件创建的文件——
-// Unset 后 provider.agenthub.options 这类空父级一并清除）。UseNumber
+// Unset 后 provider.yardmaster.options 这类空父级一并清除）。UseNumber
 // 保证大整数不失真。
 func pruneJSONDoc(data []byte) []byte {
 	dec := json.NewDecoder(bytes.NewReader(data))

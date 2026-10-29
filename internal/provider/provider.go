@@ -3,7 +3,7 @@
 // 其他包另立状态定义。
 package provider
 
-import "agenthub/internal/netproxy"
+import "yardmaster/internal/netproxy"
 
 // Protocol 是网关与上游通信的 API 协议。M1 仅 Chat 与 Messages（设计文档 §6.2）。
 type Protocol string

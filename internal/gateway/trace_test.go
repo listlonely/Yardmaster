@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"agenthub/internal/provider"
-	"agenthub/internal/store"
+	"yardmaster/internal/provider"
+	"yardmaster/internal/store"
 )
 
 func newTestTraceLog(t *testing.T) *TraceLog {

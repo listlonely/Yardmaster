@@ -12,10 +12,10 @@ import (
 	"strconv"
 	"strings"
 
-	"agenthub/internal/gateway"
-	"agenthub/internal/netproxy"
-	"agenthub/internal/provider"
-	"agenthub/internal/store"
+	"yardmaster/internal/gateway"
+	"yardmaster/internal/netproxy"
+	"yardmaster/internal/provider"
+	"yardmaster/internal/store"
 )
 
 // providers.json 的文件形态统一在 store.ProvidersFile（gateway 用量
@@ -36,7 +36,7 @@ func saveProvidersFile(paths store.Paths, cfg store.ProvidersFile) error {
 
 func runProvider(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "用法: agenthub provider <add|list|probe|quota|remove> [参数]")
+		fmt.Fprintln(stderr, "用法: yardmaster provider <add|list|probe|quota|remove> [参数]")
 		return ErrUsage
 	}
 	paths, err := store.DefaultPaths()
@@ -64,7 +64,7 @@ func runProvider(args []string, stdout, stderr io.Writer) error {
 // UsedTokens 由网关按响应 usage 累计（W6）。
 func providerQuota(paths store.Paths, args []string, stdout, stderr io.Writer) error {
 	if len(args) != 3 {
-		fmt.Fprintln(stderr, "用法: agenthub provider quota <provider-id> <账号名> <当日额度tokens|0清除>")
+		fmt.Fprintln(stderr, "用法: yardmaster provider quota <provider-id> <账号名> <当日额度tokens|0清除>")
 		return ErrUsage
 	}
 	quota, err := strconv.ParseInt(args[2], 10, 64)
@@ -174,7 +174,7 @@ func providerAdd(paths store.Paths, args []string, stdout, stderr io.Writer) err
 		if err := saveProvidersFile(paths, cfg); err != nil {
 			return err
 		}
-		fmt.Fprintf(stdout, "已更新 %s / 账号 %q。运行 `agenthub provider probe %s` 刷新模型清单。\n", *id, *account, *id)
+		fmt.Fprintf(stdout, "已更新 %s / 账号 %q。运行 `yardmaster provider probe %s` 刷新模型清单。\n", *id, *account, *id)
 		return nil
 	}
 	target.Accounts = append(target.Accounts, provider.Account{
@@ -183,7 +183,7 @@ func providerAdd(paths store.Paths, args []string, stdout, stderr io.Writer) err
 	if err := saveProvidersFile(paths, cfg); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "已添加 %s / 账号 %q。下一步运行 `agenthub provider probe %s` 拉取模型清单。\n", *id, *account, *id)
+	fmt.Fprintf(stdout, "已添加 %s / 账号 %q。下一步运行 `yardmaster provider probe %s` 拉取模型清单。\n", *id, *account, *id)
 	return nil
 }
 
@@ -193,7 +193,7 @@ func providerList(paths store.Paths, stdout io.Writer) error {
 		return err
 	}
 	if len(cfg.Providers) == 0 {
-		fmt.Fprintln(stdout, "（无 provider；用 `agenthub provider add` 添加）")
+		fmt.Fprintln(stdout, "（无 provider；用 `yardmaster provider add` 添加）")
 		return nil
 	}
 	for _, p := range cfg.Providers {
@@ -216,7 +216,7 @@ func providerProbe(paths store.Paths, args []string, stdout, stderr io.Writer) e
 		return ErrUsage
 	}
 	if fs.NArg() != 1 {
-		fmt.Fprintln(stderr, "用法: agenthub provider probe [-account 名称] [-only m1,m2] <provider-id>")
+		fmt.Fprintln(stderr, "用法: yardmaster provider probe [-account 名称] [-only m1,m2] <provider-id>")
 		return ErrUsage
 	}
 	id := fs.Arg(0)
@@ -308,7 +308,7 @@ func filterModels(models []provider.Model, only string, stdout io.Writer) []prov
 
 func providerRemove(paths store.Paths, args []string, stdout, stderr io.Writer) error {
 	if len(args) != 1 {
-		fmt.Fprintln(stderr, "用法: agenthub provider remove <provider-id>")
+		fmt.Fprintln(stderr, "用法: yardmaster provider remove <provider-id>")
 		return ErrUsage
 	}
 	cfg, err := loadProvidersFile(paths)
@@ -350,7 +350,7 @@ func (f *repeatFlags) Set(v string) error {
 // runGroup 是 group 子命令：add/list/rm（管理页策略编辑后续接入同一持久化）。
 func runGroup(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "用法: agenthub group <add|list|rm> [参数]")
+		fmt.Fprintln(stderr, "用法: yardmaster group <add|list|rm> [参数]")
 		return ErrUsage
 	}
 	paths, err := store.DefaultPaths()
@@ -425,7 +425,7 @@ func groupList(paths store.Paths, stdout io.Writer) error {
 		return err
 	}
 	if len(cfg.Groups) == 0 {
-		fmt.Fprintln(stdout, "（无路由组；用 `agenthub group add` 创建）")
+		fmt.Fprintln(stdout, "（无路由组；用 `yardmaster group add` 创建）")
 		return nil
 	}
 	for _, g := range cfg.Groups {
@@ -436,7 +436,7 @@ func groupList(paths store.Paths, stdout io.Writer) error {
 
 func groupRemove(paths store.Paths, args []string, stdout, stderr io.Writer) error {
 	if len(args) != 1 {
-		fmt.Fprintln(stderr, "用法: agenthub group rm <group-id>")
+		fmt.Fprintln(stderr, "用法: yardmaster group rm <group-id>")
 		return ErrUsage
 	}
 	cfg, err := loadProvidersFile(paths)

@@ -123,18 +123,18 @@ func TestUnsetMissingIsIdempotent(t *testing.T) {
 
 func TestSetThenUnsetRoundTripIsIdempotent(t *testing.T) {
 	in := []byte("{\n  \"a\": 1\n}")
-	out, err := SetJSONC(in, []string{"agenthub-temp"}, "x")
+	out, err := SetJSONC(in, []string{"yardmaster-temp"}, "x")
 	if err != nil {
 		t.Fatalf("SetJSONC: %v", err)
 	}
-	out2, err := UnsetJSONC(out, []string{"agenthub-temp"})
+	out2, err := UnsetJSONC(out, []string{"yardmaster-temp"})
 	if err != nil {
 		t.Fatalf("UnsetJSONC: %v", err)
 	}
 	if err := json.Unmarshal(out2, &map[string]any{}); err != nil {
 		t.Fatalf("strict json invalid: %v\n%s", err, out2)
 	}
-	if strings.Contains(string(out2), "agenthub-temp") {
+	if strings.Contains(string(out2), "yardmaster-temp") {
 		t.Fatalf("key not removed\n---\n%s", out2)
 	}
 }

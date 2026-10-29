@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"agenthub/internal/store"
-	"agenthub/internal/testenv"
+	"yardmaster/internal/store"
+	"yardmaster/internal/testenv"
 )
 
 func runOK(t *testing.T, args ...string) string {
@@ -37,7 +37,7 @@ func TestProviderAddListRemoveLifecycle(t *testing.T) {
 	}
 
 	// providers.json 已落盘且 key 在内（仅存本机）
-	raw, err := os.ReadFile(filepath.Join(home, ".agenthub", "providers.json"))
+	raw, err := os.ReadFile(filepath.Join(home, ".yardmaster", "providers.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestProviderProbePersistsModels(t *testing.T) {
 		t.Fatalf("probe 输出: %s", out)
 	}
 
-	raw, err := os.ReadFile(filepath.Join(home, ".agenthub", "providers.json"))
+	raw, err := os.ReadFile(filepath.Join(home, ".yardmaster", "providers.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestProviderProbeFailureMarksPrefail(t *testing.T) {
 	if err := Run([]string{"provider", "probe", "bad"}, &bytes.Buffer{}, &errBuf); err == nil {
 		t.Fatal("预检失败应返回错误")
 	}
-	raw, _ := os.ReadFile(filepath.Join(home, ".agenthub", "providers.json"))
+	raw, _ := os.ReadFile(filepath.Join(home, ".yardmaster", "providers.json"))
 	if !strings.Contains(string(raw), "prefail") {
 		t.Fatalf("账号应标记 prefail: %s", raw)
 	}
@@ -143,7 +143,7 @@ func TestSettingsGlobalProxy(t *testing.T) {
 	if !strings.Contains(out, "socks5://***@127.0.0.1:1080") {
 		t.Fatalf("设置输出: %s", out)
 	}
-	raw, _ := os.ReadFile(filepath.Join(home, ".agenthub", "settings.json"))
+	raw, _ := os.ReadFile(filepath.Join(home, ".yardmaster", "settings.json"))
 	if !strings.Contains(string(raw), "127.0.0.1:1080") {
 		t.Fatalf("设置未落盘: %s", raw)
 	}
@@ -152,7 +152,7 @@ func TestSettingsGlobalProxy(t *testing.T) {
 		t.Fatal("非法协议应拒绝")
 	}
 	// settings.json 损坏 → 按未知处理（读不到=未知）
-	p := filepath.Join(home, ".agenthub", "settings.json")
+	p := filepath.Join(home, ".yardmaster", "settings.json")
 	_ = os.WriteFile(p, []byte("{bad"), 0o600)
 	var errBuf bytes.Buffer
 	if err := Run([]string{"settings", "get"}, &bytes.Buffer{}, &errBuf); err == nil {
