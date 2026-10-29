@@ -52,7 +52,8 @@
 - fail-closed：当前文件解析失败时 GET 报 500、PUT/`/api/reload` 报 409 拒绝覆写（读不懂=未知，绝不把损坏文件当空配置覆盖）。
 - 热重载：`POST /api/reload` 重读 providers.json → `Planner.Reload` 热替换快照；进程内运行态按「键仍存在才保留」剪枝（休眠表、当日用量、亲和表），策略游标保留。补齐 CLI 编辑 providers「重启 serve 生效」缺口。
 - 生效语义：providers PUT 即时生效（写后自动 Reload）；rules/keys/intents 引擎热读取即时生效；settings 装配期读取，响应 `effect:"restart"`。
-- 控制台：`/` 出入口 + `/web/*` 静态资源（embed 进二进制）；总览（数据卡/代理继承链/休眠/设置保存）/Provider（账号、脱敏密钥、实时用量进度条、有效代理标注、模型清单）/路由（组/规则/绑定/意图词表，只读，成员引用有效性标注）/观测（trace 查询、caller 筛选、行展开候选链详情、自动刷新）四页；W2 只读全景完成，编辑表单 W3 接入。
+- 控制台：`/` 出入口 + `/web/*` 静态资源（embed 进二进制）；总览（数据卡/代理继承链/休眠/设置保存）/Provider（账号、脱敏密钥、实时用量进度条、有效代理标注、模型清单、额度设置）/路由（组/规则/意图词表的完整编辑：新建/编辑/删除，成员引用有效性标注）/观测（trace 查询、caller 筛选、行展开候选链详情、自动刷新）四页。
+- 控制台编辑安全（W3）：所有写操作经管理 API（严格校验 + 写前备份 + 审计）；提交前 fresh GET 构造全文档（last-writer-wins 窗口最小化）；providers 的密钥以脱敏形往返由服务端保留；删除类操作二次确认；客户端预校验（正则编译/成员引用/示例 ≤5）失败即拦截不发请求，服务端校验失败不落盘，错误内联显示于表单。
 - 账号实时状态：`/api/state` 附 `accounts` 数组（key/status/used_tokens/quota_tokens_day/usage_day，Planner 内存快照），控制台 join 该数据展示实时用量——配置文件里的 used_tokens 经 60s 节流落盘，直接读会滞后。
 
 ## 约束与失效行为

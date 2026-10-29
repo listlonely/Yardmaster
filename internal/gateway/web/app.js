@@ -234,7 +234,7 @@ async function loadProviders() {
             <td>${esc(a.name)}</td>
             <td><code>${esc(a.api_key || '（未设置）')}</code></td>
             <td>${statusBadge(view.status)}${restUntil ? `<div class="muted">休眠至 ${esc(restUntil.replace('T', ' '))}</div>` : ''}</td>
-            <td>${usageBar(view)}</td>
+            <td>${usageBar(view)} <a class="quota-btn" data-p="${esc(p.id)}" data-a="${esc(a.name)}">额度</a></td>
             <td><code>${esc(eff.v)}</code> <span class="muted">（${eff.src}层）</span></td>
           </tr>`;
         }).join('') || '<tr><td colspan="5" class="muted">无账号</td></tr>'}
@@ -293,13 +293,15 @@ async function loadRouting() {
     fill('#tbl-groups tbody',
       (state.groups || []).map((g) => `
         <tr><td><code>${esc(g.id)}</code></td><td>${esc(g.strategy)}</td>
-        <td>${(g.members || []).map((m) => `<code>${esc(m)}</code>${memberValid(m, provs, groupIDs)}`).join(' ')}</td></tr>`).join(''),
+        <td>${(g.members || []).map((m) => `<code>${esc(m)}</code>${memberValid(m, provs, groupIDs)}`).join(' ')}</td>
+        <td class="muted-actions"><a class="edit" data-g="${esc(g.id)}">编辑</a><a class="del" data-g="${esc(g.id)}">删除</a></td></tr>`).join(''),
       '未配置路由组');
     fill('#tbl-rules tbody',
       (rules.rules || []).map((r) => `
         <tr><td><code>${esc(r.id)}</code></td><td class="muted">${esc(r.desc || '—')}</td>
         <td>${esc(ruleCond(r))}</td>
-        <td><code>${esc(r.target)}</code></td><td>${r.hits || 0}</td></tr>`).join(''),
+        <td><code>${esc(r.target)}</code></td><td>${r.hits || 0}</td>
+        <td class="muted-actions"><a class="edit" data-r="${esc(r.id)}">编辑</a><a class="del" data-r="${esc(r.id)}">删除</a></td></tr>`).join(''),
       '未配置规则');
     fill('#tbl-keys tbody',
       (keys.bindings || []).map((b) => `
@@ -311,7 +313,8 @@ async function loadRouting() {
         <td>${esc((d.keywords || []).join('、')) || '<span class="muted">—</span>'}</td>
         <td>${esc((d.regexes || []).join('；')) || '<span class="muted">—</span>'}</td>
         <td>${esc((d.examples || []).join('；')) || '<span class="muted">—</span>'}</td>
-        <td>${d.priority || 0}</td></tr>`).join(''),
+        <td>${d.priority || 0}</td>
+        <td class="muted-actions"><a class="edit" data-i="${esc(d.id)}">编辑</a><a class="del" data-i="${esc(d.id)}">删除</a></td></tr>`).join(''),
       '无自定义意图（仅内置 L0/L1）');
   } catch (e) {
     toast('路由页加载失败: ' + e.message, true);
@@ -397,6 +400,295 @@ $('trace-auto').addEventListener('change', (e) => {
     if (q('#page-observe').classList.contains('active')) loadTraces();
   }, 30000);
 });
+
+// ---------- 编辑（M2-W3）：表单模态框 ----------
+//
+// 写路径约定：每次提交前 fresh GET 构造全文档（把 last-writer-wins
+// 窗口压到最小），经 PUT /api/config/*（服务端严格校验 + 写前备份 +
+// 审计）；providers 的 api_key 以脱敏形回传，服务端保留现存密钥。
+// 校验失败（客户端或服务端）不落盘，错误显示在表单内。
+
+function formModal(title, bodyHTML, onSubmit) {
+  const back = document.createElement('div');
+  back.className = 'modal-back';
+  back.innerHTML = `<div class="modal"><h3>${esc(title)}</h3>
+    <form>${bodyHTML}
+      <div class="row">
+        <span class="modal-err"></span>
+        <button type="button" class="modal-cancel">取消</button>
+        <button type="submit" class="primary">保存</button>
+      </div>
+    </form></div>`;
+  $('modal-root').appendChild(back);
+  const close = () => back.remove();
+  back.querySelector('.modal-cancel').onclick = close;
+  back.querySelector('form').onsubmit = async (e) => {
+    e.preventDefault();
+    const errEl = back.querySelector('.modal-err');
+    errEl.textContent = '';
+    try {
+      await onSubmit(back.querySelector('form'), close);
+    } catch (ex) {
+      errEl.textContent = ex.message; // 校验失败不落盘，错误留在表单内
+    }
+  };
+  return { close };
+}
+
+const formVals = (form) => Object.fromEntries(new FormData(form).entries());
+const lines = (s) => (s || '').split('\n').map((x) => x.trim()).filter(Boolean);
+const compileCheck = (expr) => { try { new RegExp(expr); return null; } catch (e) { return e.message; } };
+
+// providers 全文档写回：fresh GET → mutator 修改 → PUT（服务端保留密钥）
+async function putProvidersDoc(mutator) {
+  const cur = await api('/api/config/providers');
+  const next = mutator(cur);
+  const r = await api('/api/config/providers', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(next),
+  });
+  cache.providers = null; // 强制重拉（含脱敏密钥的新文件态）
+  return r;
+}
+
+async function afterWrite() {
+  await refreshState();
+  loadOverview();
+  loadProviders();
+  loadRouting();
+}
+
+// 客户端成员校验（与服务端 validateProviders/validateMember 同规）
+function memberClientCheck(m, provs, otherGroupIDs) {
+  if (!m) return '成员引用为空';
+  if (m.startsWith('group/')) {
+    return otherGroupIDs.has(m.slice(6)) ? null : `引用的组 ${m} 不存在`;
+  }
+  const [provID, model] = m.split('/');
+  const p = provs.find((x) => x.id === provID);
+  if (!p) return `成员 ${m} 引用的 provider 不存在`;
+  if (model && (p.models || []).length && !p.models.some((mm) => mm.id === model)) {
+    return `模型 ${model} 不在 ${provID} 的清单内`;
+  }
+  return null;
+}
+
+function groupModal(existing) {
+  const isEdit = !!existing;
+  formModal(isEdit ? `编辑路由组 ${existing.id}` : '新建路由组', `
+    <label><span>组 ID</span><input name="id" value="${esc(existing?.id || '')}" ${isEdit ? 'readonly' : ''} required></label>
+    <label><span>策略</span><select name="strategy">
+      <option value="order"${existing?.strategy === 'order' ? ' selected' : ''}>order（固定顺序，用尽再换）</option>
+      <option value="rotate"${existing?.strategy === 'rotate' ? ' selected' : ''}>rotate（每请求轮换）</option>
+      <option value="smart"${existing?.strategy === 'smart' ? ' selected' : ''}>smart（按剩余额度比例）</option>
+    </select></label>
+    <label><span>成员（每行一个）</span><textarea name="members">${esc((existing?.members || []).join('\n'))}</textarea></label>
+    <div class="hint">格式 provider/model、provider（取其清单）或 group/&lt;id&gt;；顺序即 order 策略的顺序。</div>`,
+  async (form, close) => {
+    const v = formVals(form);
+    const id = v.id.trim();
+    if (!id) throw new Error('组 ID 不能为空');
+    const members = lines(v.members);
+    if (!members.length) throw new Error('至少需要一个成员');
+    const r = await putProvidersDoc((cur) => {
+      const groups = cur.groups || [];
+      const otherIDs = new Set(groups.filter((g) => g.id !== id).map((g) => g.id));
+      if (otherIDs.has(id)) throw new Error(`组 ID ${id} 已存在`);
+      for (const m of members) {
+        const err = memberClientCheck(m, cur.providers || [], otherIDs);
+        if (err) throw new Error(err);
+      }
+      const g = { id, strategy: v.strategy, members };
+      const idx = groups.findIndex((x) => x.id === id);
+      if (idx >= 0) groups[idx] = g; else groups.push(g);
+      return { ...cur, groups };
+    });
+    close();
+    toast(`路由组已保存（${r.effect === 'immediate' ? '已热生效' : r.effect}，写前备份已留底）`);
+    afterWrite();
+  });
+}
+
+async function deleteGroup(id) {
+  if (!confirm(`删除路由组 ${id}？引用它的规则/绑定会失去目标。当前文件将先备份到 backup/ 目录，可手工还原。`)) return;
+  await putProvidersDoc((cur) => ({ ...cur, groups: (cur.groups || []).filter((g) => g.id !== id) }));
+  toast('路由组已删除（写前备份已留底）');
+  afterWrite();
+}
+
+const BUILTIN_INTENTS = ['coding', 'qa', 'writing'];
+
+async function refreshIntents() {
+  const r = await api('/api/config/intents');
+  return r.intents || [];
+}
+
+function intentDatalist(custom) {
+  const ids = [...BUILTIN_INTENTS, ...(custom || []).map((d) => d.id)];
+  return `<datalist id="dl-intents">${ids.map((i) => `<option value="${esc(i)}">`).join('')}</datalist>`;
+}
+
+async function ruleModal(existing) {
+  const isEdit = !!existing;
+  const customIntents = await refreshIntents(); // 词表注入 datalist（内置 + 自定义）
+  formModal(isEdit ? `编辑规则 ${existing.id}` : '新建规则', `
+    <label><span>规则 ID</span><input name="id" value="${esc(existing?.id || '')}" ${isEdit ? 'readonly' : ''} required></label>
+    <label><span>说明</span><input name="desc" value="${esc(existing?.desc || '')}"></label>
+    <label><span>意图条件</span><input name="intent" list="dl-intents" value="${esc(existing?.intent || '')}" placeholder="留空=不限"></label>
+    <label><span>正则条件</span><input name="regex" value="${esc(existing?.regex || '')}" placeholder="对最新用户消息原文匹配；留空=不限"></label>
+    <label><span>token 上限</span><input name="max_tokens" type="number" min="0" value="${existing?.max_tokens || ''}" placeholder="估算输入 ≤ 此值才命中；留空=不限"></label>
+    <label><span>调用方 key</span><input name="caller_key" value="${esc(existing?.caller_key || '')}" placeholder="如 gw-claude-code；留空=不限"></label>
+    <label><span>目标</span><input name="target" value="${esc(existing?.target || '')}" required placeholder="provider/model · provider · group/&lt;id&gt;"></label>
+    ${intentDatalist(customIntents)}`,
+  async (form, close) => {
+    const v = formVals(form);
+    const id = v.id.trim();
+    if (!id) throw new Error('规则 ID 不能为空');
+    const target = v.target.trim();
+    if (!target) throw new Error('目标不能为空');
+    if (v.regex.trim()) {
+      const err = compileCheck(v.regex.trim());
+      if (err) throw new Error('正则非法: ' + err);
+    }
+    const cur = await api('/api/config/rules');
+    const rules = cur.rules || [];
+    if (rules.some((r) => r.id === id && !isEdit)) throw new Error(`规则 ID ${id} 已存在`);
+    const rule = {
+      id, desc: v.desc.trim(), intent: v.intent.trim(), regex: v.regex.trim(),
+      max_tokens: parseInt(v.max_tokens, 10) || 0,
+      caller_key: v.caller_key.trim(), target,
+      hits: (rules.find((r) => r.id === id) || {}).hits || 0, // 引擎按 ID 保留计数
+    };
+    const idx = rules.findIndex((r) => r.id === id);
+    if (idx >= 0) rules[idx] = rule; else rules.push(rule);
+    await api('/api/config/rules', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rules }),
+    });
+    close();
+    toast('规则已保存（mtime 热生效，写前备份已留底）');
+    afterWrite();
+  });
+}
+
+async function deleteRule(id) {
+  if (!confirm(`删除规则 ${id}？当前文件将先备份到 backup/ 目录。`)) return;
+  const cur = await api('/api/config/rules');
+  await api('/api/config/rules', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rules: (cur.rules || []).filter((r) => r.id !== id) }),
+  });
+  toast('规则已删除（写前备份已留底）');
+  afterWrite();
+}
+
+function intentModal(existing) {
+  const isEdit = !!existing;
+  formModal(isEdit ? `编辑意图 ${existing.id}` : '新建自定义意图', `
+    <label><span>意图 ID</span><input name="id" value="${esc(existing?.id || '')}" ${isEdit ? 'readonly' : ''} required placeholder="建议命名空间化，如 team/weekly-report"></label>
+    <label><span>展示名</span><input name="label" value="${esc(existing?.label || '')}"></label>
+    <label><span>优先级</span><input name="priority" type="number" value="${existing?.priority || 0}" placeholder="越大越先求值"></label>
+    <label><span>关键词（逗号分隔）</span><input name="keywords" value="${esc((existing?.keywords || []).join(','))}" placeholder="大小写不敏感子串匹配"></label>
+    <label><span>正则（每行一条）</span><textarea name="regexes">${esc((existing?.regexes || []).join('\n'))}</textarea></label>
+    <label><span>示例句（每行一条，≤5）</span><textarea name="examples">${esc((existing?.examples || []).join('\n'))}</textarea></label>
+    <div class="hint">示例句注入 L1 提示词作 few-shot；任务规则按 ID 引用此意图。</div>`,
+  async (form, close) => {
+    const v = formVals(form);
+    const id = v.id.trim();
+    if (!id) throw new Error('意图 ID 不能为空');
+    const examples = lines(v.examples);
+    if (examples.length > 5) throw new Error('示例句最多 5 条（F8 词表约束）');
+    const regexes = lines(v.regexes);
+    for (const re of regexes) {
+      const err = compileCheck(re);
+      if (err) throw new Error(`正则非法（${re}）: ` + err);
+    }
+    const intents = await refreshIntents();
+    if (intents.some((d) => d.id === id && !isEdit)) throw new Error(`意图 ID ${id} 已存在`);
+    const def = {
+      id, label: v.label.trim(), priority: parseInt(v.priority, 10) || 0,
+      keywords: (v.keywords || '').split(',').map((x) => x.trim()).filter(Boolean),
+      regexes, examples,
+    };
+    const idx = intents.findIndex((d) => d.id === id);
+    if (idx >= 0) intents[idx] = def; else intents.push(def);
+    await api('/api/config/intents', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ intents }),
+    });
+    close();
+    toast('意图已保存（热生效，写前备份已留底）');
+    afterWrite();
+  });
+}
+
+async function deleteIntent(id) {
+  if (!confirm(`删除意图 ${id}？引用它的任务规则将不再命中。当前文件将先备份到 backup/ 目录。`)) return;
+  const intents = await refreshIntents();
+  await api('/api/config/intents', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ intents: intents.filter((d) => d.id !== id) }),
+  });
+  toast('意图已删除（写前备份已留底）');
+  afterWrite();
+}
+
+function quotaModal(provID, accName) {
+  const prov = (cache.providers?.providers || []).find((x) => x.id === provID);
+  const acc = (prov?.accounts || []).find((x) => x.name === accName);
+  formModal(`设置当日额度 · ${provID}/${accName}`, `
+    <label><span>额度 (tokens/日)</span><input name="quota" type="number" min="0" step="1000" value="${acc?.quota_tokens_day || ''}" placeholder="留空或 0 = 不设额度"></label>
+    <div class="hint">>0 后 smart 策略按剩余比例排序；跨日自动重置。写入会留备份。</div>`,
+  async (form, close) => {
+    const v = formVals(form);
+    const quota = parseInt(v.quota, 10) || 0;
+    if (quota === 0 && !confirm('额度为 0 表示不设额度（smart 将回落 rotate）。确认？')) return;
+    await putProvidersDoc((cur) => {
+      for (const p of cur.providers || []) {
+        for (const a of p.accounts || []) {
+          if (p.id === provID && a.name === accName) a.quota_tokens_day = quota;
+        }
+      }
+      return cur;
+    });
+    close();
+    toast(`额度已保存：${provID}/${accName} → ${quota || '不设'}`);
+    afterWrite();
+  });
+}
+
+// 表格操作列事件委托（编辑/删除/额度）
+q('#tbl-groups tbody').addEventListener('click', (e) => {
+  const g = e.target.dataset.g;
+  if (!g) return;
+  const cur = (cache.state.groups || []).find((x) => x.id === g);
+  if (e.target.classList.contains('edit')) groupModal(cur);
+  if (e.target.classList.contains('del')) deleteGroup(g);
+});
+q('#tbl-rules tbody').addEventListener('click', async (e) => {
+  const id = e.target.dataset.r;
+  if (!id) return;
+  const cur = await api('/api/config/rules');
+  const rule = (cur.rules || []).find((x) => x.id === id);
+  if (e.target.classList.contains('edit')) ruleModal(rule);
+  if (e.target.classList.contains('del')) deleteRule(id);
+});
+q('#tbl-intents tbody').addEventListener('click', async (e) => {
+  const id = e.target.dataset.i;
+  if (!id) return;
+  const intents = await refreshIntents();
+  const def = intents.find((x) => x.id === id);
+  if (e.target.classList.contains('edit')) intentModal(def);
+  if (e.target.classList.contains('del')) deleteIntent(id);
+});
+$('prov-list').addEventListener('click', (e) => {
+  if (e.target.classList.contains('quota-btn')) {
+    quotaModal(e.target.dataset.p, e.target.dataset.a);
+  }
+});
+$('btn-add-group').addEventListener('click', () => groupModal(null));
+$('btn-add-rule').addEventListener('click', () => ruleModal(null));
+$('btn-add-intent').addEventListener('click', () => intentModal(null));
 
 // ---------- 启动 ----------
 

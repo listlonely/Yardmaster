@@ -56,23 +56,23 @@
     <!-- 路由 -->
     <section id="page-routing" class="page">
       <div class="card">
-        <b>路由组</b>
-        <table id="tbl-groups"><thead><tr><th>ID</th><th>策略</th><th>成员</th></tr></thead><tbody></tbody></table>
+        <div class="row"><b>路由组</b><span class="spacer"></span><button class="mini" id="btn-add-group">＋ 新建组</button></div>
+        <table id="tbl-groups"><thead><tr><th>ID</th><th>策略</th><th>成员</th><th></th></tr></thead><tbody></tbody></table>
       </div>
       <div class="card">
-        <b>任务规则</b>
-        <table id="tbl-rules"><thead><tr><th>ID</th><th>说明</th><th>条件</th><th>目标</th><th>命中</th></tr></thead><tbody></tbody></table>
+        <div class="row"><b>任务规则</b><span class="spacer"></span><button class="mini" id="btn-add-rule">＋ 新建规则</button></div>
+        <table id="tbl-rules"><thead><tr><th>ID</th><th>说明</th><th>条件</th><th>目标</th><th>命中</th><th></th></tr></thead><tbody></tbody></table>
       </div>
       <div class="card">
         <b>调用方默认模型绑定</b>
         <table id="tbl-keys"><thead><tr><th>Key</th><th>默认模型</th></tr></thead><tbody></tbody></table>
       </div>
       <div class="card">
-        <b>自定义意图词表</b>
+        <div class="row"><b>自定义意图词表</b><span class="spacer"></span><button class="mini" id="btn-add-intent">＋ 新建意图</button></div>
         <p class="muted">求值顺序：自定义（优先级降序）→ 内置 L0 → L1 → 默认组；正则对原文匹配。</p>
-        <table id="tbl-intents"><thead><tr><th>ID</th><th>展示名</th><th>关键词</th><th>正则</th><th>示例句</th><th>优先级</th></tr></thead><tbody></tbody></table>
+        <table id="tbl-intents"><thead><tr><th>ID</th><th>展示名</th><th>关键词</th><th>正则</th><th>示例句</th><th>优先级</th><th></th></tr></thead><tbody></tbody></table>
       </div>
-      <p class="muted">编辑表单于 W3 接入写接口；当前为只读全景。</p>
+      <p class="muted">所有写操作经管理 API：严格校验、写前备份（backup/ 目录）、审计日志；校验失败不落盘。</p>
     </section>
 
     <!-- 观测 -->
@@ -95,6 +95,7 @@
   </main>
 
   <div id="toast" class="toast"></div>
+  <div id="modal-root"></div>
   <script src="/web/app.js"></script>
 </body>
 </html>
