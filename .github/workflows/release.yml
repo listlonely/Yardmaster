@@ -39,7 +39,7 @@ jobs:
           done
           tar czf agenthub_linux-amd64.tar.gz agenthub_linux-amd64
           tar czf agenthub_linux-arm64.tar.gz agenthub_linux-arm64
-          zip -qr agenthub_windows-amd64.zip agenthub_windows-amd64
+          python3 -m zipfile -c agenthub_windows-amd64.zip agenthub_windows-amd64/
           rm -rf agenthub_linux-amd64 agenthub_linux-arm64 agenthub_windows-amd64
           rm -f agenthub_linux-amd64 agenthub_linux-arm64 agenthub_windows-amd64.exe
           sha256sum agenthub_*.tar.gz agenthub_*.zip > SHA256SUMS
