@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"agenthub/internal/gateway"
 	"agenthub/internal/netproxy"
@@ -47,12 +48,14 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		return runKeys(args[1:], stdout, stderr)
 	case "intents":
 		return runIntents(args[1:], stdout, stderr)
+	case "trace":
+		return runTrace(args[1:], stdout, stderr)
 	case "settings":
 		return runSettings(args[1:], stdout, stderr)
 	case "agents":
 		return runAgents(args[1:], stdout, stderr)
 	default:
-		fmt.Fprintf(stderr, "未知子命令 %q；可用：serve、version、provider、group、rules、keys、intents、settings、agents\n", args[0])
+		fmt.Fprintf(stderr, "未知子命令 %q；可用：serve、version、provider、group、rules、keys、intents、trace、settings、agents\n", args[0])
 		return ErrUsage
 	}
 }
@@ -78,18 +81,41 @@ func runServe(stdout io.Writer) error {
 		GlobalProxy: settings.GlobalProxy,
 		Rules:       gateway.NewRuleEngine(paths.RulesPath()),
 		Keys:        gateway.NewKeyStore(paths.KeysPath()),
+		Traces:      gateway.NewTraceLog(paths.TraceDir()),
 		Intents: gateway.NewIntentChain(paths.IntentsPath(), settings.L1Classifier,
 			l1TimeoutOrDefault(settings), newL1Caller(gateway.DefaultAddr, settings.L1Classifier)),
 	}
+	defer srv.Traces.Close()
+
+	// 当日用量节流落盘（W6）：每分钟一次 + 退出前一次。
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := planner.FlushUsage(paths.ProvidersPath()); err != nil {
+					slog.Warn("用量落盘失败（下次重试）", "err", err)
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
 	fmt.Fprintf(stdout, "agenthub %s · 网关监听 http://%s · 数据目录 %s\n", Version, srv.Addr, paths.AppDir)
 	if settings.GlobalProxy != "" {
 		fmt.Fprintf(stdout, "  全局代理: %s\n", netproxy.Redact(settings.GlobalProxy))
 	}
-	fmt.Fprintf(stdout, "  端点: /v1/chat/completions · /v1/messages · /healthz · /api/state\n")
+	fmt.Fprintf(stdout, "  端点: /v1/chat/completions · /v1/messages · /healthz · /api/state · /api/trace\n")
 	if settings.L1Classifier != "" {
 		fmt.Fprintf(stdout, "  L1 分类: %s（超时 %s）\n", settings.L1Classifier, l1TimeoutOrDefault(settings))
 	}
-	return srv.Serve(ctx)
+	err = srv.Serve(ctx)
+	if ferr := planner.FlushUsage(paths.ProvidersPath()); ferr != nil {
+		slog.Warn("退出前用量落盘失败", "err", ferr)
+	}
+	return err
 }
 
 // newL1Caller 构造 L1 分类回调：经网关自身推断端点调用分类模型
@@ -149,7 +175,7 @@ func newL1Caller(addr, model string) gateway.L1Caller {
 // 绝不当作有配置——调用方报错行为一致）。
 func loadPlanner(paths store.Paths) *gateway.Planner {
 	logger := slog.Default()
-	cfg, err := loadProvidersFile(paths)
+	cfg, err := store.LoadProvidersFile(paths.ProvidersPath())
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 		logger.Warn("providers.json 不存在，网关将以无 provider 状态启动", "path", paths.ProvidersPath())

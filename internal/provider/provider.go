@@ -56,8 +56,10 @@ type Account struct {
 
 	// 当日用量（W6 由响应 usage 填充）：smart 策略按剩余比例排序。
 	// QuotaTokensDay<=0 视为无数据（smart 回落 rotate）。
-	UsedTokens     int64 `json:"used_tokens,omitempty"`
-	QuotaTokensDay int64 `json:"quota_tokens_day,omitempty"`
+	// UsageDay 是 UsedTokens 的归属日期（"2006-01-02"），跨日自动重置。
+	UsedTokens     int64  `json:"used_tokens,omitempty"`
+	QuotaTokensDay int64  `json:"quota_tokens_day,omitempty"`
+	UsageDay       string `json:"usage_day,omitempty"`
 }
 
 // Strategy 是路由组策略名（PRD F6）。策略实现在 internal/routes。

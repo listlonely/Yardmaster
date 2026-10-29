@@ -10,6 +10,8 @@
 | 任务规则 | `RuleEngine`：rules.json 首条命中（intent/regex/max_tokens/caller_key 条件，留空=不限）；mtime 热重载（按 ID 保留 hits）；hits 写穿落盘 | [`rules.go`](../../internal/gateway/rules.go) |
 | key 绑定 | `KeyStore`：keys.json 把调用方 key 绑定默认模型；每次读文件（天然热生效） | [`keys.go`](../../internal/gateway/keys.go) |
 | 意图判定链 | `IntentChain`：intents.json 自定义（mtime 热生效）→ 内置 L0（[`classify.go`](../../internal/classify/classify.go)）→ L1 小模型（注入回调经网关自身端点调用；缓存 + 连错≥3 冷却 5min） | [`intent.go`](../../internal/gateway/intent.go) |
+| 决策追溯 | `TraceLog`：每次推断请求一条 trace（调用方、请求模型、意图/规则命中、候选尝试链含结果/原因/耗时/出口、实际服务方、首字节、token）；异步 JSONL 按天落盘，保留 30 天/200MB；内存环形缓冲供 `/api/trace` | [`trace.go`](../../internal/gateway/trace.go) |
+| 当日用量 | `NoteUsage`/`FlushUsage`：从上游响应（流式/非流式）提取 usage，按日累计进账号字段，每分钟+退出前合并落盘 providers.json；smart 策略数据源（W5 字段 W6 起填充） | [`plan.go`](../../internal/gateway/plan.go) |
 | 故障转移 | `attempt` + `serveWithFailover`：429/5xx/网络错 → 候选休眠并切下一候选；401/403 短休眠；其余 4xx 原样直返；2xx 开始中继后**不再切换** | [`gateway.go`](../../internal/gateway/gateway.go) |
 | 协议翻译 | Chat ↔ Messages：请求、非流响应、双向流式状态机；文本 + 工具；停止原因映射 | [`translate.go`](../../internal/gateway/translate.go) |
 | SSE | `scanSSE`：单 Reader 逐事件扫描，注释/心跳跳过，EOF 前最后一条无换行事件可回收 | [`protocol.go`](../../internal/gateway/protocol.go) |
@@ -34,6 +36,14 @@
 4. 失败分类入休眠表（429 默认 5 分钟；5xx/网络错 5 分钟；401/403 短休眠 30s）。smart 策略读取账号 `used_tokens/quota_tokens_day`（W6 由响应 usage 填充）按剩余比例降序。
 5. 2xx → `X-Gw-Provider/X-Gw-Account/X-Gw-Model`（+`X-Gw-Rule` 若规则命中）→ 同协议透传 / 跨协议翻译 → `Clear` 休眠 + 记录亲和。
 6. 全部失败：最后一次的原始错误原样回给 Agent（不伪装 200）。
+
+## 决策追溯与用量（W6）
+
+- trace 记录时机：路由判定起（解析失败/全败也留痕，Outcome=fail）；候选链逐次尝试记录结果分类（ok/net/quota/5xx/cred/client）、状态码、原因摘要（错误响应片段，`netproxy.Snippet` 截断）、耗时、实际代理出口（脱敏）。
+- 首字节（ttfb_ms）= 请求进入到上游 2xx 响应头到达；total_ms = 到响应写完。token：非流式与流式均尽力从上游响应体提取（usage 正则、取最后一次出现；流式只扫尾部 8KB 窗口，usage 跨块截断时可能漏计——尽力而为语义）。
+- 观测通道：`GET /api/trace?limit=&agent=&result=(ok|fail|switch)`；CLI `agenthub trace list [-agent -result -limit]` / `trace show <id>`（失败链 ✗ 标注原因，成功 ✓）。
+- 落盘：`<数据目录>/trace/trace-YYYYMMDD.jsonl`（0600）；启动时清理 + 跨天滚动时清理；只存元数据与失败原因，永不落盘对话内容（§4.4）。
+- 用量：`NoteUsage` 累计（内存 + 账号快照字段，跨日按 UsageDay 重置）；`FlushUsage` 重读 providers.json 只更新跟踪账号（不覆盖运行期 CLI 编辑），serve 期间每分钟 + 退出前各一次；`agenthub provider quota <p> <acc> <tokens|0>` 配置账号当日额度，>0 后 smart 策略按剩余比例排序。
 
 ## 约束与失效行为
 

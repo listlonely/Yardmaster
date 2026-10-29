@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"agenthub/internal/provider"
 )
 
 type conf struct {
@@ -63,6 +65,36 @@ func TestSettingsRoundtrip(t *testing.T) {
 	empty, err := LoadSettings(Paths{AppDir: t.TempDir()})
 	if !errors.Is(err, os.ErrNotExist) || empty != (Settings{}) {
 		t.Fatalf("缺文件应返回 ErrNotExist+零值: %+v %v", empty, err)
+	}
+}
+
+func TestProvidersFileRoundtrip(t *testing.T) {
+	p := Paths{AppDir: t.TempDir()}
+	in := ProvidersFile{
+		Providers: []provider.Provider{{
+			ID: "sf", Protocol: provider.ProtocolChat, BaseURL: "https://x",
+			Accounts: []provider.Account{{
+				Name: "main", APIKey: "sk", Status: provider.AccountAvailable,
+				UsedTokens: 120, QuotaTokensDay: 1000, UsageDay: "2026-10-29",
+			}},
+		}},
+		Groups: []provider.Group{{ID: "g", Strategy: provider.StrategyRotate, Members: []string{"sf/m"}}},
+	}
+	if err := SaveProvidersFile(p.ProvidersPath(), in); err != nil {
+		t.Fatal(err)
+	}
+	out, err := LoadProvidersFile(p.ProvidersPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Providers) != 1 || len(out.Groups) != 1 ||
+		out.Providers[0].Accounts[0].UsedTokens != 120 ||
+		out.Providers[0].Accounts[0].UsageDay != "2026-10-29" ||
+		out.Groups[0].Members[0] != "sf/m" {
+		t.Fatalf("roundtrip = %+v", out)
+	}
+	if _, err := LoadProvidersFile(filepath.Join(t.TempDir(), "none.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("缺文件应返回 ErrNotExist, got %v", err)
 	}
 }
 

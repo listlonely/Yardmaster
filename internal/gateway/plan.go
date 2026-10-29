@@ -9,13 +9,16 @@
 package gateway
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"agenthub/internal/provider"
+	"agenthub/internal/store"
 )
 
 // Candidate 是一次尝试的最小服务单元：成员模型 × 一个账号。
@@ -35,13 +38,21 @@ const affinityCap = 4096
 // Planner 持有 provider/组快照与休眠表、策略游标、会话亲和表。
 // 快照来自 providers.json（app 装配时加载）；其余进程内存态，重启即清。
 type Planner struct {
-	mu        sync.Mutex
-	providers []provider.Provider
-	groups    []provider.Group
-	resting   map[string]time.Time // key → 休眠截止
-	cursors   map[string]int       // rotate/smart 游标：策略键 → 下一候选下标
-	affinity  map[string]string    // stickyKey → 候选 key
-	now       func() time.Time
+	mu         sync.Mutex
+	providers  []provider.Provider
+	groups     []provider.Group
+	resting    map[string]time.Time // key → 休眠截止
+	cursors    map[string]int       // rotate/smart 游标：策略键 → 下一候选下标
+	affinity   map[string]string    // stickyKey → 候选 key
+	usage      map[string]usageEntry
+	usageDirty bool
+	now        func() time.Time
+}
+
+// usageEntry 是一个账号的当日用量累计（内存态，FlushUsage 落盘）。
+type usageEntry struct {
+	day  string // "2006-01-02"，跨日重置
+	used int64
 }
 
 // NewPlanner 构建计划器。
@@ -52,6 +63,7 @@ func NewPlanner(providers []provider.Provider, groups []provider.Group) *Planner
 		resting:   map[string]time.Time{},
 		cursors:   map[string]int{},
 		affinity:  map[string]string{},
+		usage:     map[string]usageEntry{},
 		now:       time.Now,
 	}
 }
@@ -291,6 +303,99 @@ func (p *Planner) applyAffinityLocked(cands []Candidate, stickyKey string, now t
 	c := cands[idx]
 	out := append([]Candidate{c}, cands[:idx]...)
 	return append(out, cands[idx+1:]...)
+}
+
+// ---------- 当日用量（W6） ----------
+
+// NoteUsage 累计候选账号当日用量（响应 usage 提取值）：更新内存累计、
+// 内存快照中的账号字段（smart 策略实时读取），并标记待落盘。
+func (p *Planner) NoteUsage(c Candidate, tokens int64) {
+	if tokens <= 0 {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	day := p.now().Format("2006-01-02")
+	key := c.Key()
+	e := p.usage[key]
+	if e.day != day {
+		e = usageEntry{day: day}
+	}
+	e.used += tokens
+	p.usage[key] = e
+	p.usageDirty = true
+	for i := range c.Provider.Accounts {
+		if c.Provider.Accounts[i].Name != c.Account.Name {
+			continue
+		}
+		if c.Provider.Accounts[i].UsageDay != day {
+			c.Provider.Accounts[i].UsageDay = day
+			c.Provider.Accounts[i].UsedTokens = 0
+		}
+		c.Provider.Accounts[i].UsedTokens += tokens
+		break
+	}
+}
+
+// FlushUsage 把内存累计合并写回 providers.json：重读文件、只更新本
+// 进程跟踪的账号字段（不覆盖运行期间 CLI 的其他编辑）；文件不存在
+// 或损坏时放弃本次并保留 dirty（读不懂=未知，绝不覆盖原文件）。
+// 调用方定时调用（serve 期间每分钟 + 退出前一次）。
+func (p *Planner) FlushUsage(path string) error {
+	p.mu.Lock()
+	if !p.usageDirty {
+		p.mu.Unlock()
+		return nil
+	}
+	p.usageDirty = false // 先清；失败路径恢复，避免覆盖期间新累计被跳过
+	day := p.now().Format("2006-01-02")
+	snap := make(map[string]usageEntry, len(p.usage))
+	for k, e := range p.usage {
+		if e.day == day {
+			snap[k] = e
+		}
+	}
+	p.mu.Unlock()
+
+	f, err := store.LoadProvidersFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil // 无配置文件：无处可写
+		}
+		p.markDirty() // 损坏：恢复 dirty，下次重试
+		return err
+	}
+	changed := false
+	for i := range f.Providers {
+		for j := range f.Providers[i].Accounts {
+			acc := &f.Providers[i].Accounts[j]
+			e, ok := snap[f.Providers[i].ID+"/"+acc.Name]
+			if !ok {
+				continue
+			}
+			if acc.UsageDay != e.day {
+				acc.UsedTokens = 0
+			}
+			acc.UsageDay = e.day
+			acc.UsedTokens = e.used
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	if err := store.SaveProvidersFile(path, f); err != nil {
+		p.markDirty()
+		return err
+	}
+	return nil
+}
+
+// markDirty 恢复待落盘标记（锁内写，race 安全）。
+func (p *Planner) markDirty() {
+	p.mu.Lock()
+	p.usageDirty = true
+	p.mu.Unlock()
 }
 
 // ---------- 休眠表 ----------

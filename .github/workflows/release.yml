@@ -4,6 +4,9 @@ on:
   push:
     tags: ["v*"]
 
+permissions:
+  contents: write # GitHub Release 上传产物
+
 jobs:
   build:
     strategy:
@@ -13,12 +16,15 @@ jobs:
           - goos: linux
             goarch: amd64
             ext: ""
+            archive: tar.gz
           - goos: linux
             goarch: arm64
             ext: ""
+            archive: tar.gz
           - goos: windows
             goarch: amd64
             ext: .exe
+            archive: zip
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -34,8 +40,44 @@ jobs:
             go build -trimpath -ldflags "-s -w -X agenthub/internal/app.Version=$ver" \
             -o "dist/agenthub_${{ matrix.goos }}_${{ matrix.goarch }}${{ matrix.ext }}" \
             ./cmd/agenthub
+      - name: Package
+        shell: bash
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          dir="agenthub_${{ matrix.goos }}_${{ matrix.goarch }}"
+          mkdir -p "pack/$dir"
+          cp "dist/agenthub_${{ matrix.goos }}_${{ matrix.goarch }}${{ matrix.ext }}" "pack/$dir/agenthub${{ matrix.ext }}"
+          cp README.md "pack/$dir/"
+          cd pack
+          case "${{ matrix.archive }}" in
+            tar.gz) tar czf "$dir.tar.gz" "$dir" ;;
+            zip) zip -qr "$dir.zip" "$dir" ;;
+          esac
+          cd ..
       - uses: actions/upload-artifact@v4
         with:
-          name: dist-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: dist/
-  # TODO(M1-W6): 打包 tar.gz/zip + SHA256SUMS + GitHub Release + changelog。
+          name: pack-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: pack/
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: pack
+          merge-multiple: true
+      - name: SHA256SUMS
+        shell: bash
+        run: |
+          cd pack
+          sha256sum agenthub_* > SHA256SUMS
+      - name: GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            pack/*.tar.gz
+            pack/*.zip
+            pack/SHA256SUMS
+          generate_release_notes: true # changelog 由 PR/commit 生成

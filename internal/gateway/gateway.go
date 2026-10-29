@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -57,6 +58,7 @@ type Server struct {
 	Rules       *RuleEngine  // 任务规则（F7）；nil=不启用
 	Keys        *KeyStore    // 调用方默认模型绑定；nil=不启用
 	Intents     *IntentChain // 意图判定链（F8）；nil=不分类
+	Traces      *TraceLog    // 决策追溯（F9）；nil=不记录
 	started     time.Time
 }
 
@@ -71,6 +73,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/chat/completions", s.handleInference(ProtoChat))
 	mux.HandleFunc("POST /v1/messages", s.handleInference(ProtoMessages))
 	mux.HandleFunc("GET /api/state", s.handleState)
+	mux.HandleFunc("GET /api/trace", s.handleTrace)
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write(webIndex)
@@ -155,6 +158,24 @@ func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
 	writeJSONStatus(w, http.StatusOK, state)
 }
 
+// handleTrace 返回最近的决策记录（F9 观测数据源，管理页后续接入）。
+// 查询参数：limit（默认 50）、agent（caller 前缀）、result（ok/fail/switch）。
+func (s *Server) handleTrace(w http.ResponseWriter, r *http.Request) {
+	if s.Traces == nil {
+		writeJSONStatus(w, http.StatusOK, map[string]any{"traces": []any{}})
+		return
+	}
+	limit := 50
+	if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && n > 0 && n <= traceMemCap {
+		limit = n
+	}
+	traces := s.Traces.Recent(limit, r.URL.Query().Get("agent"), r.URL.Query().Get("result"))
+	if traces == nil {
+		traces = []Trace{}
+	}
+	writeJSONStatus(w, http.StatusOK, map[string]any{"traces": traces})
+}
+
 // handleInference 返回一个协议端点处理器：解析 → 路由判定（规则→
 // 请求模型→key 绑定）→ 候选计划 → 候选循环。
 //
@@ -163,6 +184,7 @@ func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
 // 项目绑定默认模型；仍无目标 → 404。
 func (s *Server) handleInference(client ClientProto) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
 		body, err := io.ReadAll(io.LimitReader(r.Body, 32<<20))
 		if err != nil {
 			writeClientErr(client, w, http.StatusBadRequest, "读取请求体失败: "+err.Error())
@@ -197,6 +219,14 @@ func (s *Server) handleInference(client ClientProto) http.HandlerFunc {
 		if sticky == "" {
 			sticky = caller + "|" + model // 缺省会话键：调用方 × 请求模型
 		}
+		// 决策追溯（F9）：从路由判定起记录，解析失败/全败也留痕。
+		tr := Trace{ID: traceID(start), Time: start.Format(time.RFC3339), Caller: caller, RequestModel: model}
+		recordFail := func(status int) {
+			tr.Outcome, tr.HTTPStatus, tr.TotalMS = "fail", status, time.Since(start).Milliseconds()
+			if s.Traces != nil {
+				s.Traces.Record(tr)
+			}
+		}
 
 		// 路由判定。内部 L1 分类调用（带标记头）跳过分类与规则，
 		// 防止「分类调用再次触发分类」的递归。
@@ -204,37 +234,52 @@ func (s *Server) handleInference(client ClientProto) http.HandlerFunc {
 		if r.Header.Get(L1SelfHeader) != L1SelfValue {
 			lastMsg, estTokens := inputStats(clientReq)
 			intent := s.Intents.Classify(lastMsg)
+			tr.Intent = intent
 			if s.Rules != nil {
 				if hit, ok := s.Rules.Match(caller, intent, lastMsg, estTokens); ok {
 					slog.Info("任务规则命中", "rule", hit.ID, "target", hit.Target,
 						"intent", intent, "caller", caller)
 					target = hit.Target
+					tr.Rule, tr.RoutePath, tr.Target = hit.ID, "rule", hit.Target
 					w.Header().Set("X-Gw-Rule", hit.ID)
 				}
 			}
 		}
 		if target == "" || target == "default" {
-			target = s.Keys.DefaultModel(caller)
+			if bound := s.Keys.DefaultModel(caller); bound != "" {
+				target = bound
+				tr.RoutePath = "key-default"
+			}
+		}
+		if tr.RoutePath == "" {
+			tr.RoutePath = "request"
 		}
 		if target == "" {
+			tr.RoutePath = "none"
 			st, b := writeErr(client, http.StatusNotFound,
 				"未指定模型且调用方无默认模型绑定（用 `agenthub keys bind` 配置）")
 			writeRaw(w, st, b)
+			recordFail(st)
 			return
+		}
+		if tr.Target == "" {
+			tr.Target = target
 		}
 
 		cands, perr := s.Planner.Plan(target, sticky)
 		if perr != nil {
 			st, b := writeErr(client, http.StatusNotFound, perr.Error())
 			writeRaw(w, st, b)
+			recordFail(st)
 			return
 		}
 		if len(cands) == 0 {
 			writeClientErr(client, w, http.StatusServiceUnavailable,
 				"目标 "+target+" 没有可用候选（停用、凭证失败或组内成员全部不可用）")
+			recordFail(http.StatusServiceUnavailable)
 			return
 		}
-		s.serveWithFailover(w, r, client, clientReq, body, stream, cands, sticky)
+		s.serveWithFailover(w, r, client, clientReq, body, stream, cands, sticky, &tr, start)
 	}
 }
 
@@ -267,13 +312,33 @@ type attemptResult struct {
 
 func (s *Server) serveWithFailover(w http.ResponseWriter, r *http.Request,
 	client ClientProto, clientReq any, rawBody []byte, stream bool,
-	cands []Candidate, stickyKey string,
+	cands []Candidate, stickyKey string, tr *Trace, start time.Time,
 ) {
 	var last attemptResult
 	for _, cand := range cands {
+		t0 := time.Now()
 		res := s.attempt(r.Context(), client, clientReq, rawBody, stream, cand)
+		dur := time.Since(t0).Milliseconds()
+		// 候选尝试链留痕（F9）：结果、状态码、失败原因、耗时、出口
+		if tr != nil {
+			tc := TraceCandidate{
+				Provider: cand.Provider.ID, Account: cand.Account.Name,
+				Model: cand.UpstreamModel, DurMS: dur,
+				Result: classifyAttempt(res), Status: res.status,
+			}
+			if _, proxyRef, perr := s.resolveProxyRef(cand); perr == nil {
+				tc.Proxy = redactProxy(proxyRef)
+			}
+			if res.err != nil {
+				tc.Err = res.err.Error()
+			} else if res.status >= 400 {
+				tc.Err = netproxy.Snippet(res.body)
+			}
+			tr.Candidates = append(tr.Candidates, tc)
+		}
 		if res.clientFault {
 			// 请求体本身处理失败：换候选结果相同，原样返回
+			s.finishTrace(tr, "fail", res.status, start, nil, false)
 			s.relayRaw(w, client, cand, res)
 			return
 		}
@@ -299,6 +364,7 @@ func (s *Server) serveWithFailover(w http.ResponseWriter, r *http.Request,
 			continue
 		case res.status >= 400:
 			// 请求本身的问题：换账号结果相同，原样回给调用方（规则页）
+			s.finishTrace(tr, "fail", res.status, start, nil, false)
 			s.relayRaw(w, client, cand, res)
 			return
 		}
@@ -306,11 +372,60 @@ func (s *Server) serveWithFailover(w http.ResponseWriter, r *http.Request,
 		// 记录会话亲和：同一会话下次请求优先本候选（醒着才生效）。
 		s.Planner.Clear(cand)
 		s.Planner.NoteAffinity(stickyKey, cand.Key())
-		s.relay(w, client, clientReq, cand, res, stream)
+		if tr != nil {
+			tr.Served, tr.ServedModel = cand.Key(), cand.UpstreamModel
+			tr.TTFBMS = time.Since(start).Milliseconds() // 首字节=上游 2xx 响应头到达
+		}
+		usage := s.relay(w, client, clientReq, cand, res, stream)
+		switched := tr != nil && len(tr.Candidates) > 1
+		s.finishTrace(tr, "ok", res.status, start, usage, switched)
+		// 当日用量累计（W6）：smart 策略与额度观测的数据源。
+		if usage != nil {
+			s.Planner.NoteUsage(cand, usage.Prompt+usage.Completion)
+		}
 		return
 	}
 	// 全部候选失败：最后一次的原始错误回给 Agent（不伪装 200，规则页）
+	status := http.StatusBadGateway
+	if last.status >= 400 {
+		status = last.status
+	}
+	s.finishTrace(tr, "fail", status, start, nil, false)
 	s.relayLastError(w, client, last)
+}
+
+// classifyAttempt 把尝试结果映射为 trace 候选结果分类。
+func classifyAttempt(res attemptResult) string {
+	switch {
+	case res.clientFault:
+		return CandClient
+	case res.err != nil:
+		return CandNet
+	case res.status == http.StatusTooManyRequests:
+		return CandQuota
+	case res.status >= 500:
+		return CandServer
+	case res.status == http.StatusUnauthorized || res.status == http.StatusForbidden:
+		return CandCred
+	case res.status >= 400:
+		return CandClient
+	default:
+		return CandOK
+	}
+}
+
+// finishTrace 补全 trace 的终态并落盘（Traces 未装配时为空操作）。
+func (s *Server) finishTrace(tr *Trace, outcome string, status int, start time.Time,
+	usage *TraceUsage, switched bool) {
+	if tr == nil {
+		return
+	}
+	tr.Outcome, tr.HTTPStatus = outcome, status
+	tr.TotalMS = time.Since(start).Milliseconds()
+	tr.Usage, tr.Switched = usage, switched
+	if s.Traces != nil {
+		s.Traces.Record(*tr)
+	}
 }
 
 // attempt 向单个候选发起上游请求；只负责把响应带回来（含失败分类所需
@@ -347,7 +462,7 @@ func (s *Server) attempt(ctx context.Context, client ClientProto, clientReq any,
 	}
 	url := strings.TrimRight(cand.Provider.BaseURL, "/") + path
 
-	trIf, terr := s.transportFor(cand)
+	trIf, _, terr := s.resolveProxyRef(cand)
 	if terr != nil {
 		return attemptResult{err: terr}
 	}
@@ -381,20 +496,24 @@ func (s *Server) attempt(ctx context.Context, client ClientProto, clientReq any,
 	return attemptResult{resp: resp, status: resp.StatusCode}
 }
 
-// transportFor 解析账号→Provider→全局继承链（F3）并返回共享
-// RoundTripper（同端点复用连接池，HTTP/2 健康检查见 netproxy）。
-func (s *Server) transportFor(cand Candidate) (http.RoundTripper, error) {
+// resolveProxyRef 解析账号→Provider→全局继承链（F3）并返回共享
+// RoundTripper（同端点复用连接池，HTTP/2 健康检查见 netproxy）与
+// 实际代理出口（trace 记录用，调用方负责脱敏）。
+func (s *Server) resolveProxyRef(cand Candidate) (http.RoundTripper, string, error) {
 	ref, _ := ResolveProxyRef(string(cand.Account.Proxy), string(cand.Provider.Proxy), s.GlobalProxy)
-	return netproxy.SharedTransport(netproxy.Ref(ref))
+	rt, err := netproxy.SharedTransport(netproxy.Ref(ref))
+	return rt, ref, err
 }
 
 // ---------- 中继 ----------
 
-// relay 把 2xx 响应回给客户端；同协议透传，跨协议翻译。
+// relay 把 2xx 响应回给客户端；同协议透传，跨协议翻译。返回从上游
+// 响应提取的 token 用量（不可得时 nil；W6 用量累计与 trace 数据源）。
 func (s *Server) relay(w http.ResponseWriter,
-	client ClientProto, clientReq any, cand Candidate, res attemptResult, stream bool) {
+	client ClientProto, clientReq any, cand Candidate, res attemptResult, stream bool) *TraceUsage {
 	defer res.resp.Body.Close()
 	upstreamProto := clientProtoOf(cand.Provider.Protocol)
+	sc := &usageScanner{} // usage 提取（流式逐块 / 非流式整体）
 
 	h := w.Header()
 	h.Set("X-Gw-Provider", cand.Provider.ID)
@@ -406,14 +525,14 @@ func (s *Server) relay(w http.ResponseWriter,
 			h.Set("Content-Type", "text/event-stream; charset=utf-8")
 			w.WriteHeader(http.StatusOK)
 			fw := &flushWriter{w: w}
-			_, _ = io.Copy(fw, res.resp.Body)
+			_, _ = io.Copy(fw, io.TeeReader(res.resp.Body, sc))
 			fw.flush()
-			return
+			return sc.usageOf()
 		}
 		h.Set("Content-Type", orDefault(res.resp.Header.Get("Content-Type"), "application/json"))
 		w.WriteHeader(http.StatusOK)
-		_, _ = io.Copy(w, res.resp.Body)
-		return
+		_, _ = io.Copy(w, io.TeeReader(res.resp.Body, sc))
+		return sc.usageOf()
 	}
 
 	// 跨协议：翻译后输出
@@ -421,23 +540,25 @@ func (s *Server) relay(w http.ResponseWriter,
 		h.Set("Content-Type", sseContentType(client))
 		w.WriteHeader(http.StatusOK)
 		fw := &flushWriter{w: w}
-		s.translateStream(w, fw, client, upstreamProto, res.resp.Body)
+		s.translateStream(w, fw, client, upstreamProto, io.TeeReader(res.resp.Body, sc))
 		fw.flush()
-		return
+		return sc.usageOf()
 	}
 	b, err := io.ReadAll(io.LimitReader(res.resp.Body, 64<<20))
 	if err != nil {
 		writeClientErr(client, w, http.StatusBadGateway, "读取上游响应失败: "+err.Error())
-		return
+		return nil
 	}
+	_, _ = sc.Write(b)
 	out, oerr := translateResponse(client, upstreamProto, clientReq, b)
 	if oerr != nil {
 		writeClientErr(client, w, http.StatusBadGateway, oerr.Error())
-		return
+		return nil
 	}
 	h.Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(out)
+	return sc.usageOf()
 }
 
 // relayRaw 把 4xx（请求本身的问题）原样回给客户端。

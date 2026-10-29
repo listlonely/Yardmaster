@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 
 	"agenthub/internal/gateway"
@@ -17,29 +18,25 @@ import (
 	"agenthub/internal/store"
 )
 
-type providersFile struct {
-	Providers []provider.Provider `json:"providers"`
-	Groups    []provider.Group    `json:"groups,omitempty"`
-}
+// providers.json 的文件形态统一在 store.ProvidersFile（gateway 用量
+// 落盘共用同一 schema）。
 
-func loadProvidersFile(paths store.Paths) (providersFile, error) {
-	var cfg providersFile
-	if err := store.LoadJSON(paths.ProvidersPath(), &cfg); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return cfg, nil
-		}
-		return cfg, err
+// loadProvidersFile 供 CLI 编辑用：文件不存在视为空配置。
+func loadProvidersFile(paths store.Paths) (store.ProvidersFile, error) {
+	f, err := store.LoadProvidersFile(paths.ProvidersPath())
+	if errors.Is(err, os.ErrNotExist) {
+		return store.ProvidersFile{}, nil
 	}
-	return cfg, nil
+	return f, err
 }
 
-func saveProvidersFile(paths store.Paths, cfg providersFile) error {
-	return store.SaveJSON(paths.ProvidersPath(), cfg)
+func saveProvidersFile(paths store.Paths, cfg store.ProvidersFile) error {
+	return store.SaveProvidersFile(paths.ProvidersPath(), cfg)
 }
 
 func runProvider(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "用法: agenthub provider <add|list|probe|remove> [参数]")
+		fmt.Fprintln(stderr, "用法: agenthub provider <add|list|probe|quota|remove> [参数]")
 		return ErrUsage
 	}
 	paths, err := store.DefaultPaths()
@@ -53,12 +50,60 @@ func runProvider(args []string, stdout, stderr io.Writer) error {
 		return providerList(paths, stdout)
 	case "probe":
 		return providerProbe(paths, args[1:], stdout, stderr)
+	case "quota":
+		return providerQuota(paths, args[1:], stdout, stderr)
 	case "remove":
 		return providerRemove(paths, args[1:], stdout, stderr)
 	default:
-		fmt.Fprintf(stderr, "未知子命令 %q；可用：add、list、probe、remove\n", args[0])
+		fmt.Fprintf(stderr, "未知子命令 %q；可用：add、list、probe、quota、remove\n", args[0])
 		return ErrUsage
 	}
+}
+
+// providerQuota 设置账号当日额度（smart 策略的排序数据源；0=清除）。
+// UsedTokens 由网关按响应 usage 累计（W6）。
+func providerQuota(paths store.Paths, args []string, stdout, stderr io.Writer) error {
+	if len(args) != 3 {
+		fmt.Fprintln(stderr, "用法: agenthub provider quota <provider-id> <账号名> <当日额度tokens|0清除>")
+		return ErrUsage
+	}
+	quota, err := strconv.ParseInt(args[2], 10, 64)
+	if err != nil || quota < 0 {
+		fmt.Fprintln(stderr, "额度须为非负整数（0=清除）")
+		return ErrUsage
+	}
+	cfg, err := loadProvidersFile(paths)
+	if err != nil {
+		return err
+	}
+	for i := range cfg.Providers {
+		if cfg.Providers[i].ID != args[0] {
+			continue
+		}
+		for j := range cfg.Providers[i].Accounts {
+			if cfg.Providers[i].Accounts[j].Name != args[1] {
+				continue
+			}
+			acc := &cfg.Providers[i].Accounts[j]
+			acc.QuotaTokensDay = quota
+			if quota == 0 {
+				acc.UsedTokens, acc.UsageDay = 0, ""
+			}
+			if err := saveProvidersFile(paths, cfg); err != nil {
+				return err
+			}
+			if quota == 0 {
+				fmt.Fprintf(stdout, "已清除 %s/%s 的当日额度\n", args[0], args[1])
+			} else {
+				fmt.Fprintf(stdout, "已设置 %s/%s 当日额度 %d tokens（重启 serve 生效）\n", args[0], args[1], quota)
+			}
+			return nil
+		}
+		fmt.Fprintf(stderr, "provider %q 下没有账号 %q\n", args[0], args[1])
+		return ErrUsage
+	}
+	fmt.Fprintf(stderr, "provider %q 不存在\n", args[0])
+	return ErrUsage
 }
 
 func providerAdd(paths store.Paths, args []string, stdout, stderr io.Writer) error {
