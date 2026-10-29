@@ -30,6 +30,7 @@ jobs:
       - name: Package
         shell: bash
         run: |
+          set -x
           cd pack
           for p in agenthub_linux-amd64 agenthub_linux-arm64 agenthub_windows-amd64.exe; do
             base=${p%.exe}; base=${base#agenthub_} # linux-amd64 / windows-amd64
@@ -44,6 +45,17 @@ jobs:
           rm -f agenthub_linux-amd64 agenthub_linux-arm64 agenthub_windows-amd64.exe
           sha256sum agenthub_*.tar.gz agenthub_*.zip > SHA256SUMS
           ls -l
+      - name: Debug dump（失败时推送产物状态到 ci-debug 分支）
+        if: failure()
+        shell: bash
+        run: |
+          git config user.email ci@agenthub.local
+          git config user.name ci
+          git checkout -B ci-debug
+          git add -A pack 2>/dev/null || true
+          if git diff --cached --quiet; then echo "pack 无内容"; exit 0; fi
+          git commit -m "ci-debug: release run ${{ github.run_id }} package 状态"
+          git push -f origin ci-debug
       - name: GitHub Release
         uses: softprops/action-gh-release@v2
         with:
