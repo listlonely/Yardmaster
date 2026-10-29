@@ -35,6 +35,12 @@ func (p Paths) TraceDir() string { return filepath.Join(p.AppDir, "trace") }
 // IntentsPath 返回 intents.json 路径（用户自定义识别策略，PRD F8）。
 func (p Paths) IntentsPath() string { return filepath.Join(p.AppDir, "intents.json") }
 
+// RulesPath 返回 rules.json 路径（任务规则，PRD F7；W5 新增）。
+func (p Paths) RulesPath() string { return filepath.Join(p.AppDir, "rules.json") }
+
+// KeysPath 返回 keys.json 路径（调用方 key 绑定默认模型；W5 新增）。
+func (p Paths) KeysPath() string { return filepath.Join(p.AppDir, "keys.json") }
+
 // AppliedPath 返回 applied.json 路径（接线审计记录，F4/F5/F10）。
 func (p Paths) AppliedPath() string { return filepath.Join(p.AppDir, "applied.json") }
 

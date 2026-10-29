@@ -87,3 +87,42 @@ func TestBuildL1PromptCapsExamplesAtFive(t *testing.T) {
 		t.Fatalf("example lines = %d, want %d", got, maxExamplesPerIntent)
 	}
 }
+
+// W5：内置 L0 的结构特征与词表种子。
+func TestL0CodeStructureFeatures(t *testing.T) {
+	cases := []string{
+		"看下这段：\n```go\nfmt.Println()\n```",
+		"diff --git a/x.go b/x.go",
+		"@@ -1,2 +1,3 @@",
+		"修复 main.go 里的空指针",
+		"check src/utils.py",
+	}
+	for _, m := range cases {
+		v, ok := L0(m)
+		if !ok || v.Intent != "coding" {
+			t.Fatalf("结构特征应判 coding: %q → (%+v, %v)", m, v, ok)
+		}
+	}
+}
+
+func TestL0WordSeeds(t *testing.T) {
+	if v, ok := L0("请重构这个函数"); !ok || v.Intent != "coding" {
+		t.Fatalf("词表应判 coding: (%+v, %v)", v, ok)
+	}
+	if v, ok := L0("帮我润色一下文案"); !ok || v.Intent != "writing" {
+		t.Fatalf("词表应判 writing: (%+v, %v)", v, ok)
+	}
+	if _, ok := L0("今天天气怎么样"); ok {
+		t.Fatal("无特征消息不应命中（交给 L1）")
+	}
+}
+
+func TestBuiltinIntentsSharedVocabulary(t *testing.T) {
+	// 词表定稿（W5）：内置意图供 L1 提示词与规则匹配共用。
+	joined := strings.Join(BuiltinIntents, ",")
+	for _, want := range []string{"coding", "qa", "writing"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("内置词表缺少 %q: %v", want, BuiltinIntents)
+		}
+	}
+}

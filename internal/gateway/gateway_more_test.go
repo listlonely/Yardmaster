@@ -197,7 +197,7 @@ func TestEndpointsStateModelsPage(t *testing.T) {
 		t.Fatalf("管理页 Content-Type = %q", ct)
 	}
 	// /api/state 含休眠账号
-	s := &Server{Planner: NewPlanner([]provider.Provider{chatProvider(up.srv.URL)}), Version: "t"}
+	s := &Server{Planner: NewPlanner([]provider.Provider{chatProvider(up.srv.URL)}, nil), Version: "t"}
 	h := httptest.NewServer(s.Handler())
 	defer h.Close()
 	pl := s.Planner

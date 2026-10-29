@@ -45,3 +45,42 @@ func TestLoadMissingIsNotExist(t *testing.T) {
 		t.Fatalf("want os.ErrNotExist, got %v", err)
 	}
 }
+
+func TestSettingsRoundtrip(t *testing.T) {
+	p := Paths{AppDir: t.TempDir()}
+	s := Settings{GlobalProxy: "http://127.0.0.1:7890", L1Classifier: "prov/small", L1TimeoutMS: 500}
+	if err := SaveSettings(p, s); err != nil {
+		t.Fatal(err)
+	}
+	out, err := LoadSettings(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != s {
+		t.Fatalf("roundtrip = %+v, want %+v", out, s)
+	}
+	// 缺文件返回 os.ErrNotExist（调用方按零值处理）
+	empty, err := LoadSettings(Paths{AppDir: t.TempDir()})
+	if !errors.Is(err, os.ErrNotExist) || empty != (Settings{}) {
+		t.Fatalf("缺文件应返回 ErrNotExist+零值: %+v %v", empty, err)
+	}
+}
+
+func TestPathsLayout(t *testing.T) {
+	p := Paths{AppDir: "root"}
+	for _, c := range []struct{ got, name string }{
+		{p.SettingsPath(), "settings.json"},
+		{p.ProvidersPath(), "providers.json"},
+		{p.RulesPath(), "rules.json"},
+		{p.KeysPath(), "keys.json"},
+		{p.IntentsPath(), "intents.json"},
+		{p.AppliedPath(), "applied.json"},
+	} {
+		if want := filepath.Join("root", c.name); c.got != want {
+			t.Fatalf("path = %q, want %q", c.got, want)
+		}
+	}
+	if p.TraceDir() != filepath.Join("root", "trace") || p.StashDir() != filepath.Join("root", "stash") {
+		t.Fatal("目录布局不符")
+	}
+}

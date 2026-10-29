@@ -20,10 +20,23 @@ type Verdict struct {
 	Confidence float64 // 0~1
 }
 
+// BuiltinIntents 是内置意图词表（L0/L1 与任务规则共用，W5 定稿）。
+var BuiltinIntents = []string{"coding", "qa", "writing"}
+
+// codeFeatureRe 是 L0 的代码结构特征：代码围栏、diff 标记、带常见扩展名
+// 的文件路径（多行模式）。命中即判 coding（结构特征比词表更可靠）。
+var codeFeatureRe = regexp.MustCompile(
+	"`{3}|diff --git|(?m)^@@ -\\d|(?m)^--- [ab]/|" +
+		`(?i)\b[\w./\\-]+\.(?:go|py|ts|tsx|js|mjs|java|rs|c|h|cpp|json|ya?ml|toml|sh|sql|html|css)\b`)
+
 // L0 用本地启发式判定消息意图：零成本、不外发、<5ms（F8）。
-// 当前为词表种子实现；W5 补齐代码块/文件路径/diff 特征与
-// 调用方工具集特征。未命中返回 (零值, false)。
+// 结构特征（围栏/diff/文件路径）优先，其次词表种子。未命中返回
+// (零值, false)。调用方工具集特征由网关侧补充（含 tools 的请求视为
+// coding 倾向），本函数保持纯文本输入。
 func L0(message string) (Verdict, bool) {
+	if codeFeatureRe.MatchString(message) {
+		return Verdict{Intent: "coding", Confidence: 0.7}, true
+	}
 	m := strings.ToLower(message)
 	switch {
 	case containsAny(m, "代码", "重构", "函数", "bug", "编译", "脚本", "code", "refactor"):

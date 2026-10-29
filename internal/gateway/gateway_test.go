@@ -25,10 +25,10 @@ type recordedReq struct {
 }
 
 type fakeUpstream struct {
-	srv      *httptest.Server
-	mu       sync.Mutex
-	reqs     []recordedReq
-	respond  func(rec recordedReq, n int) (int, string, string) // status, contentType, body
+	srv     *httptest.Server
+	mu      sync.Mutex
+	reqs    []recordedReq
+	respond func(rec recordedReq, n int) (int, string, string) // status, contentType, body
 }
 
 func newFakeUpstream(t *testing.T, respond func(rec recordedReq, n int) (int, string, string)) *fakeUpstream {
@@ -81,7 +81,7 @@ func messagesProvider(baseURL string) provider.Provider {
 
 func newGateway(t *testing.T, prov provider.Provider) *httptest.Server {
 	t.Helper()
-	s := &Server{Planner: NewPlanner([]provider.Provider{prov}), Version: "test"}
+	s := &Server{Planner: NewPlanner([]provider.Provider{prov}, nil), Version: "test"}
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
 	return srv
@@ -407,7 +407,7 @@ func TestUnknownModelRejected(t *testing.T) {
 }
 
 func TestPlannerRestLastOrdering(t *testing.T) {
-	p := NewPlanner([]provider.Provider{chatProvider("http://unused")})
+	p := NewPlanner([]provider.Provider{chatProvider("http://unused")}, nil)
 	prov, _, err := p.ResolveModel("prov/up-m")
 	if err != nil {
 		t.Fatal(err)

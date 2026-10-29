@@ -19,6 +19,7 @@ import (
 
 type providersFile struct {
 	Providers []provider.Provider `json:"providers"`
+	Groups    []provider.Group    `json:"groups,omitempty"`
 }
 
 func loadProvidersFile(paths store.Paths) (providersFile, error) {
@@ -287,5 +288,133 @@ func providerRemove(paths store.Paths, args []string, stdout, stderr io.Writer) 
 		return err
 	}
 	fmt.Fprintf(stdout, "已删除 %s（引用其模型的组与规则将按「目标失效」处理）\n", args[0])
+	return nil
+}
+
+// ---------- 路由组（PRD F6） ----------
+
+// repeatFlags 收集可重复出现的 -flag 值（组成员列表用）。
+type repeatFlags []string
+
+func (f *repeatFlags) String() string { return strings.Join(*f, ",") }
+func (f *repeatFlags) Set(v string) error {
+	*f = append(*f, v)
+	return nil
+}
+
+// runGroup 是 group 子命令：add/list/rm（管理页策略编辑后续接入同一持久化）。
+func runGroup(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "用法: agenthub group <add|list|rm> [参数]")
+		return ErrUsage
+	}
+	paths, err := store.DefaultPaths()
+	if err != nil {
+		return err
+	}
+	switch args[0] {
+	case "add":
+		return groupAdd(paths, args[1:], stdout, stderr)
+	case "list":
+		return groupList(paths, stdout)
+	case "rm":
+		return groupRemove(paths, args[1:], stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "未知子命令 %q；可用：add、list、rm\n", args[0])
+		return ErrUsage
+	}
+}
+
+func groupAdd(paths store.Paths, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("group add", flag.ContinueOnError)
+	id := fs.String("id", "", "组 ID（调用方引用为 group/<id>）")
+	strategy := fs.String("strategy", "order", "order | rotate | smart")
+	var members repeatFlags
+	fs.Var(&members, "member", "成员 provider/model（可重复）")
+	if err := fs.Parse(args); err != nil {
+		return ErrUsage
+	}
+	if *id == "" || len(members) == 0 {
+		fmt.Fprintln(stderr, "缺少必填参数：-id 与至少一个 -member")
+		return ErrUsage
+	}
+	switch provider.Strategy(*strategy) {
+	case provider.StrategyOrder, provider.StrategyRotate, provider.StrategySmart:
+	default:
+		fmt.Fprintf(stderr, "-strategy 仅支持 order | rotate | smart\n")
+		return ErrUsage
+	}
+	for _, m := range members {
+		if strings.TrimSpace(m) == "" {
+			fmt.Fprintf(stderr, "-member 不能为空\n")
+			return ErrUsage
+		}
+	}
+	cfg, err := loadProvidersFile(paths)
+	if err != nil {
+		return err
+	}
+	for _, g := range cfg.Groups {
+		if g.ID == *id {
+			fmt.Fprintf(stderr, "路由组 %q 已存在（先 rm 再 add）\n", *id)
+			return ErrUsage
+		}
+	}
+	cfg.Groups = append(cfg.Groups, provider.Group{
+		ID: *id, Strategy: provider.Strategy(*strategy), Members: members,
+	})
+	if err := saveProvidersFile(paths, cfg); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "已添加组 %s（%s）：\n", *id, *strategy)
+	for _, m := range members {
+		fmt.Fprintf(stdout, "  - %s\n", m)
+	}
+	fmt.Fprintf(stdout, "调用方引用名：group/%s（重启 serve 生效）\n", *id)
+	return nil
+}
+
+func groupList(paths store.Paths, stdout io.Writer) error {
+	cfg, err := loadProvidersFile(paths)
+	if err != nil {
+		return err
+	}
+	if len(cfg.Groups) == 0 {
+		fmt.Fprintln(stdout, "（无路由组；用 `agenthub group add` 创建）")
+		return nil
+	}
+	for _, g := range cfg.Groups {
+		fmt.Fprintf(stdout, "group/%s  %-7s 成员: %s\n", g.ID, g.Strategy, strings.Join(g.Members, ", "))
+	}
+	return nil
+}
+
+func groupRemove(paths store.Paths, args []string, stdout, stderr io.Writer) error {
+	if len(args) != 1 {
+		fmt.Fprintln(stderr, "用法: agenthub group rm <group-id>")
+		return ErrUsage
+	}
+	cfg, err := loadProvidersFile(paths)
+	if err != nil {
+		return err
+	}
+	kept := cfg.Groups[:0]
+	found := false
+	for _, g := range cfg.Groups {
+		if g.ID == args[0] {
+			found = true
+			continue
+		}
+		kept = append(kept, g)
+	}
+	if !found {
+		fmt.Fprintf(stderr, "路由组 %q 不存在\n", args[0])
+		return ErrUsage
+	}
+	cfg.Groups = kept
+	if err := saveProvidersFile(paths, cfg); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "已删除组 %s（绑定它的 keys 与引用它的规则需自行调整）\n", args[0])
 	return nil
 }

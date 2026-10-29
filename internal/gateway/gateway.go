@@ -5,7 +5,7 @@
 // 头标明实际服务方；上游密钥只经 netproxy，日志脱敏。
 //
 // W2 边界：网关 key 校验待接入 settings（TODO(P1)）；trace 落盘在 W6；
-// 翻译覆盖文本+工具，thinking/多模态块 TODO(W5)。
+// 翻译覆盖文本+工具，thinking/多模态块 TODO(P1)。
 package gateway
 
 import (
@@ -53,7 +53,10 @@ type Server struct {
 	Addr        string
 	Planner     *Planner
 	Version     string
-	GlobalProxy string // 全局代理（F3 继承链末端）；空=系统代理
+	GlobalProxy string       // 全局代理（F3 继承链末端）；空=系统代理
+	Rules       *RuleEngine  // 任务规则（F7）；nil=不启用
+	Keys        *KeyStore    // 调用方默认模型绑定；nil=不启用
+	Intents     *IntentChain // 意图判定链（F8）；nil=不分类
 	started     time.Time
 }
 
@@ -138,11 +141,26 @@ func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
 			resting[k] = until.Format(time.RFC3339)
 		}
 		state["resting"] = resting
+		var groups []map[string]any
+		for _, g := range s.Planner.Groups() {
+			groups = append(groups, map[string]any{"id": g.ID, "strategy": g.Strategy, "members": g.Members})
+		}
+		if groups != nil {
+			state["groups"] = groups
+		}
+	}
+	if s.Rules != nil {
+		state["rules"] = s.Rules.Snapshot()
 	}
 	writeJSONStatus(w, http.StatusOK, state)
 }
 
-// handleInference 返回一个协议端点处理器：解析 → 解析模型 → 候选循环。
+// handleInference 返回一个协议端点处理器：解析 → 路由判定（规则→
+// 请求模型→key 绑定）→ 候选计划 → 候选循环。
+//
+// 模型判定顺序（W5 设计决策）：任务规则命中 → 规则 target 覆盖；
+// 未命中用客户端请求的 model；model 为空或 "default" → keys.json
+// 项目绑定默认模型；仍无目标 → 404。
 func (s *Server) handleInference(client ClientProto) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(io.LimitReader(r.Body, 32<<20))
@@ -173,36 +191,51 @@ func (s *Server) handleInference(client ClientProto) http.HandlerFunc {
 			writeClientErr(client, w, http.StatusServiceUnavailable, "网关未配置任何 provider")
 			return
 		}
-		prov, upstreamModel, rerr := s.Planner.ResolveModel(model)
-		if rerr != nil {
-			st, b := writeErr(client, http.StatusNotFound, rerr.Error())
+
+		caller := callerKeyOf(r)
+		sticky := r.Header.Get("X-Gw-Session")
+		if sticky == "" {
+			sticky = caller + "|" + model // 缺省会话键：调用方 × 请求模型
+		}
+
+		// 路由判定。内部 L1 分类调用（带标记头）跳过分类与规则，
+		// 防止「分类调用再次触发分类」的递归。
+		target := model
+		if r.Header.Get(L1SelfHeader) != L1SelfValue {
+			lastMsg, estTokens := inputStats(clientReq)
+			intent := s.Intents.Classify(lastMsg)
+			if s.Rules != nil {
+				if hit, ok := s.Rules.Match(caller, intent, lastMsg, estTokens); ok {
+					slog.Info("任务规则命中", "rule", hit.ID, "target", hit.Target,
+						"intent", intent, "caller", caller)
+					target = hit.Target
+					w.Header().Set("X-Gw-Rule", hit.ID)
+				}
+			}
+		}
+		if target == "" || target == "default" {
+			target = s.Keys.DefaultModel(caller)
+		}
+		if target == "" {
+			st, b := writeErr(client, http.StatusNotFound,
+				"未指定模型且调用方无默认模型绑定（用 `agenthub keys bind` 配置）")
 			writeRaw(w, st, b)
 			return
 		}
-		// 网关侧模型名（provider/model）改写为上游真实模型名：
-		// 翻译路径改写请求结构体；透传路径改写原始字节。W3 真实冒烟发现：
-		// 透传不改写会让上游收到带 provider 前缀的名字而报「模型不存在」。
-		switch cq := clientReq.(type) {
-		case *ChatRequest:
-			cq.Model = upstreamModel
-		case *MessagesRequest:
-			cq.Model = upstreamModel
-		}
-		if isSameProto(client, prov) {
-			rewritten, merr := rewriteModel(body, upstreamModel)
-			if merr != nil {
-				writeClientErr(client, w, http.StatusBadRequest, "改写模型名失败: "+merr.Error())
-				return
-			}
-			body = rewritten
-		}
-		s.serveWithFailover(w, r, client, clientReq, body, stream, prov, upstreamModel)
-	}
-}
 
-// isSameProto 判断客户端协议与上游协议一致（透传路径）。
-func isSameProto(client ClientProto, prov *provider.Provider) bool {
-	return clientProtoOf(prov.Protocol) == client
+		cands, perr := s.Planner.Plan(target, sticky)
+		if perr != nil {
+			st, b := writeErr(client, http.StatusNotFound, perr.Error())
+			writeRaw(w, st, b)
+			return
+		}
+		if len(cands) == 0 {
+			writeClientErr(client, w, http.StatusServiceUnavailable,
+				"目标 "+target+" 没有可用候选（停用、凭证失败或组内成员全部不可用）")
+			return
+		}
+		s.serveWithFailover(w, r, client, clientReq, body, stream, cands, sticky)
+	}
 }
 
 // rewriteModel 把请求体 JSON 的 model 字段改写为上游真实模型名。
@@ -223,25 +256,27 @@ func rewriteModel(body []byte, upstreamModel string) ([]byte, error) {
 
 // ---------- 候选循环与故障转移 ----------
 
+// attemptResult 是单次尝试的结果。
 type attemptResult struct {
-	resp   *http.Response // 2xx 时非 nil
-	status int
-	body   []byte // 失败时已排干的响应体（全败时原样回传最后一次）
-	err    error  // 网络层错误
+	resp        *http.Response // 2xx 时非 nil
+	status      int
+	body        []byte // 失败时已排干的响应体（全败时原样回传最后一次）
+	err         error  // 网络层错误
+	clientFault bool   // 请求体本地处理失败（如模型名改写）：不再换候选
 }
 
 func (s *Server) serveWithFailover(w http.ResponseWriter, r *http.Request,
 	client ClientProto, clientReq any, rawBody []byte, stream bool,
-	prov *provider.Provider, upstreamModel string,
+	cands []Candidate, stickyKey string,
 ) {
-	cands := s.Planner.Candidates(prov, upstreamModel)
-	if len(cands) == 0 {
-		writeClientErr(client, w, http.StatusServiceUnavailable, "provider "+prov.ID+" 没有可用账号（全部停用或凭证失败）")
-		return
-	}
 	var last attemptResult
 	for _, cand := range cands {
 		res := s.attempt(r.Context(), client, clientReq, rawBody, stream, cand)
+		if res.clientFault {
+			// 请求体本身处理失败：换候选结果相同，原样返回
+			s.relayRaw(w, client, cand, res)
+			return
+		}
 		if res.err != nil {
 			slog.Warn("上游网络失败，切下一候选", "provider", cand.Provider.ID, "account", cand.Account.Name, "err", res.err)
 			s.Planner.Rest(cand, restNetwork)
@@ -267,8 +302,10 @@ func (s *Server) serveWithFailover(w http.ResponseWriter, r *http.Request,
 			s.relayRaw(w, client, cand, res)
 			return
 		}
-		// 2xx：成功，开始中继；此后不再切换（响应已开始，规则页）
+		// 2xx：成功，开始中继；此后不再切换（响应已开始，规则页）。
+		// 记录会话亲和：同一会话下次请求优先本候选（醒着才生效）。
 		s.Planner.Clear(cand)
+		s.Planner.NoteAffinity(stickyKey, cand.Key())
 		s.relay(w, client, clientReq, cand, res, stream)
 		return
 	}
@@ -278,11 +315,28 @@ func (s *Server) serveWithFailover(w http.ResponseWriter, r *http.Request,
 
 // attempt 向单个候选发起上游请求；只负责把响应带回来（含失败分类所需
 // 的 status/body），不做任何客户端写入。
+//
+// 模型名改写按候选进行（W5：组候选可跨 provider、各候选上游模型名
+// 不同）：同协议透传路径改写原始字节；翻译路径改写请求结构体。
+// W3 真实冒烟发现：透传不改写会让上游收到带 provider 前缀的名字。
 func (s *Server) attempt(ctx context.Context, client ClientProto, clientReq any,
 	rawBody []byte, stream bool, cand Candidate) attemptResult {
 	upstreamProto := clientProtoOf(cand.Provider.Protocol)
-	upBody := rawBody
-	if upstreamProto != client {
+	var upBody []byte
+	if upstreamProto == client {
+		b, merr := rewriteModel(rawBody, cand.UpstreamModel)
+		if merr != nil {
+			st, body := writeErr(client, http.StatusBadRequest, "改写模型名失败: "+merr.Error())
+			return attemptResult{clientFault: true, status: st, body: body}
+		}
+		upBody = b
+	} else {
+		switch cq := clientReq.(type) {
+		case *ChatRequest:
+			cq.Model = cand.UpstreamModel
+		case *MessagesRequest:
+			cq.Model = cand.UpstreamModel
+		}
 		upBody = translateRequest(client, clientReq, upstreamProto, stream)
 	}
 	var path string

@@ -53,6 +53,11 @@ type Account struct {
 	Proxy        netproxy.Ref  `json:"proxy,omitempty"` // 空=继承 Provider
 	Status       AccountStatus `json:"status"`
 	RestingUntil int64         `json:"resting_until,omitempty"` // Unix 秒；休眠至 T
+
+	// 当日用量（W6 由响应 usage 填充）：smart 策略按剩余比例排序。
+	// QuotaTokensDay<=0 视为无数据（smart 回落 rotate）。
+	UsedTokens     int64 `json:"used_tokens,omitempty"`
+	QuotaTokensDay int64 `json:"quota_tokens_day,omitempty"`
 }
 
 // Strategy 是路由组策略名（PRD F6）。策略实现在 internal/routes。
