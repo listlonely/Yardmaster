@@ -1,6 +1,9 @@
 package netproxy
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseAcceptsSupportedSchemes(t *testing.T) {
 	cases := []Ref{
@@ -51,5 +54,32 @@ func TestRedactMasksCredentials(t *testing.T) {
 	}
 	if got := Redact("http://127.0.0.1:7890"); got != "http://127.0.0.1:7890" {
 		t.Fatalf("Redact without creds changed value: %q", got)
+	}
+}
+
+func TestSnippetTruncatesAndSanitizes(t *testing.T) {
+	long := strings.Repeat("a", 500) + "\n\x01tail"
+	s := Snippet([]byte(long))
+	if len(s) > 205 {
+		t.Fatalf("snippet too long: %d", len(s))
+	}
+	if strings.ContainsAny(s, "\n\x01") {
+		t.Fatalf("控制字符未转义: %q", s)
+	}
+	if !strings.HasSuffix(s, "…") {
+		t.Fatalf("超长应带省略号: %q", s)
+	}
+	if Snippet([]byte("short")) != "short" {
+		t.Fatal("短内容应原样返回")
+	}
+}
+
+func TestParseEmptyAndDirect(t *testing.T) {
+	if u, err := Parse(""); u != nil || err != nil {
+		t.Fatalf("Parse(\"\") = (%v, %v)", u, err)
+	}
+	u, err := Parse("direct")
+	if err != nil || u.Scheme != "direct" {
+		t.Fatalf("Parse(direct) = (%v, %v)", u, err)
 	}
 }

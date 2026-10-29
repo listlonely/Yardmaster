@@ -123,15 +123,21 @@ func (p *Planner) Resting() map[string]time.Time {
 	return out
 }
 
-// AllModels 列出模型目录（/v1/models 用）。W2 目录来自 providers.json
-// 的 provider 粒度（预检拉取的模型清单在 W3 落盘后细化）。
+// AllModels 列出模型目录（/v1/models 用）：有模型清单的 provider
+// 展开为 provider/model；未预检的以 provider 自身占位。
 func (p *Planner) AllModels() []string {
 	var out []string
 	for _, prov := range p.providers {
 		if prov.Disabled {
 			continue
 		}
-		out = append(out, prov.ID)
+		if len(prov.Models) == 0 {
+			out = append(out, prov.ID)
+			continue
+		}
+		for _, m := range prov.Models {
+			out = append(out, prov.ID+"/"+m.ID)
+		}
 	}
 	sort.Strings(out)
 	return out

@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"agenthub/internal/gateway"
+	"agenthub/internal/netproxy"
 	"agenthub/internal/provider"
 	"agenthub/internal/store"
 )
@@ -34,8 +35,12 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	case "version":
 		fmt.Fprintln(stdout, "agenthub "+Version)
 		return nil
+	case "provider":
+		return runProvider(args[1:], stdout, stderr)
+	case "settings":
+		return runSettings(args[1:], stdout, stderr)
 	default:
-		fmt.Fprintf(stderr, "未知子命令 %q；可用：serve、version\n", args[0])
+		fmt.Fprintf(stderr, "未知子命令 %q；可用：serve、version、provider、settings\n", args[0])
 		return ErrUsage
 	}
 }
@@ -49,9 +54,16 @@ func runServe(stdout io.Writer) error {
 		return fmt.Errorf("定位数据目录: %w", err)
 	}
 	planner := loadPlanner(paths)
+	settings, serr := store.LoadSettings(paths)
+	if serr != nil && !errors.Is(serr, os.ErrNotExist) {
+		return fmt.Errorf("读取设置: %w", serr)
+	}
 
-	srv := &gateway.Server{Addr: gateway.DefaultAddr, Planner: planner, Version: Version}
+	srv := &gateway.Server{Addr: gateway.DefaultAddr, Planner: planner, Version: Version, GlobalProxy: settings.GlobalProxy}
 	fmt.Fprintf(stdout, "agenthub %s · 网关监听 http://%s · 数据目录 %s\n", Version, srv.Addr, paths.AppDir)
+	if settings.GlobalProxy != "" {
+		fmt.Fprintf(stdout, "  全局代理: %s\n", netproxy.Redact(settings.GlobalProxy))
+	}
 	fmt.Fprintf(stdout, "  端点: /v1/chat/completions · /v1/messages · /healthz · /api/state\n")
 	return srv.Serve(ctx)
 }

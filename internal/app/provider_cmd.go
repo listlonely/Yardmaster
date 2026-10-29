@@ -1,0 +1,247 @@
+// provider 子命令（PRD F2 的 CLI 形态）：add/list/probe/remove。
+// UI 向导后续接入同一持久化与预检逻辑。
+package app
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+
+	"agenthub/internal/gateway"
+	"agenthub/internal/netproxy"
+	"agenthub/internal/provider"
+	"agenthub/internal/store"
+)
+
+type providersFile struct {
+	Providers []provider.Provider `json:"providers"`
+}
+
+func loadProvidersFile(paths store.Paths) (providersFile, error) {
+	var cfg providersFile
+	if err := store.LoadJSON(paths.ProvidersPath(), &cfg); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return cfg, nil
+		}
+		return cfg, err
+	}
+	return cfg, nil
+}
+
+func saveProvidersFile(paths store.Paths, cfg providersFile) error {
+	return store.SaveJSON(paths.ProvidersPath(), cfg)
+}
+
+func runProvider(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "用法: agenthub provider <add|list|probe|remove> [参数]")
+		return ErrUsage
+	}
+	paths, err := store.DefaultPaths()
+	if err != nil {
+		return err
+	}
+	switch args[0] {
+	case "add":
+		return providerAdd(paths, args[1:], stdout, stderr)
+	case "list":
+		return providerList(paths, stdout)
+	case "probe":
+		return providerProbe(paths, args[1:], stdout, stderr)
+	case "remove":
+		return providerRemove(paths, args[1:], stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "未知子命令 %q；可用：add、list、probe、remove\n", args[0])
+		return ErrUsage
+	}
+}
+
+func providerAdd(paths store.Paths, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("provider add", flag.ContinueOnError)
+	id := fs.String("id", "", "provider ID（如 deepseek）")
+	name := fs.String("name", "", "显示名（默认同 ID）")
+	protocol := fs.String("protocol", "openai-chat", "openai-chat | anthropic-messages")
+	baseURL := fs.String("base-url", "", "上游完整前缀（如 https://api.deepseek.com）")
+	key := fs.String("key", "", "API key（必填，仅存本机）")
+	account := fs.String("account", "main", "账号名")
+	proxy := fs.String("proxy", "", "账号级代理（http/https/socks5/socks5h/direct）")
+	providerProxy := fs.String("provider-proxy", "", "Provider 级代理（账号未配置时继承）")
+	if err := fs.Parse(args); err != nil {
+		return ErrUsage
+	}
+	if *id == "" || *baseURL == "" || *key == "" {
+		fmt.Fprintln(stderr, "缺少必填参数：-id、-base-url、-key")
+		return ErrUsage
+	}
+	if p := provider.Protocol(*protocol); p != provider.ProtocolChat && p != provider.ProtocolMessages {
+		fmt.Fprintf(stderr, "-protocol 仅支持 openai-chat | anthropic-messages\n")
+		return ErrUsage
+	}
+	if _, err := netproxy.Parse(netproxy.Ref(*proxy)); err != nil {
+		fmt.Fprintln(stderr, err)
+		return ErrUsage
+	}
+	cfg, err := loadProvidersFile(paths)
+	if err != nil {
+		return err
+	}
+	var target *provider.Provider
+	for i := range cfg.Providers {
+		if cfg.Providers[i].ID == *id {
+			target = &cfg.Providers[i]
+			break
+		}
+	}
+	if target == nil {
+		cfg.Providers = append(cfg.Providers, provider.Provider{
+			ID: *id, Name: *name, Protocol: provider.Protocol(*protocol),
+			BaseURL: *baseURL, Proxy: netproxy.Ref(*providerProxy),
+		})
+		target = &cfg.Providers[len(cfg.Providers)-1]
+	}
+	if target.Name == "" {
+		target.Name = *name
+	}
+	if *providerProxy != "" {
+		target.Proxy = netproxy.Ref(*providerProxy)
+	}
+	for _, acc := range target.Accounts {
+		if acc.Name == *account {
+			fmt.Fprintf(stderr, "账号 %q 已存在于 %s（先 remove 或换名）\n", *account, *id)
+			return ErrUsage
+		}
+	}
+	target.Accounts = append(target.Accounts, provider.Account{
+		Name: *account, APIKey: *key, Proxy: netproxy.Ref(*proxy), Status: provider.AccountAvailable,
+	})
+	if err := saveProvidersFile(paths, cfg); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "已添加 %s / 账号 %q。下一步运行 `agenthub provider probe %s` 拉取模型清单。\n", *id, *account, *id)
+	return nil
+}
+
+func providerList(paths store.Paths, stdout io.Writer) error {
+	cfg, err := loadProvidersFile(paths)
+	if err != nil {
+		return err
+	}
+	if len(cfg.Providers) == 0 {
+		fmt.Fprintln(stdout, "（无 provider；用 `agenthub provider add` 添加）")
+		return nil
+	}
+	for _, p := range cfg.Providers {
+		accInfo := make([]string, 0, len(p.Accounts))
+		for _, a := range p.Accounts {
+			px, _ := gateway.ResolveProxyRef(string(a.Proxy), string(p.Proxy), "")
+			accInfo = append(accInfo, fmt.Sprintf("%s[%s|代理:%s]", a.Name, a.Status, netproxy.Redact(px)))
+		}
+		fmt.Fprintf(stdout, "%s  %-18s %-18s 模型 %2d  账号: %s\n",
+			p.ID, p.Name, p.Protocol, len(p.Models), strings.Join(accInfo, " "))
+	}
+	return nil
+}
+
+func providerProbe(paths store.Paths, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("provider probe", flag.ContinueOnError)
+	account := fs.String("account", "", "仅预检指定账号（默认全部）")
+	if err := fs.Parse(args); err != nil {
+		return ErrUsage
+	}
+	if fs.NArg() != 1 {
+		fmt.Fprintln(stderr, "用法: agenthub provider probe <provider-id> [-account 名称]")
+		return ErrUsage
+	}
+	id := fs.Arg(0)
+	cfg, err := loadProvidersFile(paths)
+	if err != nil {
+		return err
+	}
+	var target *provider.Provider
+	for i := range cfg.Providers {
+		if cfg.Providers[i].ID == id {
+			target = &cfg.Providers[i]
+			break
+		}
+	}
+	if target == nil {
+		fmt.Fprintf(stderr, "provider %q 不存在\n", id)
+		return ErrUsage
+	}
+
+	settings, serr := store.LoadSettings(paths)
+	if serr != nil && !errors.Is(serr, os.ErrNotExist) {
+		return serr
+	}
+
+	var allModels []provider.Model
+	failed := 0
+	for i := range target.Accounts {
+		acc := &target.Accounts[i]
+		if *account != "" && acc.Name != *account {
+			continue
+		}
+		ref, _ := gateway.ResolveProxyRef(string(acc.Proxy), string(target.Proxy), settings.GlobalProxy)
+		rt, err := netproxy.SharedTransport(netproxy.Ref(ref))
+		if err != nil {
+			return err
+		}
+		models, perr := gateway.ProbeAccount(context.Background(), target, *acc, settings.GlobalProxy, rt)
+		if perr != nil {
+			acc.Status = provider.AccountPrefail // 预检失败仍可参与路由（F3 规则）
+			failed++
+			fmt.Fprintf(stdout, "✗ %s/%s: %v\n", id, acc.Name, perr)
+			continue
+		}
+		acc.Status = provider.AccountAvailable
+		allModels = append(allModels, models...)
+		fmt.Fprintf(stdout, "✓ %s/%s: %d 个模型\n", id, acc.Name, len(models))
+	}
+	if *account == "" {
+		target.Models = allModels
+	}
+	if err := saveProvidersFile(paths, cfg); err != nil {
+		return err
+	}
+	if failed > 0 {
+		return fmt.Errorf("%d 个账号预检失败", failed)
+	}
+	if target.Models != nil {
+		fmt.Fprintf(stdout, "模型清单已落盘：%s\n", strings.Join(target.ModelIDs(), ", "))
+	}
+	return nil
+}
+
+func providerRemove(paths store.Paths, args []string, stdout, stderr io.Writer) error {
+	if len(args) != 1 {
+		fmt.Fprintln(stderr, "用法: agenthub provider remove <provider-id>")
+		return ErrUsage
+	}
+	cfg, err := loadProvidersFile(paths)
+	if err != nil {
+		return err
+	}
+	kept := cfg.Providers[:0]
+	found := false
+	for _, p := range cfg.Providers {
+		if p.ID == args[0] {
+			found = true
+			continue
+		}
+		kept = append(kept, p)
+	}
+	if !found {
+		fmt.Fprintf(stderr, "provider %q 不存在\n", args[0])
+		return ErrUsage
+	}
+	cfg.Providers = kept
+	if err := saveProvidersFile(paths, cfg); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "已删除 %s（引用其模型的组与规则将按「目标失效」处理）\n", args[0])
+	return nil
+}

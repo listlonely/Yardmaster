@@ -27,7 +27,8 @@ const (
 type AccountStatus string
 
 const (
-	AccountAvailable AccountStatus = "available"      // 可用
+	AccountAvailable AccountStatus = "available"      // 可用（预检通过或未测）
+	AccountPrefail   AccountStatus = "prefail"        // 预检失败：仍可参与路由，持续红色提示（F3）
 	AccountResting   AccountStatus = "resting"        // 休眠至 T：429/额度/5xx 后暂时退出候选
 	AccountBadCred   AccountStatus = "bad-credential" // 凭证失败：切走但标记需人工处理，不自动重试
 )
@@ -40,6 +41,7 @@ type Provider struct {
 	BaseURL  string       `json:"base_url"`
 	Proxy    netproxy.Ref `json:"proxy,omitempty"` // 空=继承全局；direct=显式直连（F3）
 	Disabled bool         `json:"disabled,omitempty"`
+	Models   []Model      `json:"models,omitempty"` // 预检拉取的模型清单（F2）
 	Accounts []Account    `json:"accounts"`
 }
 

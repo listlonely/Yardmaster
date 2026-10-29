@@ -50,10 +50,11 @@ const (
 
 // Server 是网关 HTTP 服务。
 type Server struct {
-	Addr    string
-	Planner *Planner
-	Version string
-	started time.Time
+	Addr        string
+	Planner     *Planner
+	Version     string
+	GlobalProxy string // 全局代理（F3 继承链末端）；空=系统代理
+	started     time.Time
 }
 
 // Handler 返回网关路由表。
@@ -288,14 +289,11 @@ func (s *Server) attempt(ctx context.Context, client ClientProto, clientReq any,
 	return attemptResult{resp: resp, status: resp.StatusCode}
 }
 
-// transportFor 按账号→Provider 代理继承链构建 RoundTripper（F3）。
-// W2 为每次构建的最简实现；W3 升级为缓存 + 健康检查。
+// transportFor 解析账号→Provider→全局继承链（F3）并返回共享
+// RoundTripper（同端点复用连接池，HTTP/2 健康检查见 netproxy）。
 func (s *Server) transportFor(cand Candidate) (http.RoundTripper, error) {
-	ref := cand.Account.Proxy
-	if ref == "" {
-		ref = cand.Provider.Proxy
-	}
-	return netproxy.Transport(ref)
+	ref, _ := ResolveProxyRef(string(cand.Account.Proxy), string(cand.Provider.Proxy), s.GlobalProxy)
+	return netproxy.SharedTransport(netproxy.Ref(ref))
 }
 
 // ---------- 中继 ----------
