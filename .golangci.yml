@@ -1,0 +1,15 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - misspell
+    - unconvert
+    - unparam
+
+issues:
+  # 骨架期允许少量 TODO(Wn) 注释；上线 M1 前收紧。
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - errcheck
