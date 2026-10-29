@@ -198,6 +198,10 @@ func msgSSEToText(t *testing.T, body string) (string, string) {
 
 func TestPassthroughChatStream(t *testing.T) {
 	up := newFakeUpstream(t, func(rec recordedReq, n int) (int, string, string) {
+		// §5.1：断言上游实际收到改写后的模型名（provider/ 前缀必须剥除）
+		if !strings.Contains(rec.body, `"model":"up-m"`) {
+			t.Errorf("上游收到的 model 未改写: %s", rec.body)
+		}
 		return 200, "text/event-stream", chatSSE("Hello")
 	})
 	gw := newGateway(t, chatProvider(up.srv.URL))
@@ -227,6 +231,9 @@ func TestMessagesToChatStreamTranslation(t *testing.T) {
 	up := newFakeUpstream(t, func(rec recordedReq, n int) (int, string, string) {
 		if rec.path != "/chat/completions" {
 			t.Errorf("上游路径 = %q", rec.path)
+		}
+		if !strings.Contains(rec.body, `"model":"up-m"`) {
+			t.Errorf("上游收到的 model 未改写: %s", rec.body)
 		}
 		return 200, "text/event-stream", chatSSE("你好")
 	})

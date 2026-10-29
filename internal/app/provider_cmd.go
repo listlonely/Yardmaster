@@ -70,6 +70,7 @@ func providerAdd(paths store.Paths, args []string, stdout, stderr io.Writer) err
 	account := fs.String("account", "main", "账号名")
 	proxy := fs.String("proxy", "", "账号级代理（http/https/socks5/socks5h/direct）")
 	providerProxy := fs.String("provider-proxy", "", "Provider 级代理（账号未配置时继承）")
+	replace := fs.Bool("replace", false, "账号已存在时更新其凭证与代理")
 	if err := fs.Parse(args); err != nil {
 		return ErrUsage
 	}
@@ -109,11 +110,26 @@ func providerAdd(paths store.Paths, args []string, stdout, stderr io.Writer) err
 	if *providerProxy != "" {
 		target.Proxy = netproxy.Ref(*providerProxy)
 	}
-	for _, acc := range target.Accounts {
-		if acc.Name == *account {
-			fmt.Fprintf(stderr, "账号 %q 已存在于 %s（先 remove 或换名）\n", *account, *id)
+	if *baseURL != "" && *baseURL != target.BaseURL {
+		target.BaseURL = *baseURL
+	}
+	for i, acc := range target.Accounts {
+		if acc.Name != *account {
+			continue
+		}
+		if !*replace {
+			fmt.Fprintf(stderr, "账号 %q 已存在于 %s（加 -replace 更新，或换名）\n", *account, *id)
 			return ErrUsage
 		}
+		target.Accounts[i].APIKey = *key
+		if *proxy != "" {
+			target.Accounts[i].Proxy = netproxy.Ref(*proxy)
+		}
+		if err := saveProvidersFile(paths, cfg); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "已更新 %s / 账号 %q。运行 `agenthub provider probe %s` 刷新模型清单。\n", *id, *account, *id)
+		return nil
 	}
 	target.Accounts = append(target.Accounts, provider.Account{
 		Name: *account, APIKey: *key, Proxy: netproxy.Ref(*proxy), Status: provider.AccountAvailable,
@@ -149,11 +165,12 @@ func providerList(paths store.Paths, stdout io.Writer) error {
 func providerProbe(paths store.Paths, args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("provider probe", flag.ContinueOnError)
 	account := fs.String("account", "", "仅预检指定账号（默认全部）")
+	only := fs.String("only", "", "仅保留指定模型（逗号分隔；未在上游清单中的仍保留并提示）")
 	if err := fs.Parse(args); err != nil {
 		return ErrUsage
 	}
 	if fs.NArg() != 1 {
-		fmt.Fprintln(stderr, "用法: agenthub provider probe <provider-id> [-account 名称]")
+		fmt.Fprintln(stderr, "用法: agenthub provider probe [-account 名称] [-only m1,m2] <provider-id>")
 		return ErrUsage
 	}
 	id := fs.Arg(0)
@@ -198,6 +215,9 @@ func providerProbe(paths store.Paths, args []string, stdout, stderr io.Writer) e
 			continue
 		}
 		acc.Status = provider.AccountAvailable
+		if *only != "" {
+			models = filterModels(models, *only, stdout)
+		}
 		allModels = append(allModels, models...)
 		fmt.Fprintf(stdout, "✓ %s/%s: %d 个模型\n", id, acc.Name, len(models))
 	}
@@ -214,6 +234,30 @@ func providerProbe(paths store.Paths, args []string, stdout, stderr io.Writer) e
 		fmt.Fprintf(stdout, "模型清单已落盘：%s\n", strings.Join(target.ModelIDs(), ", "))
 	}
 	return nil
+}
+
+// filterModels 把上游清单过滤为用户指定的模型集合；未出现在清单中的
+// 用户指定模型仍保留（上游清单可能滞后），但给出提示。
+func filterModels(models []provider.Model, only string, stdout io.Writer) []provider.Model {
+	want := strings.Split(only, ",")
+	seen := map[string]bool{}
+	for _, m := range models {
+		seen[m.ID] = true
+	}
+	var out []provider.Model
+	for _, w := range want {
+		w = strings.TrimSpace(w)
+		if w == "" {
+			continue
+		}
+		if seen[w] {
+			out = append(out, provider.Model{ID: w})
+		} else {
+			fmt.Fprintf(stdout, "△ %s 未在上游模型清单中，仍按用户指定保留\n", w)
+			out = append(out, provider.Model{ID: w})
+		}
+	}
+	return out
 }
 
 func providerRemove(paths store.Paths, args []string, stdout, stderr io.Writer) error {

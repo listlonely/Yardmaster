@@ -179,8 +179,46 @@ func (s *Server) handleInference(client ClientProto) http.HandlerFunc {
 			writeRaw(w, st, b)
 			return
 		}
+		// 网关侧模型名（provider/model）改写为上游真实模型名：
+		// 翻译路径改写请求结构体；透传路径改写原始字节。W3 真实冒烟发现：
+		// 透传不改写会让上游收到带 provider 前缀的名字而报「模型不存在」。
+		switch cq := clientReq.(type) {
+		case *ChatRequest:
+			cq.Model = upstreamModel
+		case *MessagesRequest:
+			cq.Model = upstreamModel
+		}
+		if isSameProto(client, prov) {
+			rewritten, merr := rewriteModel(body, upstreamModel)
+			if merr != nil {
+				writeClientErr(client, w, http.StatusBadRequest, "改写模型名失败: "+merr.Error())
+				return
+			}
+			body = rewritten
+		}
 		s.serveWithFailover(w, r, client, clientReq, body, stream, prov, upstreamModel)
 	}
+}
+
+// isSameProto 判断客户端协议与上游协议一致（透传路径）。
+func isSameProto(client ClientProto, prov *provider.Provider) bool {
+	return clientProtoOf(prov.Protocol) == client
+}
+
+// rewriteModel 把请求体 JSON 的 model 字段改写为上游真实模型名。
+// UseNumber 解码避免大整数经 float64 失真；其余字段原样保留。
+func rewriteModel(body []byte, upstreamModel string) ([]byte, error) {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	var m map[string]any
+	if err := dec.Decode(&m); err != nil {
+		return nil, err
+	}
+	if m == nil {
+		return nil, errors.New("请求体不是 JSON 对象")
+	}
+	m["model"] = upstreamModel
+	return json.Marshal(m)
 }
 
 // ---------- 候选循环与故障转移 ----------
