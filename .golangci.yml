@@ -6,10 +6,18 @@ linters:
     - misspell
     - unconvert
     - unparam
-
-issues:
-  # 骨架期允许少量 TODO(Wn) 注释；上线 M1 前收紧。
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - errcheck
+  settings:
+    errcheck:
+      exclude-functions:
+        # CLI 写 stdout/stderr 的返回值按惯例忽略；报告写 stderr 失败
+        # 时进程退出码已无意义。
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        # defer Close 的错误忽略是 Go 惯例（读路径）；写路径显式处理。
+        - (io.Closer).Close
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck

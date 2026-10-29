@@ -15,19 +15,19 @@ import (
 	"agenthub/internal/testenv"
 )
 
-func runOK(t *testing.T, args ...string) (string, string) {
+func runOK(t *testing.T, args ...string) string {
 	t.Helper()
 	var out, errBuf bytes.Buffer
 	if err := Run(args, &out, &errBuf); err != nil {
 		t.Fatalf("Run(%v): %v\nstdout=%s\nstderr=%s", args, err, out.String(), errBuf.String())
 	}
-	return out.String(), errBuf.String()
+	return out.String()
 }
 
 func TestProviderAddListRemoveLifecycle(t *testing.T) {
 	home := testenv.New(t)
 
-	out, _ := runOK(t, "provider", "add",
+	out := runOK(t, "provider", "add",
 		"-id", "deepseek", "-name", "DeepSeek",
 		"-protocol", "openai-chat",
 		"-base-url", "https://api.deepseek.com",
@@ -45,7 +45,7 @@ func TestProviderAddListRemoveLifecycle(t *testing.T) {
 		t.Fatal("key 未落盘")
 	}
 
-	out, _ = runOK(t, "provider", "list")
+	out = runOK(t, "provider", "list")
 	if !strings.Contains(out, "deepseek") || !strings.Contains(out, "main") {
 		t.Fatalf("list 输出: %s", out)
 	}
@@ -58,7 +58,7 @@ func TestProviderAddListRemoveLifecycle(t *testing.T) {
 
 	// remove
 	runOK(t, "provider", "remove", "deepseek")
-	out, _ = runOK(t, "provider", "list")
+	out = runOK(t, "provider", "list")
 	if strings.Contains(out, "deepseek") {
 		t.Fatalf("remove 后仍可见: %s", out)
 	}
@@ -79,7 +79,7 @@ func TestProviderProbePersistsModels(t *testing.T) {
 		"-id", "ds", "-protocol", "openai-chat",
 		"-base-url", srv.URL, "-key", "sk-ok")
 
-	out, _ := runOK(t, "provider", "probe", "ds")
+	out := runOK(t, "provider", "probe", "ds")
 	if !strings.Contains(out, "2 个模型") {
 		t.Fatalf("probe 输出: %s", out)
 	}
@@ -131,12 +131,12 @@ func TestProviderProbeFailureMarksPrefail(t *testing.T) {
 func TestSettingsGlobalProxy(t *testing.T) {
 	home := testenv.New(t)
 
-	out, _ := runOK(t, "settings", "get")
+	out := runOK(t, "settings", "get")
 	if !strings.Contains(out, "跟随系统代理") {
 		t.Fatalf("默认输出: %s", out)
 	}
 	runOK(t, "settings", "set", "global_proxy", "socks5://user:secret@127.0.0.1:1080")
-	out, _ = runOK(t, "settings", "get")
+	out = runOK(t, "settings", "get")
 	if strings.Contains(out, "secret") {
 		t.Fatalf("设置输出泄漏凭证: %s", out)
 	}

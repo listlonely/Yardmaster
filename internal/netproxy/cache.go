@@ -5,15 +5,15 @@
 package netproxy
 
 import (
-	"crypto/tls"
+	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
 
-	"golang.org/x/net/http2"
 	"golang.org/x/net/proxy"
 )
 
@@ -79,11 +79,7 @@ func buildTransport(u *url.URL, raw string) (http.RoundTripper, error) {
 			return nil, fmt.Errorf("socks5 dialer %q: %w", Redact(raw), err)
 		}
 		tr := &http.Transport{}
-		if cd, ok := d.(proxy.ContextDialer); ok {
-			tr.DialContext = cd.DialContext
-		} else {
-			tr.Dial = d.Dial
-		}
+		applySOCKSDialer(tr, d)
 		enableHTTP2Health(tr)
 		return tr, nil
 	default:
@@ -91,14 +87,25 @@ func buildTransport(u *url.URL, raw string) (http.RoundTripper, error) {
 	}
 }
 
-// enableHTTP2Health 为 HTTPS 上游启用 HTTP/2 静默连接健康检查；
-// 纯 HTTP 上游无 h2，ConfigureTransports 返回错误时忽略即可。
-func enableHTTP2Health(tr *http.Transport) {
-	if tr.TLSClientConfig == nil {
-		tr.TLSClientConfig = &tls.Config{}
+// applySOCKSDialer 把 SOCKS5 dialer 装入 Transport；优先 ContextDialer
+// （支持取消），旧实现回退包装（无 ctx，语义等价于 Dial）。
+func applySOCKSDialer(tr *http.Transport, d proxy.Dialer) {
+	if cd, ok := d.(proxy.ContextDialer); ok {
+		tr.DialContext = cd.DialContext
+		return
 	}
-	if h2, err := http2.ConfigureTransports(tr); err == nil && h2 != nil {
-		h2.ReadIdleTimeout = readIdleTimeout
-		h2.PingTimeout = pingTimeout
+	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return d.Dial(network, addr)
+	}
+}
+
+// enableHTTP2Health 为 HTTPS 上游启用 HTTP/2 静默连接健康检查
+// （原生 HTTP2Config：SendPingTimeout=静默无帧触发 ping；PingTimeout=
+// ping 无响应判死）。
+func enableHTTP2Health(tr *http.Transport) {
+	tr.ForceAttemptHTTP2 = true
+	tr.HTTP2 = &http.HTTP2Config{
+		SendPingTimeout: readIdleTimeout,
+		PingTimeout:     pingTimeout,
 	}
 }

@@ -36,11 +36,7 @@ func Transport(ref Ref) (http.RoundTripper, error) {
 			return nil, fmt.Errorf("socks5 dialer %q: %w", Redact(string(ref)), err)
 		}
 		t := &http.Transport{}
-		if cd, ok := d.(proxy.ContextDialer); ok {
-			t.DialContext = cd.DialContext
-		} else {
-			t.Dial = d.Dial
-		}
+		applySOCKSDialer(t, d)
 		return t, nil
 	default:
 		// Parse 已拒绝其他 scheme；防御分支

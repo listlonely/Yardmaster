@@ -210,7 +210,7 @@ func (p *Planner) splitAwake(cands []Candidate, now time.Time) (awake, resting [
 // applyStrategy 对醒着的候选应用组策略（休眠候选一律排末尾，策略
 // 不会把休眠候选提前）。调用方必须已持有 p.mu。
 func (p *Planner) applyStrategy(strategy provider.Strategy, stratKey string, awake []Candidate) []Candidate {
-	switch provider.Strategy(strategy) {
+	switch strategy {
 	case provider.StrategyRotate:
 		return p.rotateLocked(stratKey, awake)
 	case provider.StrategySmart:

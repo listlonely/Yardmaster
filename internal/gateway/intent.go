@@ -79,8 +79,8 @@ func (c *IntentChain) Classify(message string) string {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	strat := c.loadIntentsLocked()
-	if v, ok := strat.EvaluateL0(message); ok {
+	strategy := c.loadIntentsLocked()
+	if v, ok := strategy.EvaluateL0(message); ok {
 		slog.Debug("意图判定", "source", "custom-l0", "intent", v.Intent)
 		return v.Intent
 	}
@@ -88,7 +88,7 @@ func (c *IntentChain) Classify(message string) string {
 		slog.Debug("意图判定", "source", "l0", "intent", v.Intent)
 		return v.Intent
 	}
-	return c.classifyL1Locked(strat, message)
+	return c.classifyL1Locked(strategy, message)
 }
 
 // loadIntentsLocked 读取自定义意图（mtime 变化才重载；解析失败沿用
@@ -104,22 +104,22 @@ func (c *IntentChain) loadIntentsLocked() *classify.UserStrategy {
 	if st.ModTime().Equal(c.intentsStamp) && st.Size() == c.intentsSize {
 		return c.strategy
 	}
-	var strat classify.UserStrategy
-	if err := store.LoadJSON(c.intentsPath, &strat); err != nil {
+	var strategy classify.UserStrategy
+	if err := store.LoadJSON(c.intentsPath, &strategy); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			slog.Warn("intents.json 解析失败，沿用旧词表（保留原文件）", "path", c.intentsPath, "err", err)
 		}
 		c.intentsStamp, c.intentsSize = st.ModTime(), st.Size()
 		return c.strategy
 	}
-	c.strategy = &strat
+	c.strategy = &strategy
 	c.intentsStamp, c.intentsSize = st.ModTime(), st.Size()
-	slog.Info("已加载自定义意图词表", "count", len(strat.Intents), "path", c.intentsPath)
+	slog.Info("已加载自定义意图词表", "count", len(strategy.Intents), "path", c.intentsPath)
 	return c.strategy
 }
 
 // classifyL1Locked 经 L1 小模型分类（缓存→冷却→调用→校验）。
-func (c *IntentChain) classifyL1Locked(strat *classify.UserStrategy, message string) string {
+func (c *IntentChain) classifyL1Locked(strategy *classify.UserStrategy, message string) string {
 	if c.call == nil || c.l1Model == "" {
 		return "" // L1 未配置：仅 L0（F8 降级路径）
 	}
@@ -139,13 +139,13 @@ func (c *IntentChain) classifyL1Locked(strat *classify.UserStrategy, message str
 	for _, id := range classify.BuiltinIntents {
 		known[id] = true
 	}
-	if strat != nil {
-		for _, def := range strat.Intents {
+	if strategy != nil {
+		for _, def := range strategy.Intents {
 			known[def.ID] = true
 		}
 	}
 
-	prompt := classify.BuildL1Prompt(classify.BuiltinIntents, intentsOf(strat), message)
+	prompt := classify.BuildL1Prompt(classify.BuiltinIntents, intentsOf(strategy), message)
 	ctx, cancel := context.WithTimeout(context.Background(), c.l1Timeout)
 	defer cancel()
 	out, err := c.call(ctx, prompt)
@@ -173,11 +173,11 @@ func (c *IntentChain) classifyL1Locked(strat *classify.UserStrategy, message str
 	return intent
 }
 
-func intentsOf(strat *classify.UserStrategy) []classify.IntentDef {
-	if strat == nil {
+func intentsOf(strategy *classify.UserStrategy) []classify.IntentDef {
+	if strategy == nil {
 		return nil
 	}
-	return strat.Intents
+	return strategy.Intents
 }
 
 // validateL1Output 校验 L1 输出：去空白与引号后必须命中词表。

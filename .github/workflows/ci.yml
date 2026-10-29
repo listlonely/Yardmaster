@@ -18,7 +18,11 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go vet ./...
+      # 显式 bash：windows-latest 默认 shell 是 PowerShell，会把
+      # -coverprofile=coverage.out 在「.」处拆成两个参数（.out 被当作
+      # 包名，setup failed）——CI 曾因自 W1 起长期红标。
       - run: go test -race -coverprofile=coverage.out ./...
+        shell: bash
       - uses: actions/upload-artifact@v4
         if: matrix.os == 'ubuntu-latest'
         with:
@@ -47,4 +51,7 @@ jobs:
           go-version-file: go.mod
       - uses: golangci/golangci-lint-action@v6
         with:
+          # 锁定与 go.mod（go 1.27）匹配的版本：旧版 golangci-lint 无法
+          # 加载更高 Go 版本的模块（load 失败 exit 3）。
+          version: v2.15
           args: --timeout 5m

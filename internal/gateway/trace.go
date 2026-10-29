@@ -185,7 +185,7 @@ func (t *TraceLog) loop() {
 			_ = f.Close()
 		}
 	}()
-	write := func(tr Trace) bool {
+	write := func(tr Trace) {
 		day := t.now().Format("20060102")
 		if f == nil || day != curDay {
 			if f != nil {
@@ -197,18 +197,17 @@ func (t *TraceLog) loop() {
 				os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 			if err != nil {
 				slog.Warn("trace 落盘失败（不影响请求）", "dir", t.dir, "err", err)
-				return false
+				return
 			}
 			f, curDay = nf, day
 		}
 		b, err := json.Marshal(tr)
 		if err != nil {
-			return true
+			return
 		}
 		if _, err := f.Write(append(b, '\n')); err != nil {
 			slog.Warn("trace 写入失败", "err", err)
 		}
-		return true
 	}
 	for {
 		select {

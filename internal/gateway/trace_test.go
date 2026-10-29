@@ -14,12 +14,11 @@ import (
 	"agenthub/internal/store"
 )
 
-func newTestTraceLog(t *testing.T) (*TraceLog, string) {
+func newTestTraceLog(t *testing.T) *TraceLog {
 	t.Helper()
-	dir := filepath.Join(t.TempDir(), "trace")
-	tl := NewTraceLog(dir)
+	tl := NewTraceLog(filepath.Join(t.TempDir(), "trace"))
 	t.Cleanup(tl.Close)
-	return tl, dir
+	return tl
 }
 
 func TestTraceLogRecordAndLoad(t *testing.T) {
@@ -72,7 +71,7 @@ func TestTraceLogRecordAndLoad(t *testing.T) {
 }
 
 func TestTraceLogRecentFilters(t *testing.T) {
-	tl, _ := newTestTraceLog(t)
+	tl := newTestTraceLog(t)
 	tl.Record(Trace{ID: "a", Caller: "gw-cline", Outcome: "ok"})
 	tl.Record(Trace{ID: "b", Caller: "gw-codex", Outcome: "fail"})
 	tl.Record(Trace{ID: "c", Caller: "gw-cline", Outcome: "ok", Switched: true})
@@ -181,7 +180,7 @@ func TestTraceEndToEndFailoverChain(t *testing.T) {
 	pb.Accounts = pb.Accounts[:1]
 	g := provider.Group{ID: "main", Members: []string{"prov-a/m", "prov-b/m"}}
 
-	tl, _ := newTestTraceLog(t)
+	tl := newTestTraceLog(t)
 	p := NewPlanner([]provider.Provider{pa, pb}, []provider.Group{g})
 	s := &Server{Planner: p, Version: "test", Traces: tl}
 	gw := httptest.NewServer(s.Handler())

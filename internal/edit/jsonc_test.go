@@ -18,15 +18,6 @@ const sampleJSONC = `{
   "tiers": {"haiku": "glm-air"}
 }`
 
-func mustParse(t *testing.T, data []byte) *JSONCDoc {
-	t.Helper()
-	d, err := ParseJSONC(data)
-	if err != nil {
-		t.Fatalf("ParseJSONC: %v", err)
-	}
-	return d
-}
-
 func TestSetReplacesValueAndKeepsComments(t *testing.T) {
 	out, err := SetJSONC([]byte(sampleJSONC), []string{"model"}, "deepseek/deepseek-chat")
 	if err != nil {

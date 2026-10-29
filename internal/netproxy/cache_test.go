@@ -52,14 +52,13 @@ func TestHTTP2HealthConfigured(t *testing.T) {
 	if err != nil || tr == nil {
 		t.Fatal(err)
 	}
-	// ConfigureTransports 注册了 h2（经 TLSNextProto），且启用健康参数——
-	// 通过行为间接验证：无 panic 即可，具体字段在 http2.Transport 内部。
+	// 原生 HTTP2Config 已挂载健康检查参数（SendPingTimeout/PingTimeout）。
 	ht, ok := tr.(*http.Transport)
 	if !ok {
 		t.Fatal("应为 *http.Transport")
 	}
-	if ht.TLSClientConfig == nil {
-		t.Fatal("TLSClientConfig 应已初始化")
+	if ht.HTTP2 == nil || ht.HTTP2.SendPingTimeout != readIdleTimeout || ht.HTTP2.PingTimeout != pingTimeout {
+		t.Fatalf("HTTP2 健康参数未配置: %+v", ht.HTTP2)
 	}
 }
 

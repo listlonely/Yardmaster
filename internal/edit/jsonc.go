@@ -201,7 +201,7 @@ func (p *jsoncParser) skipTrivia() {
 			}
 		case c == '/' && p.pos+1 < len(p.src) && p.src[p.pos+1] == '*':
 			p.pos += 2
-			for p.pos+1 < len(p.src) && !(p.src[p.pos] == '*' && p.src[p.pos+1] == '/') {
+			for p.pos+1 < len(p.src) && (p.src[p.pos] != '*' || p.src[p.pos+1] != '/') {
 				p.pos++
 			}
 			if p.pos+1 < len(p.src) {

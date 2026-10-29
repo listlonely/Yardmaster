@@ -67,7 +67,7 @@ func (s *Server) Handler() http.Handler {
 	s.started = time.Now()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSONStatus(w, http.StatusOK, map[string]string{"name": "agenthub", "status": "ok"})
+		writeJSON(w, map[string]string{"name": "agenthub", "status": "ok"})
 	})
 	mux.HandleFunc("GET /v1/models", s.handleModels)
 	mux.HandleFunc("POST /v1/chat/completions", s.handleInference(ProtoChat))
@@ -123,7 +123,7 @@ func (s *Server) handleModels(w http.ResponseWriter, _ *http.Request) {
 			models = append(models, map[string]any{"id": id, "object": "model"})
 		}
 	}
-	writeJSONStatus(w, http.StatusOK, map[string]any{"object": "list", "data": models})
+	writeJSON(w, map[string]any{"object": "list", "data": models})
 }
 
 func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
@@ -155,14 +155,14 @@ func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
 	if s.Rules != nil {
 		state["rules"] = s.Rules.Snapshot()
 	}
-	writeJSONStatus(w, http.StatusOK, state)
+	writeJSON(w, state)
 }
 
 // handleTrace 返回最近的决策记录（F9 观测数据源，管理页后续接入）。
 // 查询参数：limit（默认 50）、agent（caller 前缀）、result（ok/fail/switch）。
 func (s *Server) handleTrace(w http.ResponseWriter, r *http.Request) {
 	if s.Traces == nil {
-		writeJSONStatus(w, http.StatusOK, map[string]any{"traces": []any{}})
+		writeJSON(w, map[string]any{"traces": []any{}})
 		return
 	}
 	limit := 50
@@ -173,7 +173,7 @@ func (s *Server) handleTrace(w http.ResponseWriter, r *http.Request) {
 	if traces == nil {
 		traces = []Trace{}
 	}
-	writeJSONStatus(w, http.StatusOK, map[string]any{"traces": traces})
+	writeJSON(w, map[string]any{"traces": traces})
 }
 
 // handleInference 返回一个协议端点处理器：解析 → 路由判定（规则→
@@ -339,7 +339,7 @@ func (s *Server) serveWithFailover(w http.ResponseWriter, r *http.Request,
 		if res.clientFault {
 			// 请求体本身处理失败：换候选结果相同，原样返回
 			s.finishTrace(tr, "fail", res.status, start, nil, false)
-			s.relayRaw(w, client, cand, res)
+			s.relayRaw(w, cand, res)
 			return
 		}
 		if res.err != nil {
@@ -365,7 +365,7 @@ func (s *Server) serveWithFailover(w http.ResponseWriter, r *http.Request,
 		case res.status >= 400:
 			// 请求本身的问题：换账号结果相同，原样回给调用方（规则页）
 			s.finishTrace(tr, "fail", res.status, start, nil, false)
-			s.relayRaw(w, client, cand, res)
+			s.relayRaw(w, cand, res)
 			return
 		}
 		// 2xx：成功，开始中继；此后不再切换（响应已开始，规则页）。
@@ -562,7 +562,7 @@ func (s *Server) relay(w http.ResponseWriter,
 }
 
 // relayRaw 把 4xx（请求本身的问题）原样回给客户端。
-func (s *Server) relayRaw(w http.ResponseWriter, client ClientProto, cand Candidate, res attemptResult) {
+func (s *Server) relayRaw(w http.ResponseWriter, cand Candidate, res attemptResult) {
 	w.Header().Set("X-Gw-Provider", cand.Provider.ID)
 	w.Header().Set("X-Gw-Account", cand.Account.Name)
 	ct := ""
@@ -764,9 +764,9 @@ func messagesResponseToChat(ms MessagesResponse) *ChatChunk {
 	return &out
 }
 
-func writeJSONStatus(w http.ResponseWriter, status int, v any) {
+func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
+	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(v)
 }
 
