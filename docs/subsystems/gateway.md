@@ -4,7 +4,7 @@
 
 | 部分 | 职责 | 真源 |
 | --- | --- | --- |
-| 端点 | `/v1/chat/completions`、`/v1/messages`（推断）、`/v1/models`、`/healthz`、`/api/state`、`/`（快照页） | [`gateway.go`](../../internal/gateway/gateway.go) |
+| 端点 | `/v1/chat/completions`、`/v1/messages`（推断）、`/v1/models`、`/healthz`、`/api/state`、`/api/trace`、`/api/config/*`、`/api/reload`（管理 API，M2-W1）、`/`（控制台）、`/web/*`（静态资源） | [`gateway.go`](../../internal/gateway/gateway.go)、[`api.go`](../../internal/gateway/api.go) |
 | 候选计划 | `Planner.Plan`：目标解析（`provider/model`、裸 provider id 自动组、`group/<id>`）→ 跨 provider 候选展开 → 醒/休两段 → 组策略（order/rotate/smart）→ 会话亲和提前；休眠表（进程内存） | [`plan.go`](../../internal/gateway/plan.go) |
 | 路由组 | `provider.Group{ID,Strategy,Members}` 存 providers.json；CLI `group add/list/rm` | [`provider.go`](../../internal/provider/provider.go)、[`provider_cmd.go`](../../internal/app/provider_cmd.go) |
 | 任务规则 | `RuleEngine`：rules.json 首条命中（intent/regex/max_tokens/caller_key 条件，留空=不限）；mtime 热重载（按 ID 保留 hits）；hits 写穿落盘 | [`rules.go`](../../internal/gateway/rules.go) |
@@ -45,12 +45,22 @@
 - 落盘：`<数据目录>/trace/trace-YYYYMMDD.jsonl`（0600）；启动时清理 + 跨天滚动时清理；只存元数据与失败原因，永不落盘对话内容（§4.4）。
 - 用量：`NoteUsage` 累计（内存 + 账号快照字段，跨日按 UsageDay 重置）；`FlushUsage` 重读 providers.json 只更新跟踪账号（不覆盖运行期 CLI 编辑），serve 期间每分钟 + 退出前各一次；`yardmaster provider quota <p> <acc> <tokens|0>` 配置账号当日额度，>0 后 smart 策略按剩余比例排序。
 
+## 管理 API 与控制台（M2-W1）
+
+- 配置读写：`GET/PUT /api/config/{providers|settings|rules|keys|intents}`。PUT 为全文档类型化写回：严格解码（未知字段拒绝）、语义校验（协议/策略枚举、成员引用存在、正则可编译、意图示例 ≤5）、写前备份快照（`<数据目录>/backup/<名>-<纳秒时间戳>.json`，每文件保留 10 份，备份失败即中止写入）、`SaveJSON` 原子写、审计日志。
+- 密钥安全：GET providers 输出脱敏密钥（`***+末 4 位`）；PUT 对「空值/脱敏形」保留现存密钥（脱敏往返不破坏密钥，用户值优先）；响应与日志永不回显完整密钥。
+- fail-closed：当前文件解析失败时 GET 报 500、PUT/`/api/reload` 报 409 拒绝覆写（读不懂=未知，绝不把损坏文件当空配置覆盖）。
+- 热重载：`POST /api/reload` 重读 providers.json → `Planner.Reload` 热替换快照；进程内运行态按「键仍存在才保留」剪枝（休眠表、当日用量、亲和表），策略游标保留。补齐 CLI 编辑 providers「重启 serve 生效」缺口。
+- 生效语义：providers PUT 即时生效（写后自动 Reload）；rules/keys/intents 引擎热读取即时生效；settings 装配期读取，响应 `effect:"restart"`。
+- 控制台：`/` 出入口 + `/web/*` 静态资源（embed 进二进制）；总览（状态/设置保存）/Provider（账号、脱敏密钥、用量/额度）/路由（组/规则/绑定/意图，只读）/观测（trace 查询）四页；W1 只读为主，编辑表单 W2/W3 接入。
+
 ## 约束与失效行为
 
 - 策略说明：order/rotate/smart 在 Planner 内置实现（rotate/smart 需要游标状态）；`internal/routes.Strategy` 接口保留给 P1 无状态策略插件。
 - rotate/smart 游标键：组按组 ID；smart 无任何用量数据时回落 rotate（W6 接入用量前的常态）。
 - 休眠候选全局排末尾；任何策略/亲和都不会把休眠候选提前。
 - rules.json/intents.json 热重载以 mtime+size 判定；解析失败沿用旧配置并告警（保留原文件）。CLI 编辑 rules 建议在网关停止时进行（hits 写穿会互相覆盖）。
+- store.LoadJSON 对 UTF-8 BOM 容错（Windows 编辑器常态，剥 BOM 后解析）；CRLF 由 JSON 空白语义天然容忍；解析失败仍按「读不懂=未知」处理。
 - 翻译类型只覆盖文本+工具；thinking/多模态块 TODO(P1)（thinking 块当前被静默忽略）。
 - 同一物理流使用同一个 `bufio.Reader`（测试曾因每次新建 Reader 丢失缓冲数据而误报）。
 - 休眠表/亲和表/游标均为进程内存态，重启即清；亲和表上限 4096 条，超出整体重置。
@@ -63,4 +73,4 @@ go test ./internal/gateway
 go test -cover ./internal/gateway   # 门槛 ≥75%（W5 实测 83%）
 ```
 
-回放测试：假上游（httptest）+ 真实 Handler 栈经 HTTP 全链路；W5 新增策略三态、会话粘性、跨 provider 组 failover、规则条件/热重载、key 默认模型、意图链缓存/冷却/热生效用例。
+回放测试：假上游（httptest）+ 真实 Handler 栈经 HTTP 全链路；W5 新增策略三态、会话粘性、跨 provider 组 failover、规则条件/热重载、key 默认模型、意图链缓存/冷却/热生效用例；M2-W1 新增配置读写/脱敏往返/备份留底/fail-closed/热重载剪枝用例（`webapi_test.go`、`store/backup_test.go`）。

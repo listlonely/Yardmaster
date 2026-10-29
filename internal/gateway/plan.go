@@ -481,3 +481,38 @@ func (p *Planner) groupByID(id string) *provider.Group {
 	}
 	return nil
 }
+
+// Reload 用磁盘快照热替换 provider/组配置（M2-W1：管理 API /api/reload
+// 与 PUT providers 后调用，补 CLI 编辑「重启 serve 生效」缺口）。
+//
+// 语义：
+//   - providers/groups 整体替换（含文件内持久化的额度字段）；
+//   - 进程内运行态按「键仍存在才保留」剪枝：休眠表（编辑不解除休眠）、
+//     当日用量累计（未落盘部分不丢）、会话亲和表、策略游标；
+//   - 游标按策略键索引、与成员无关，直接保留。
+func (p *Planner) Reload(providers []provider.Provider, groups []provider.Group) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	valid := map[string]bool{}
+	for _, prov := range providers {
+		for _, acc := range prov.Accounts {
+			valid[prov.ID+"/"+acc.Name] = true
+		}
+	}
+	for k := range p.resting {
+		if !valid[k] {
+			delete(p.resting, k)
+		}
+	}
+	for k := range p.usage {
+		if !valid[k] {
+			delete(p.usage, k)
+		}
+	}
+	for k := range p.affinity {
+		if _, ok := valid[p.affinity[k]]; !ok {
+			delete(p.affinity, k)
+		}
+	}
+	p.providers, p.groups = providers, groups
+}

@@ -12,11 +12,12 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	_ "embed"
+	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -28,10 +29,11 @@ import (
 	"yardmaster/internal/provider"
 )
 
-// webIndex 是 W2 快照管理页（/）；完整管理页于后续周实现。
+// webFS 是控制台静态资源（M2-W1 框架页：总览/Provider/路由/观测），
+// embed 进单二进制；/{$} 出入口，/web/ 前缀挂资源。
 //
-//go:embed web/index.html
-var webIndex []byte
+//go:embed web
+var webFS embed.FS
 
 // DefaultAddr 是网关默认监听地址（PRD 原型：仅回环，F10）。
 const DefaultAddr = "127.0.0.1:8317"
@@ -51,15 +53,17 @@ const (
 
 // Server 是网关 HTTP 服务。
 type Server struct {
-	Addr        string
-	Planner     *Planner
-	Version     string
-	GlobalProxy string       // 全局代理（F3 继承链末端）；空=系统代理
-	Rules       *RuleEngine  // 任务规则（F7）；nil=不启用
-	Keys        *KeyStore    // 调用方默认模型绑定；nil=不启用
-	Intents     *IntentChain // 意图判定链（F8）；nil=不分类
-	Traces      *TraceLog    // 决策追溯（F9）；nil=不记录
-	started     time.Time
+	Addr          string
+	Planner       *Planner
+	Version       string
+	GlobalProxy   string       // 全局代理（F3 继承链末端）；空=系统代理
+	Rules         *RuleEngine  // 任务规则（F7）；nil=不启用
+	Keys          *KeyStore    // 调用方默认模型绑定；nil=不启用
+	Intents       *IntentChain // 意图判定链（F8）；nil=不分类
+	Traces        *TraceLog    // 决策追溯（F9）；nil=不记录
+	AppDir        string       // 数据目录（管理 API 备份/写配置用）；空=禁用写接口
+	ProvidersPath string       // providers.json 路径（/api/reload 热重载用）
+	started       time.Time
 }
 
 // Handler 返回网关路由表。
@@ -74,11 +78,33 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/messages", s.handleInference(ProtoMessages))
 	mux.HandleFunc("GET /api/state", s.handleState)
 	mux.HandleFunc("GET /api/trace", s.handleTrace)
+	mux.HandleFunc("GET /api/config/{name}", func(w http.ResponseWriter, r *http.Request) {
+		s.handleConfigGet(w, r.PathValue("name"))
+	})
+	mux.HandleFunc("PUT /api/config/{name}", func(w http.ResponseWriter, r *http.Request) {
+		s.handleConfigPut(w, r, r.PathValue("name"))
+	})
+	mux.HandleFunc("POST /api/reload", s.handleReload)
+	mux.Handle("GET /web/", http.StripPrefix("/web/", http.FileServerFS(webSub())))
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {
+		index, err := fs.ReadFile(webFS, "web/index.html")
+		if err != nil {
+			http.Error(w, "控制台资源缺失", http.StatusInternalServerError)
+			return
+		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write(webIndex)
+		_, _ = w.Write(index)
 	})
 	return mux
+}
+
+// webSub 返回 web/ 子文件系统（资源路径去掉目录前缀）。
+func webSub() fs.FS {
+	sub, err := fs.Sub(webFS, "web")
+	if err != nil {
+		panic("gateway: embed web 子目录缺失: " + err.Error())
+	}
+	return sub
 }
 
 // Serve 阻塞运行网关，ctx 取消时优雅关闭（暂停网关语义见 PRD F1）。

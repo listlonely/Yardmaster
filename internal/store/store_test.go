@@ -27,6 +27,23 @@ func TestSaveLoadRoundtrip(t *testing.T) {
 	}
 }
 
+// 还原旧代码（LoadJSON 不剥 BOM）即失败：记事本等编辑器写出的 UTF-8
+// BOM 文件会被判为「解析失败」，网关按空配置启动。
+func TestLoadJSONToleratesBOMAndCRLF(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bom.json")
+	content := append([]byte("\xef\xbb\xbf"), []byte("{\"port\": 8317}\r\n")...)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out conf
+	if err := LoadJSON(path, &out); err != nil {
+		t.Fatalf("BOM+CRLF 文件应可读: %v", err)
+	}
+	if out.Port != 8317 {
+		t.Fatalf("port = %d, want 8317", out.Port)
+	}
+}
+
 func TestLoadCorruptReturnsErrorNotSilentEmpty(t *testing.T) {
 	// 开发文档 §4.2：解析失败必须报错，调用方不得当作空配置。
 	p := Paths{AppDir: t.TempDir()}

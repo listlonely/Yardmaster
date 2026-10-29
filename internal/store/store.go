@@ -3,6 +3,7 @@
 package store
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -67,6 +68,9 @@ func LoadJSON(path string, v any) error {
 	if err != nil {
 		return err
 	}
+	// UTF-8 BOM 容错（Windows 记事本等编辑器常态）：带 BOM 的 JSON 是
+	// 可读文件，不算「读不懂」——与 edit 包对 Agent 配置的 BOM 处理同规。
+	data = bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))
 	if err := json.Unmarshal(data, v); err != nil {
 		return fmt.Errorf("parse %s: %w", path, err)
 	}

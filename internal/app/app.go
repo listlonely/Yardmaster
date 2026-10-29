@@ -75,13 +75,15 @@ func runServe(stdout io.Writer) error {
 	}
 
 	srv := &gateway.Server{
-		Addr:        gateway.DefaultAddr,
-		Planner:     planner,
-		Version:     Version,
-		GlobalProxy: settings.GlobalProxy,
-		Rules:       gateway.NewRuleEngine(paths.RulesPath()),
-		Keys:        gateway.NewKeyStore(paths.KeysPath()),
-		Traces:      gateway.NewTraceLog(paths.TraceDir()),
+		Addr:          gateway.DefaultAddr,
+		Planner:       planner,
+		Version:       Version,
+		GlobalProxy:   settings.GlobalProxy,
+		Rules:         gateway.NewRuleEngine(paths.RulesPath()),
+		Keys:          gateway.NewKeyStore(paths.KeysPath()),
+		Traces:        gateway.NewTraceLog(paths.TraceDir()),
+		AppDir:        paths.AppDir,
+		ProvidersPath: paths.ProvidersPath(),
 		Intents: gateway.NewIntentChain(paths.IntentsPath(), settings.L1Classifier,
 			l1TimeoutOrDefault(settings), newL1Caller(gateway.DefaultAddr, settings.L1Classifier)),
 	}
@@ -108,6 +110,7 @@ func runServe(stdout io.Writer) error {
 		fmt.Fprintf(stdout, "  全局代理: %s\n", netproxy.Redact(settings.GlobalProxy))
 	}
 	fmt.Fprintf(stdout, "  端点: /v1/chat/completions · /v1/messages · /healthz · /api/state · /api/trace\n")
+	fmt.Fprintf(stdout, "  控制台: http://%s（总览/Provider/路由/观测；管理 API /api/config/* · /api/reload）\n", srv.Addr)
 	if settings.L1Classifier != "" {
 		fmt.Fprintf(stdout, "  L1 分类: %s（超时 %s）\n", settings.L1Classifier, l1TimeoutOrDefault(settings))
 	}

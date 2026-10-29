@@ -3,34 +3,90 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>yardmaster 管理页</title>
-  <style>
-    body{font-family:system-ui,"Microsoft YaHei",sans-serif;max-width:44rem;margin:3rem auto;padding:0 1rem;color:#1e2430}
-    h1{font-size:1.3rem} .card{border:1px solid #e4e7ec;border-radius:10px;padding:12px 16px;margin:10px 0}
-    .muted{color:#5b6472;font-size:.85rem} code{background:#f1f3f7;border-radius:6px;padding:1px 6px;font-size:.85em}
-    .pill{display:inline-block;border-radius:99px;padding:1px 10px;font-size:.8rem;background:#e9f7ee;color:#16a34a}
-    table{width:100%;border-collapse:collapse;font-size:.9rem} td,th{padding:6px 8px;border-bottom:1px solid #e4e7ec;text-align:left}
-  </style>
+  <title>yardmaster 控制台</title>
+  <link rel="stylesheet" href="/web/app.css">
 </head>
 <body>
-  <h1>yardmaster 本地网关 <span class="pill" id="status">加载中…</span></h1>
-  <p class="muted">管理页完整版（总览/Providers/Agents/路由/观测）按 PRD 原型于后续周实现；本页为 W2 状态快照。</p>
-  <div class="card"><b>运行状态</b><div id="state" class="muted">…</div></div>
-  <div class="card"><b>Providers</b><table id="providers"><thead><tr><th>ID</th><th>名称</th><th>协议</th><th>账号数</th></tr></thead><tbody></tbody></table></div>
-  <div class="card"><b>休眠中的账号</b><div id="resting" class="muted">无</div></div>
-  <script>
-    fetch('/api/state').then(r => r.json()).then(s => {
-      document.getElementById('status').textContent = '运行中';
-      document.getElementById('state').textContent =
-        `版本 ${s.version} · 已运行 ${s.uptime} · ${s.resting && Object.keys(s.resting).length || 0} 个账号休眠中`;
-      const tb = document.querySelector('#providers tbody');
-      (s.providers || []).forEach(p => {
-        tb.insertAdjacentHTML('beforeend', `<tr><td><code>${p.id}</code></td><td>${p.name}</td><td>${p.protocol}</td><td>${p.accounts}</td></tr>`);
-      });
-      if (!(s.providers || []).length) tb.innerHTML = '<tr><td colspan="4" class="muted">尚未配置 provider（providers.json）</td></tr>';
-      const rk = Object.keys(s.resting || {});
-      document.getElementById('resting').textContent = rk.length ? rk.map(k => `${k} → ${s.resting[k]}`).join('；') : '无';
-    }).catch(() => document.getElementById('status').textContent = '无法连接 /api/state');
-  </script>
+  <header>
+    <h1>yardmaster <span class="pill" id="status">连接中…</span></h1>
+    <nav id="tabs">
+      <a href="#overview" data-tab="overview" class="active">总览</a>
+      <a href="#providers" data-tab="providers">Provider</a>
+      <a href="#routing" data-tab="routing">路由</a>
+      <a href="#observe" data-tab="observe">观测</a>
+    </nav>
+    <div class="spacer"></div>
+    <button id="btn-reload" title="重读 providers.json 并热替换路由快照">重载配置</button>
+  </header>
+
+  <main>
+    <!-- 总览 -->
+    <section id="page-overview" class="page active">
+      <div class="card">
+        <b>运行状态</b>
+        <div id="ov-state" class="muted">…</div>
+      </div>
+      <div class="card">
+        <b>休眠中的账号</b>
+        <div id="ov-resting" class="muted">无</div>
+      </div>
+      <div class="card">
+        <b>设置</b>
+        <p class="muted">保存后写入 settings.json；监听地址等装配期字段需重启 serve 完全生效。</p>
+        <label>全局代理 <input id="set-proxy" placeholder="留空=系统代理；direct=显式直连；http(s)/socks5://…"></label>
+        <label>L1 分类器模型 <input id="set-l1" placeholder="provider/model 或 group/&lt;id&gt;；留空=关闭 L1"></label>
+        <label>L1 超时 (ms) <input id="set-l1-timeout" type="number" min="0" step="100"></label>
+        <div class="row">
+          <button id="btn-save-settings" class="primary">保存设置</button>
+          <span id="settings-msg" class="muted"></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Provider -->
+    <section id="page-providers" class="page">
+      <div id="prov-list"></div>
+    </section>
+
+    <!-- 路由 -->
+    <section id="page-routing" class="page">
+      <div class="card">
+        <b>路由组</b>
+        <table id="tbl-groups"><thead><tr><th>ID</th><th>策略</th><th>成员</th></tr></thead><tbody></tbody></table>
+      </div>
+      <div class="card">
+        <b>任务规则</b>
+        <table id="tbl-rules"><thead><tr><th>ID</th><th>条件</th><th>目标</th><th>命中</th></tr></thead><tbody></tbody></table>
+      </div>
+      <div class="card">
+        <b>调用方默认模型绑定</b>
+        <table id="tbl-keys"><thead><tr><th>Key</th><th>默认模型</th></tr></thead><tbody></tbody></table>
+      </div>
+      <div class="card">
+        <b>自定义意图词表</b>
+        <table id="tbl-intents"><thead><tr><th>ID</th><th>展示名</th><th>关键词</th><th>优先级</th></tr></thead><tbody></tbody></table>
+      </div>
+      <p class="muted">W1 为只读展示；组的策略/成员编辑于 W3 接入写接口。</p>
+    </section>
+
+    <!-- 观测 -->
+    <section id="page-observe" class="page">
+      <div class="card">
+        <div class="row">
+          <b>决策追溯</b>
+          <label class="inline">条数 <select id="trace-limit"><option>50</option><option selected>100</option><option>200</option></select></label>
+          <label class="inline">结果 <select id="trace-result"><option value="">全部</option><option value="ok">ok</option><option value="fail">fail</option></select></label>
+          <button id="btn-trace-refresh">刷新</button>
+        </div>
+        <table id="tbl-trace">
+          <thead><tr><th>时间</th><th>调用方</th><th>请求模型</th><th>路径</th><th>目标</th><th>结果</th><th>候选链</th><th>总耗时</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast"></div>
+  <script src="/web/app.js"></script>
 </body>
 </html>
