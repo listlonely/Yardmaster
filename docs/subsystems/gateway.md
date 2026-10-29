@@ -5,8 +5,8 @@
 | 部分 | 职责 | 真源 |
 | --- | --- | --- |
 | 端点 | `/v1/chat/completions`、`/v1/messages`（推断）、`/v1/models`、`/healthz`、`/api/state`、`/api/trace`、`/api/config/*`、`/api/reload`（管理 API，M2-W1）、`/`（控制台）、`/web/*`（静态资源） | [`gateway.go`](../../internal/gateway/gateway.go)、[`api.go`](../../internal/gateway/api.go) |
-| 候选计划 | `Planner.Plan`：目标解析（`provider/model`、裸 provider id 自动组、`group/<id>`）→ 跨 provider 候选展开 → 醒/休两段 → 组策略（order/rotate/smart）→ 会话亲和提前；休眠表（进程内存） | [`plan.go`](../../internal/gateway/plan.go) |
-| 路由组 | `provider.Group{ID,Strategy,Members}` 存 providers.json；CLI `group add/list/rm` | [`provider.go`](../../internal/provider/provider.go)、[`provider_cmd.go`](../../internal/app/provider_cmd.go) |
+| 候选计划 | `Planner.Plan`：目标解析（`provider/model`、裸 provider id 自动组、`group/<id>`）→ 跨 provider 候选展开 → 醒/短休眠/额度耗尽三段 → 组策略（order/rotate/smart/usage/weight）→ 会话亲和提前；休眠表（进程内存） | [`plan.go`](../../internal/gateway/plan.go) |
+| 路由组 | `provider.Group{ID,Strategy,Members,Weights}` 存 providers.json；CLI `group add/list/rm`；usage=当日用量升序（负载均衡，无需额度配置）；weight=平滑加权轮询（nginx smooth WRR，权重键优先级 账号 > 成员 > provider > 缺省 1） | [`provider.go`](../../internal/provider/provider.go)、[`plan.go`](../../internal/gateway/plan.go) |
 | 任务规则 | `RuleEngine`：rules.json 首条命中（intent/regex/max_tokens/caller_key 条件，留空=不限）；mtime 热重载（按 ID 保留 hits）；hits 写穿落盘 | [`rules.go`](../../internal/gateway/rules.go) |
 | key 绑定 | `KeyStore`：keys.json 把调用方 key 绑定默认模型；每次读文件（天然热生效） | [`keys.go`](../../internal/gateway/keys.go) |
 | 意图判定链 | `IntentChain`：intents.json 自定义（mtime 热生效）→ 内置 L0（[`classify.go`](../../internal/classify/classify.go)）→ L1 小模型（注入回调经网关自身端点调用；缓存 + 连错≥3 冷却 5min） | [`intent.go`](../../internal/gateway/intent.go) |
@@ -44,10 +44,12 @@
 - 观测通道：`GET /api/trace?limit=&agent=&result=(ok|fail|switch)`；CLI `yardmaster trace list [-agent -result -limit]` / `trace show <id>`（失败链 ✗ 标注原因，成功 ✓）。
 - 落盘：`<数据目录>/trace/trace-YYYYMMDD.jsonl`（0600）；启动时清理 + 跨天滚动时清理；只存元数据与失败原因，永不落盘对话内容（§4.4）。
 - 用量：`NoteUsage` 累计（内存 + 账号快照字段，跨日按 UsageDay 重置）；`FlushUsage` 重读 providers.json 只更新跟踪账号（不覆盖运行期 CLI 编辑），serve 期间每分钟 + 退出前各一次；`yardmaster provider quota <p> <acc> <tokens|0>` 配置账号当日额度，>0 后 smart 策略按剩余比例排序。
+- 额度感知路由（M2-W4）：`accountExhausted` 读侧计算（QuotaTokensDay>0 且当日 UsedTokens≥Quota），耗尽账号进入候选末段（与短休眠段独立，休眠至次日 UsageDay 翻转自动恢复）；亲和候选耗尽同样不提前；`NoteUsage` 跨线时告警一次；`/api/state` 的 `exhausted` 数组展示。
+- 成本核算（M2-W4）：单价表 pricing.json（`price set/rm/list` + 控制台编辑，价格键 provider/model 精确优先于裸 model）；成本报告 = 单价 × trace 聚合（`LoadTraceFiles` → `ComputeCost`），只统计 outcome=ok 且带 usage 的请求，无单价调用计入 Unpriced 计数不静默丢弃；`GET /api/cost?days=N`（上限 30）与 `yardmaster cost --days N`；零新增持久化（trace 保留 30 天即成本数据窗）。
 
 ## 管理 API 与控制台（M2-W1）
 
-- 配置读写：`GET/PUT /api/config/{providers|settings|rules|keys|intents}`。PUT 为全文档类型化写回：严格解码（未知字段拒绝）、语义校验（协议/策略枚举、成员引用存在、正则可编译、意图示例 ≤5）、写前备份快照（`<数据目录>/backup/<名>-<纳秒时间戳>.json`，每文件保留 10 份，备份失败即中止写入）、`SaveJSON` 原子写、审计日志。
+- 配置读写：`GET/PUT /api/config/{providers|settings|rules|keys|intents|pricing}`。PUT 为全文档类型化写回：严格解码（未知字段拒绝）、语义校验（协议/策略枚举、成员引用存在、正则可编译、意图示例 ≤5、权重为正、单价非负）、写前备份快照（`<数据目录>/backup/<名>-<纳秒时间戳>.json`，每文件保留 10 份，备份失败即中止写入）、`SaveJSON` 原子写、审计日志。
 - 密钥安全：GET providers 输出脱敏密钥（`***+末 4 位`）；PUT 对「空值/脱敏形」保留现存密钥（脱敏往返不破坏密钥，用户值优先）；响应与日志永不回显完整密钥。
 - fail-closed：当前文件解析失败时 GET 报 500、PUT/`/api/reload` 报 409 拒绝覆写（读不懂=未知，绝不把损坏文件当空配置覆盖）。
 - 热重载：`POST /api/reload` 重读 providers.json → `Planner.Reload` 热替换快照；进程内运行态按「键仍存在才保留」剪枝（休眠表、当日用量、亲和表），策略游标保留。补齐 CLI 编辑 providers「重启 serve 生效」缺口。

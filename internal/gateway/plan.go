@@ -11,6 +11,7 @@ package gateway
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"sort"
 	"strings"
@@ -43,6 +44,7 @@ type Planner struct {
 	groups     []provider.Group
 	resting    map[string]time.Time // key → 休眠截止
 	cursors    map[string]int       // rotate/smart 游标：策略键 → 下一候选下标
+	wrr        map[string][]int     // weight 策略平滑加权状态：策略键 → 各候选当前权重
 	affinity   map[string]string    // stickyKey → 候选 key
 	usage      map[string]usageEntry
 	usageDirty bool
@@ -62,6 +64,7 @@ func NewPlanner(providers []provider.Provider, groups []provider.Group) *Planner
 		groups:    groups,
 		resting:   map[string]time.Time{},
 		cursors:   map[string]int{},
+		wrr:       map[string][]int{},
 		affinity:  map[string]string{},
 		usage:     map[string]usageEntry{},
 		now:       time.Now,
@@ -111,6 +114,7 @@ func (p *Planner) Plan(target, stickyKey string) ([]Candidate, error) {
 
 	strategy := provider.StrategyOrder
 	stratKey := target // 游标键：直连目标按目标名，组按组名
+	var weights map[string]int
 	var cands []Candidate
 	if gid, ok := strings.CutPrefix(target, "group/"); ok {
 		g := p.groupByID(gid)
@@ -120,6 +124,7 @@ func (p *Planner) Plan(target, stickyKey string) ([]Candidate, error) {
 		if g.Strategy != "" {
 			strategy = g.Strategy
 		}
+		weights = g.Weights
 		stratKey = target
 		for _, m := range g.Members {
 			cs, err := p.expandMember(m, now)
@@ -137,7 +142,7 @@ func (p *Planner) Plan(target, stickyKey string) ([]Candidate, error) {
 	}
 
 	awake, resting := p.splitAwake(cands, now)
-	awake = p.applyStrategy(strategy, stratKey, awake)
+	awake = p.applyStrategy(strategy, stratKey, weights, awake)
 	return p.applyAffinityLocked(append(awake, resting...), stickyKey, now), nil
 }
 
@@ -176,40 +181,78 @@ func (p *Planner) expandMember(ref string, now time.Time) ([]Candidate, error) {
 	return cands, nil
 }
 
+// accountExhausted 判断账号当日额度是否已用尽（M2-W4 额度感知路由）。
+// QuotaTokensDay<=0 = 未设额度，永不耗尽；UsageDay 非当日时内存 used
+// 视为 0（NoteUsage 跨日重置的读侧对齐）。
+func accountExhausted(a provider.Account, today string) bool {
+	if a.QuotaTokensDay <= 0 {
+		return false
+	}
+	used := a.UsedTokens
+	if a.UsageDay != today {
+		used = 0
+	}
+	return used >= a.QuotaTokensDay
+}
+
+// usedToday 返回账号当日已用量（UsageDay 非当日视为 0）。
+func usedToday(a provider.Account, today string) int64 {
+	if a.UsageDay != today {
+		return 0
+	}
+	if a.UsedTokens < 0 {
+		return 0
+	}
+	return a.UsedTokens
+}
+
 // accountsOf 返回 provider 内某模型的账号候选（醒着在前，休眠在后）。
+// 当日额度耗尽的账号进入休眠段（M2-W4：额度感知，休眠至次日重置）。
 // 调用方必须已持有 p.mu。
 func (p *Planner) accountsOf(prov *provider.Provider, upstreamModel string, now time.Time) []Candidate {
-	var awake, resting []Candidate
+	today := now.Format("2006-01-02")
+	var awake, resting, exhausted []Candidate
 	for _, acc := range prov.Accounts {
 		if acc.Status == provider.AccountBadCred {
 			continue // 凭证失败：不自动重试（规则页失败分类表）
 		}
 		c := Candidate{Provider: prov, Account: acc, UpstreamModel: upstreamModel}
-		if until, ok := p.resting[c.Key()]; ok && until.After(now) {
+		until, timeResting := p.resting[c.Key()]
+		switch {
+		case accountExhausted(acc, today):
+			exhausted = append(exhausted, c) // 额度耗尽：休眠至次日重置（读侧计算）
+		case timeResting && until.After(now):
 			resting = append(resting, c)
-		} else {
+		default:
 			awake = append(awake, c)
 		}
 	}
-	return append(awake, resting...)
+	return append(append(awake, resting...), exhausted...)
 }
 
-// splitAwake 把候选按是否休眠稳定划分为两段（跨成员合并后再分，
-// 保证休眠候选全局靠后）。调用方必须已持有 p.mu。
+// splitAwake 把候选按「醒 / 短休眠 / 额度耗尽」稳定划分为三段（跨成员
+// 合并后再分，保证不可用候选全局靠后）。调用方必须已持有 p.mu。
 func (p *Planner) splitAwake(cands []Candidate, now time.Time) (awake, resting []Candidate) {
+	today := now.Format("2006-01-02")
+	var shortRest, exhausted []Candidate
 	for _, c := range cands {
-		if until, ok := p.resting[c.Key()]; ok && until.After(now) {
-			resting = append(resting, c)
-		} else {
+		until, timeResting := p.resting[c.Key()]
+		switch {
+		case accountExhausted(c.Account, today):
+			exhausted = append(exhausted, c)
+		case timeResting && until.After(now):
+			shortRest = append(shortRest, c)
+		default:
 			awake = append(awake, c)
 		}
 	}
-	return awake, resting
+	return awake, append(shortRest, exhausted...)
 }
 
 // applyStrategy 对醒着的候选应用组策略（休眠候选一律排末尾，策略
 // 不会把休眠候选提前）。调用方必须已持有 p.mu。
-func (p *Planner) applyStrategy(strategy provider.Strategy, stratKey string, awake []Candidate) []Candidate {
+func (p *Planner) applyStrategy(strategy provider.Strategy, stratKey string,
+	weights map[string]int, awake []Candidate) []Candidate {
 	switch strategy {
 	case provider.StrategyRotate:
 		return p.rotateLocked(stratKey, awake)
@@ -220,11 +263,70 @@ func (p *Planner) applyStrategy(strategy provider.Strategy, stratKey string, awa
 			})
 			return awake
 		}
-		// 无用量数据（W6 接入前常态）：按 rotate 轮换。
+		// 无用量数据（未配额度常态）：按 rotate 轮换。
 		return p.rotateLocked(stratKey, awake)
+	case provider.StrategyUsage:
+		// 当日已用量升序（M2-W4）：用量最少的账号优先（负载均衡，
+		// 不要求配置额度）；同量保持声明顺序。
+		today := p.now().Format("2006-01-02")
+		sort.SliceStable(awake, func(i, j int) bool {
+			return usedToday(awake[i].Account, today) < usedToday(awake[j].Account, today)
+		})
+		return awake
+	case provider.StrategyWeight:
+		// 平滑加权轮询（M2-W4）：按 Group.Weights 分流，确定性顺序；
+		// 权重键优先级：provider/account（账号粒度）→ provider/model
+		// （成员粒度）→ provider → 缺省 1。
+		return p.weightLocked(stratKey, awake, weights)
 	default:
 		return awake // order：声明顺序
 	}
+}
+
+// weightLocked 平滑加权轮询（smooth WRR，nginx 同算法）：每轮为各候选
+// 累加权重，选当前权重最大者置顶并扣减总权重。返回「选中者 + 其余按
+// 声明序」的完整 failover 链。候选数变化（账号增删/休眠切换）时状态
+// 重置。调用方必须已持有 p.mu。
+func (p *Planner) weightLocked(stratKey string, cands []Candidate, weights map[string]int) []Candidate {
+	n := len(cands)
+	if n < 2 {
+		return cands
+	}
+	cur, ok := p.wrr[stratKey]
+	if !ok || len(cur) != n {
+		cur = make([]int, n)
+	}
+	weightOf := func(c Candidate) int {
+		if v, ok := weights[c.Provider.ID+"/"+c.Account.Name]; ok && v > 0 {
+			return v // 账号粒度
+		}
+		if v, ok := weights[c.Provider.ID+"/"+c.UpstreamModel]; ok && v > 0 {
+			return v // 成员粒度（provider/model）
+		}
+		if v, ok := weights[c.Provider.ID]; ok && v > 0 {
+			return v // provider 粒度
+		}
+		return 1
+	}
+	total := 0
+	for i, c := range cands {
+		x := weightOf(c)
+		total += x
+		cur[i] += x
+	}
+	pick := 0
+	for i := 1; i < n; i++ {
+		if cur[i] > cur[pick] {
+			pick = i
+		}
+	}
+	cur[pick] -= total
+	p.wrr[stratKey] = cur
+	out := make([]Candidate, 0, n)
+	out = append(out, cands[pick])
+	out = append(out, cands[:pick]...)
+	out = append(out, cands[pick+1:]...)
+	return out
 }
 
 // rotateLocked 以 stratKey 为游标轮换候选（每请求前进一格）。
@@ -300,6 +402,9 @@ func (p *Planner) applyAffinityLocked(cands []Candidate, stickyKey string, now t
 	if until, resting := p.resting[want]; resting && until.After(now) {
 		return cands // 亲和候选休眠中：维持策略顺序
 	}
+	if accountExhausted(cands[idx].Account, now.Format("2006-01-02")) {
+		return cands // 亲和候选额度耗尽：维持策略顺序（醒着才提前）
+	}
 	c := cands[idx]
 	out := append([]Candidate{c}, cands[:idx]...)
 	return append(out, cands[idx+1:]...)
@@ -332,9 +437,32 @@ func (p *Planner) NoteUsage(c Candidate, tokens int64) {
 			c.Provider.Accounts[i].UsageDay = day
 			c.Provider.Accounts[i].UsedTokens = 0
 		}
-		c.Provider.Accounts[i].UsedTokens += tokens
+		was := c.Provider.Accounts[i].UsedTokens
+		c.Provider.Accounts[i].UsedTokens = was + tokens
+		// 额度感知（M2-W4）：本次累计恰好跨过当日额度线时告警一次。
+		q := c.Provider.Accounts[i].QuotaTokensDay
+		if q > 0 && was < q && was+tokens >= q {
+			slog.Info("账号当日额度已用尽，自动休眠至次日重置（额度感知路由）",
+				"account", key, "quota", q, "used", was+tokens)
+		}
 		break
 	}
+}
+
+// Exhausted 返回当日额度耗尽的账号 key 列表（/api/state 与控制台展示；
+// 与休眠表独立——耗尽是读侧按额度计算，不占休眠表条目）。
+func (p *Planner) Exhausted() []string {
+	today := p.now().Format("2006-01-02")
+	var out []string
+	for _, prov := range p.providers {
+		for _, acc := range prov.Accounts {
+			if accountExhausted(acc, today) {
+				out = append(out, prov.ID+"/"+acc.Name)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // FlushUsage 把内存累计合并写回 providers.json：重读文件、只更新本
@@ -497,6 +625,20 @@ func (p *Planner) Reload(providers []provider.Provider, groups []provider.Group)
 	for _, prov := range providers {
 		for _, acc := range prov.Accounts {
 			valid[prov.ID+"/"+acc.Name] = true
+		}
+	}
+	// weight 策略状态按策略键（目标名）索引：目标消失即清，防止
+	// 候选数变化后残留错位状态（长度不符时 weightLocked 自会重置）。
+	validTargets := map[string]bool{}
+	for _, prov := range providers {
+		validTargets[prov.ID] = true
+	}
+	for _, g := range groups {
+		validTargets["group/"+g.ID] = true
+	}
+	for k := range p.wrr {
+		if !validTargets[k] {
+			delete(p.wrr, k)
 		}
 	}
 	for k := range p.resting {

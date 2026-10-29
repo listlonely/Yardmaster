@@ -24,7 +24,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	"yardmaster/internal/classify"
 	"yardmaster/internal/provider"
@@ -38,6 +40,7 @@ const (
 	cfgRules     = "rules"
 	cfgKeys      = "keys"
 	cfgIntents   = "intents"
+	cfgPricing   = "pricing" // M2-W4：模型单价表
 )
 
 // maxConfigBody 限制配置写回请求体大小（含模型清单的 providers.json
@@ -79,6 +82,13 @@ func (s *Server) handleConfigGet(w http.ResponseWriter, name string) {
 	case cfgIntents:
 		var f classify.UserStrategy
 		if err := s.loadCurrent(s.intentsPath(), &f); err != nil {
+			writeAPIErr(w, err)
+			return
+		}
+		writeJSON(w, f)
+	case cfgPricing:
+		var f PricingFile
+		if err := s.loadCurrent(s.pricingPath(), &f); err != nil {
 			writeAPIErr(w, err)
 			return
 		}
@@ -173,6 +183,21 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, name st
 			return
 		}
 		writeOK(w, effectImmediate)
+	case cfgPricing:
+		var f PricingFile
+		if err := strictDecode(dec, &f); err != nil {
+			writeAPIErr(w, badRequest(err))
+			return
+		}
+		if err := ValidatePricing(f); err != nil {
+			writeAPIErr(w, badRequest(err))
+			return
+		}
+		if err := s.writeConfig(s.pricingPath(), cfgPricing, f); err != nil {
+			writeAPIErr(w, err)
+			return
+		}
+		writeOK(w, effectImmediate)
 	default:
 		writeAPIErr(w, errUnknownConfig{name})
 	}
@@ -203,6 +228,36 @@ func (s *Server) settingsPath() string { return filepath.Join(s.AppDir, "setting
 func (s *Server) rulesPath() string    { return filepath.Join(s.AppDir, "rules.json") }
 func (s *Server) keysPath() string     { return filepath.Join(s.AppDir, "keys.json") }
 func (s *Server) intentsPath() string  { return filepath.Join(s.AppDir, "intents.json") }
+func (s *Server) pricingPath() string  { return filepath.Join(s.AppDir, "pricing.json") }
+
+// handleCost 返回最近 N 天的成本报告（M2-W4）：单价表 × trace 聚合，
+// 查询时计算、无新增持久化。查询参数：days（默认 7，上限 30=trace 保留期）。
+func (s *Server) handleCost(w http.ResponseWriter, r *http.Request) {
+	days := 7
+	if n, err := strconv.Atoi(r.URL.Query().Get("days")); err == nil && n > 0 {
+		days = n
+	}
+	if days > 30 {
+		days = 30
+	}
+	var prices []PriceEntry
+	if f, err := LoadPricingFile(s.pricingPath()); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			writeAPIErr(w, &apiError{status: http.StatusInternalServerError,
+				Msg: "单价表解析失败（读不懂=未知，请修复或从 backup/ 还原）: " + err.Error()})
+			return
+		}
+	} else {
+		prices = f.Prices
+	}
+	traces, err := LoadTraceFiles(filepath.Join(s.AppDir, "trace"), 0)
+	if err != nil {
+		writeAPIErr(w, &apiError{status: http.StatusInternalServerError,
+			Msg: "trace 读取失败: " + err.Error()})
+		return
+	}
+	writeJSON(w, ComputeCost(traces, prices, days, time.Now()))
+}
 
 // loadCurrent 读当前配置到 v：文件不存在保持零值（首次创建合法），
 // 解析失败返回 500（读不懂=未知，界面如实呈现）。
@@ -333,12 +388,22 @@ func validateProviders(f store.ProvidersFile) error {
 		}
 		seenGroup[g.ID] = true
 		switch g.Strategy {
-		case provider.StrategyOrder, provider.StrategyRotate, provider.StrategySmart:
+		case provider.StrategyOrder, provider.StrategyRotate, provider.StrategySmart,
+			provider.StrategyUsage, provider.StrategyWeight:
 		default:
-			return fmt.Errorf("路由组 %s 策略非法: %q（order | rotate | smart）", g.ID, g.Strategy)
+			return fmt.Errorf("路由组 %s 策略非法: %q（order | rotate | smart | usage | weight）", g.ID, g.Strategy)
 		}
 		if len(g.Members) == 0 {
 			return fmt.Errorf("路由组 %s 至少需要一个成员", g.ID)
+		}
+		if g.Strategy == provider.StrategyWeight {
+			// 权重键不必与成员一一对应（支持账号/成员/provider 三种粒度），
+			// 但值必须 ≥1（≤0 视为配置错误，缺省键由网关按 1 处理）。
+			for k, v := range g.Weights {
+				if v <= 0 {
+					return fmt.Errorf("路由组 %s 权重 %q 必须为正整数", g.ID, k)
+				}
+			}
 		}
 		for _, m := range g.Members {
 			if err := validateMember(m, f.Providers, knownGroup); err != nil {
@@ -452,7 +517,7 @@ func (e *apiError) Error() string { return e.Msg }
 type errUnknownConfig struct{ name string }
 
 func (e errUnknownConfig) Error() string {
-	return "未知配置名 " + e.name + "（可用: providers | settings | rules | keys | intents）"
+	return "未知配置名 " + e.name + "（可用: providers | settings | rules | keys | intents | pricing）"
 }
 
 func (e errUnknownConfig) status() int { return http.StatusNotFound }

@@ -51,7 +51,7 @@ function activateTab(name) {
     a.classList.toggle('active', a.dataset.tab === name));
   document.querySelectorAll('.page').forEach((p) =>
     p.classList.toggle('active', p.id === 'page-' + name));
-  if (name === 'observe') loadTraces();
+  if (name === 'observe') { loadTraces(); loadCost(); loadPricing(); }
 }
 
 // ---------- 总览 ----------
@@ -73,6 +73,10 @@ async function loadOverview() {
     const rk = Object.keys(s.resting || {});
     $('ov-resting').innerHTML = rk.length
       ? rk.map((k) => `<div><code>${esc(k)}</code> → 休眠至 ${esc((s.resting[k] || '').replace('T', ' '))}</div>`).join('')
+      : '无';
+    const ex = s.exhausted || [];
+    $('ov-exhausted').innerHTML = ex.length
+      ? ex.map((k) => `<div><code>${esc(k)}</code> <span class="badge resting">额度耗尽</span></div>`).join('')
       : '无';
   } catch (e) {
     $('status').textContent = '无法连接';
@@ -477,19 +481,34 @@ function groupModal(existing) {
   const isEdit = !!existing;
   formModal(isEdit ? `编辑路由组 ${existing.id}` : '新建路由组', `
     <label><span>组 ID</span><input name="id" value="${esc(existing?.id || '')}" ${isEdit ? 'readonly' : ''} required></label>
-    <label><span>策略</span><select name="strategy">
+    <label><span>策略</span><select name="strategy" id="gm-strategy">
       <option value="order"${existing?.strategy === 'order' ? ' selected' : ''}>order（固定顺序，用尽再换）</option>
       <option value="rotate"${existing?.strategy === 'rotate' ? ' selected' : ''}>rotate（每请求轮换）</option>
       <option value="smart"${existing?.strategy === 'smart' ? ' selected' : ''}>smart（按剩余额度比例）</option>
+      <option value="usage"${existing?.strategy === 'usage' ? ' selected' : ''}>usage（当日用量升序，负载均衡）</option>
+      <option value="weight"${existing?.strategy === 'weight' ? ' selected' : ''}>weight（平滑加权轮询）</option>
     </select></label>
     <label><span>成员（每行一个）</span><textarea name="members">${esc((existing?.members || []).join('\n'))}</textarea></label>
-    <div class="hint">格式 provider/model、provider（取其清单）或 group/&lt;id&gt;；顺序即 order 策略的顺序。</div>`,
+    <label><span>权重（weight 策略）</span><input name="weights" value="${esc(Object.entries(existing?.weights || {}).map(([k, v]) => `${k}=${v}`).join(', '))}" placeholder="键=权重，逗号分隔；键支持 provider/account · provider/model · provider"></label>
+    <div class="hint">成员格式 provider/model、provider（取其清单）或 group/&lt;id&gt;；顺序即 order 策略的顺序。权重仅 weight 策略生效，缺省 1。</div>`,
   async (form, close) => {
     const v = formVals(form);
     const id = v.id.trim();
     if (!id) throw new Error('组 ID 不能为空');
     const members = lines(v.members);
     if (!members.length) throw new Error('至少需要一个成员');
+    let weights;
+    if (v.strategy === 'weight') {
+      weights = {};
+      for (const pair of (v.weights || '').split(',')) {
+        const t = pair.trim();
+        if (!t) continue;
+        const [k, w] = t.split('=').map((x) => x.trim());
+        const n = parseInt(w, 10);
+        if (!k || !Number.isInteger(n) || n <= 0) throw new Error(`权重项非法: "${t}"（应为 键=正整数）`);
+        weights[k] = n;
+      }
+    }
     const r = await putProvidersDoc((cur) => {
       const groups = cur.groups || [];
       const otherIDs = new Set(groups.filter((g) => g.id !== id).map((g) => g.id));
@@ -499,6 +518,7 @@ function groupModal(existing) {
         if (err) throw new Error(err);
       }
       const g = { id, strategy: v.strategy, members };
+      if (weights && Object.keys(weights).length) g.weights = weights;
       const idx = groups.findIndex((x) => x.id === id);
       if (idx >= 0) groups[idx] = g; else groups.push(g);
       return { ...cur, groups };
@@ -689,6 +709,109 @@ $('prov-list').addEventListener('click', (e) => {
 $('btn-add-group').addEventListener('click', () => groupModal(null));
 $('btn-add-rule').addEventListener('click', () => ruleModal(null));
 $('btn-add-intent').addEventListener('click', () => intentModal(null));
+
+// ---------- 成本报告与单价表（M2-W4） ----------
+
+const fmtUSD = (n) => '$' + Number(n || 0).toFixed(4);
+
+async function loadCost() {
+  const days = $('cost-days').value;
+  try {
+    const rep = await api(`/api/cost?days=${days}`);
+    const table = (m, label) => {
+      const keys = Object.keys(m || {}).sort((a, b) => m[b].cost - m[a].cost);
+      if (!keys.length) return `<div class="muted">窗口内无 ${esc(label)} 数据</div>`;
+      return `<table><thead><tr><th>${esc(label)}</th><th>调用</th><th>输入 tok</th><th>输出 tok</th><th>成本</th></tr></thead><tbody>` +
+        keys.map((k) => {
+          const b = m[k];
+          return `<tr><td><code>${esc(k)}</code></td><td>${b.calls}</td>
+            <td>${fmtTokens(b.input_tokens)}</td><td>${fmtTokens(b.output_tokens)}</td>
+            <td>${fmtUSD(b.cost)}</td></tr>`;
+        }).join('') + '</tbody></table>';
+    };
+    $('cost-body').innerHTML =
+      `${table(rep.by_account, '账号')}${table(rep.by_model, '模型')}` +
+      (rep.unpriced > 0
+        ? `<div class="muted">未计价调用 ${rep.unpriced} 次（单价表无对应价格键；失败请求不计费）</div>`
+        : '') +
+      `<div class="muted">窗口 ${esc(rep.from)} ~ ${esc(rep.to)}</div>`;
+  } catch (e) {
+    $('cost-body').innerHTML = `<div class="muted">加载失败: ${esc(e.message)}</div>`;
+  }
+}
+
+$('btn-cost-refresh').addEventListener('click', loadCost);
+$('cost-days').addEventListener('change', loadCost);
+
+function costTableBody(prices) {
+  return (prices || []).map((p) => `
+    <tr><td><code>${esc(p.model)}</code></td><td>${p.input_per_m}</td><td>${p.output_per_m}</td>
+    <td class="muted-actions"><a class="edit" data-price="${esc(p.model)}">编辑</a><a class="del" data-price="${esc(p.model)}">删除</a></td></tr>`).join('')
+    || '<tr><td colspan="4" class="muted">单价表为空（未配置的模型不计入成本，调用计入「未计价」）</td></tr>';
+}
+
+async function loadPricing() {
+  try {
+    const f = await api('/api/config/pricing');
+    q('#tbl-pricing tbody').innerHTML = costTableBody(f.prices);
+  } catch (e) {
+    q('#tbl-pricing tbody').innerHTML = `<tr><td colspan="4" class="muted">加载失败: ${esc(e.message)}</td></tr>`;
+  }
+}
+
+function priceModal(existing) {
+  const isEdit = !!existing;
+  formModal(isEdit ? `编辑单价 ${existing.model}` : '新建单价', `
+    <label><span>价格键</span><input name="model" value="${esc(existing?.model || '')}" required placeholder="provider/model（精确）或裸 model"></label>
+    <label><span>输入 $/1M</span><input name="input" type="number" min="0" step="0.000001" value="${existing?.input_per_m ?? ''}" required></label>
+    <label><span>输出 $/1M</span><input name="output" type="number" min="0" step="0.000001" value="${existing?.output_per_m ?? ''}" required></label>
+    <div class="hint">成本报告按此价 × trace 中的 token 用量计算；provider/model 精确键优先于裸 model 键。</div>`,
+  async (form, close) => {
+    const v = formVals(form);
+    const model = v.model.trim();
+    if (!model) throw new Error('价格键不能为空');
+    const inP = parseFloat(v.input), outP = parseFloat(v.output);
+    if (!Number.isFinite(inP) || !Number.isFinite(outP) || inP < 0 || outP < 0) {
+      throw new Error('单价必须为非负数字');
+    }
+    const cur = await api('/api/config/pricing');
+    const prices = cur.prices || [];
+    if (prices.some((p) => p.model === model && !isEdit)) throw new Error(`价格键 ${model} 已存在`);
+    const entry = { model, input_per_m: inP, output_per_m: outP };
+    const idx = prices.findIndex((p) => p.model === model);
+    if (idx >= 0) prices[idx] = entry; else prices.push(entry);
+    await api('/api/config/pricing', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prices }),
+    });
+    close();
+    toast('单价已保存（写前备份已留底）');
+    loadPricing();
+    loadCost();
+  });
+}
+
+async function deletePrice(model) {
+  if (!confirm(`删除单价 ${model}？该模型的调用将计入「未计价」。当前文件将先备份到 backup/ 目录。`)) return;
+  const cur = await api('/api/config/pricing');
+  await api('/api/config/pricing', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prices: (cur.prices || []).filter((p) => p.model !== model) }),
+  });
+  toast('单价已删除（写前备份已留底）');
+  loadPricing();
+  loadCost();
+}
+
+q('#tbl-pricing tbody').addEventListener('click', async (e) => {
+  const model = e.target.dataset.price;
+  if (!model) return;
+  const cur = await api('/api/config/pricing');
+  const entry = (cur.prices || []).find((p) => p.model === model);
+  if (e.target.classList.contains('edit')) priceModal(entry);
+  if (e.target.classList.contains('del')) deletePrice(model);
+});
+$('btn-add-price').addEventListener('click', () => priceModal(null));
 
 // ---------- 启动 ----------
 

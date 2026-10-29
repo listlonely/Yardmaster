@@ -85,6 +85,7 @@ func (s *Server) Handler() http.Handler {
 		s.handleConfigPut(w, r, r.PathValue("name"))
 	})
 	mux.HandleFunc("POST /api/reload", s.handleReload)
+	mux.HandleFunc("GET /api/cost", s.handleCost)
 	mux.Handle("GET /web/", http.StripPrefix("/web/", http.FileServerFS(webSub())))
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {
 		index, err := fs.ReadFile(webFS, "web/index.html")
@@ -189,6 +190,10 @@ func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
 			resting[k] = until.Format(time.RFC3339)
 		}
 		state["resting"] = resting
+		// 额度耗尽账号（M2-W4）：读侧计算，与休眠表独立展示。
+		if ex := s.Planner.Exhausted(); len(ex) > 0 {
+			state["exhausted"] = ex
+		}
 		var groups []map[string]any
 		for _, g := range s.Planner.Groups() {
 			groups = append(groups, map[string]any{"id": g.ID, "strategy": g.Strategy, "members": g.Members})

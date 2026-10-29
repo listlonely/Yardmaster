@@ -50,12 +50,16 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		return runIntents(args[1:], stdout, stderr)
 	case "trace":
 		return runTrace(args[1:], stdout, stderr)
+	case "price":
+		return runPrice(args[1:], stdout, stderr)
+	case "cost":
+		return runCost(args[1:], stdout, stderr)
 	case "settings":
 		return runSettings(args[1:], stdout, stderr)
 	case "agents":
 		return runAgents(args[1:], stdout, stderr)
 	default:
-		fmt.Fprintf(stderr, "未知子命令 %q；可用：serve、version、provider、group、rules、keys、intents、trace、settings、agents\n", args[0])
+		fmt.Fprintf(stderr, "未知子命令 %q；可用：serve、version、provider、group、rules、keys、intents、trace、settings、agents、price、cost\n", args[0])
 		return ErrUsage
 	}
 }

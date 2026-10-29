@@ -69,12 +69,15 @@ const (
 	StrategyOrder  Strategy = "order"  // 固定顺序，用尽再换
 	StrategyRotate Strategy = "rotate" // 每轮换下一成员
 	StrategySmart  Strategy = "smart"  // 优先额度窗口最快重置、浪费最少的账号
+	StrategyUsage  Strategy = "usage"  // 当日用量升序（负载均衡；无需额度配置）
+	StrategyWeight Strategy = "weight" // 加权轮询：按 Group.Weights 分流
 )
 
 // Group 把「成员模型 × 账号池」组成一个可被引用的虚拟模型（F6）。
 // Agent 只看到一个名字（group/<id>），切换发生在网关内部。
 type Group struct {
-	ID       string   `json:"id"`
-	Strategy Strategy `json:"strategy"`
-	Members  []string `json:"members"` // 形如 "provider/model"
+	ID       string         `json:"id"`
+	Strategy Strategy       `json:"strategy"`
+	Members  []string       `json:"members"`          // 形如 "provider/model"
+	Weights  map[string]int `json:"weights,omitempty"` // weight 策略：成员引用 → 权重（缺省 1）
 }

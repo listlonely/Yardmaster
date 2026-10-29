@@ -34,6 +34,9 @@
       <div class="card">
         <b>休眠中的账号</b>
         <div id="ov-resting" class="muted">无</div>
+        <div style="height:6px"></div>
+        <b>额度耗尽（休眠至次日重置）</b>
+        <div id="ov-exhausted" class="muted">无</div>
       </div>
       <div class="card">
         <b>设置</b>
@@ -90,6 +93,19 @@
           <thead><tr><th></th><th>时间</th><th>调用方</th><th>请求模型</th><th>路径</th><th>目标</th><th>结果</th><th>候选</th><th>总耗时</th></tr></thead>
           <tbody></tbody>
         </table>
+      </div>
+      <div class="card">
+        <div class="row">
+          <b>成本报告（单价表 × trace 聚合）</b>
+          <label class="inline">天数 <select id="cost-days"><option>1</option><option selected>7</option><option>30</option></select></label>
+          <button id="btn-cost-refresh">刷新</button>
+        </div>
+        <div id="cost-body" class="muted">…</div>
+      </div>
+      <div class="card">
+        <div class="row"><b>模型单价表</b><span class="spacer"></span><button class="mini" id="btn-add-price">＋ 新建单价</button></div>
+        <p class="muted">单位：美元 / 1M tokens；价格键 provider/model（精确）优先于裸 model；models.dev 自动目录为后续里程碑。</p>
+        <table id="tbl-pricing"><thead><tr><th>价格键</th><th>输入 $/1M</th><th>输出 $/1M</th><th></th></tr></thead><tbody></tbody></table>
       </div>
     </section>
   </main>

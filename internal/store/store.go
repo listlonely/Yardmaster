@@ -42,6 +42,9 @@ func (p Paths) RulesPath() string { return filepath.Join(p.AppDir, "rules.json")
 // KeysPath 返回 keys.json 路径（调用方 key 绑定默认模型；W5 新增）。
 func (p Paths) KeysPath() string { return filepath.Join(p.AppDir, "keys.json") }
 
+// PricingPath 返回 pricing.json 路径（模型单价表，M2-W4）。
+func (p Paths) PricingPath() string { return filepath.Join(p.AppDir, "pricing.json") }
+
 // AppliedPath 返回 applied.json 路径（接线审计记录，F4/F5/F10）。
 func (p Paths) AppliedPath() string { return filepath.Join(p.AppDir, "applied.json") }
 
