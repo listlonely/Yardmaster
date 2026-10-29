@@ -165,6 +165,25 @@ func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
 			})
 		}
 		state["providers"] = provs
+		// 账号实时状态（M2-W2 控制台 join 用）：当日用量/额度直接读
+		// Planner 内存快照，避免控制台显示滞后于落盘节流（最长 60s）。
+		var accs []map[string]any
+		for _, p := range s.Planner.Providers() {
+			for _, a := range p.Accounts {
+				accs = append(accs, map[string]any{
+					"key":              p.ID + "/" + a.Name,
+					"provider":         p.ID,
+					"name":             a.Name,
+					"status":           a.Status,
+					"used_tokens":      a.UsedTokens,
+					"quota_tokens_day": a.QuotaTokensDay,
+					"usage_day":        a.UsageDay,
+				})
+			}
+		}
+		if accs != nil {
+			state["accounts"] = accs
+		}
 		resting := map[string]string{}
 		for k, until := range s.Planner.Resting() {
 			resting[k] = until.Format(time.RFC3339)

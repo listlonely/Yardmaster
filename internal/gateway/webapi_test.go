@@ -195,6 +195,59 @@ func TestConfigGetPutUnknownName404(t *testing.T) {
 	}
 }
 
+// 还原旧代码（/api/state 不暴露账号实时快照）即失败：控制台只能读
+// 配置文件里的 used_tokens，显示滞后于落盘节流最长 60s。
+func TestStateExposesLiveAccountUsage(t *testing.T) {
+	seed := seedProvidersFile()
+	s, srv := newConfigServer(t, &seed)
+	// 经 NoteUsage（与真实推断同路径）在 Planner 内存中累计当日用量；
+	// 候选必须取自 Plan()（指向 Planner 内部切片），副本上累计无效。
+	// 裸 provider 路由要求已预检模型清单，故补一条。
+	seed.Providers[0].Models = []provider.Model{{ID: "m1"}}
+	s.Planner.Reload(seed.Providers, nil)
+	cands, err := s.Planner.Plan("prov/m1", "sticky-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cands) == 0 {
+		t.Fatal("前置：应至少有一个候选")
+	}
+	s.Planner.NoteUsage(cands[0], 180)
+	st, body := doGet(t, srv.URL+"/api/state")
+	if st != http.StatusOK {
+		t.Fatalf("GET /api/state: HTTP %d", st)
+	}
+	var state struct {
+		Accounts []struct {
+			Key         string `json:"key"`
+			UsedTokens  int64  `json:"used_tokens"`
+			QuotaTokens int64  `json:"quota_tokens_day"`
+			UsageDay    string `json:"usage_day"`
+		} `json:"accounts"`
+	}
+	if err := json.Unmarshal(body, &state); err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Accounts) != 1 {
+		t.Fatalf("state.accounts 应含 1 个账号快照: %s", body)
+	}
+	a := state.Accounts[0]
+	if a.Key != "prov/one" || a.UsedTokens != 180 {
+		t.Fatalf("实时用量快照不符: key=%s used=%d", a.Key, a.UsedTokens)
+	}
+	if a.UsageDay == "" {
+		t.Fatal("usage_day 应为当日日期")
+	}
+	// 配置文件此时应仍未落盘（节流写），证明快照来自内存而非文件
+	var disk store.ProvidersFile
+	if err := store.LoadJSON(s.ProvidersPath, &disk); err != nil {
+		t.Fatal(err)
+	}
+	if disk.Providers[0].Accounts[0].UsedTokens != 0 {
+		t.Fatalf("文件应尚未节流落盘: %+v", disk.Providers[0].Accounts[0])
+	}
+}
+
 // 还原旧代码（Reload 不剪枝已删除账号的休眠键）即失败。
 func TestPlannerReloadPrunesStateOfRemovedAccounts(t *testing.T) {
 	prov := chatProvider("https://upstream.test")

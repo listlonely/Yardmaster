@@ -32,3 +32,20 @@ button.primary { background:var(--accent); border-color:var(--accent); color:#ff
 .badge.disabled { background:#f1f3f7; color:#6b7280 }
 .toast { position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#1e2430; color:#fff; padding:8px 18px; border-radius:10px; font-size:.9rem; opacity:0; transition:opacity .25s; pointer-events:none }
 .toast.show { opacity:.95 }
+.cards { display:flex; gap:10px; flex-wrap:wrap; margin:10px 0 }
+.stat { flex:1; min-width:7rem; background:#fff; border:1px solid var(--line); border-radius:10px; padding:10px 14px }
+.stat-v { font-size:1.45rem; font-weight:700 }
+.stat-l { font-size:.82rem; color:var(--muted) }
+.stat-s { font-size:.75rem }
+.bar { display:inline-block; width:7rem; height:7px; background:#eef0f4; border-radius:99px; overflow:hidden; vertical-align:middle; margin-right:6px }
+.bar-fill { height:100% }
+.bar-fill.ok { background:#22c55e } .bar-fill.warn { background:#f59e0b } .bar-fill.danger { background:#ef4444 }
+.chips { margin-top:6px; display:flex; flex-wrap:wrap; gap:4px }
+details { margin-top:6px }
+details summary { cursor:pointer }
+tr.trace-row { cursor:pointer }
+tr.trace-row:hover { background:#f5f8ff }
+tr.trace-detail > td { background:#fafbfd }
+table.inner { margin:4px 0 2px }
+table.inner th, table.inner td { padding:4px 8px; font-size:.82rem }
+.toggle { width:18px; text-align:center }

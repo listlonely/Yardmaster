@@ -22,9 +22,14 @@
   <main>
     <!-- 总览 -->
     <section id="page-overview" class="page active">
+      <div id="stat-cards" class="cards"></div>
       <div class="card">
         <b>运行状态</b>
         <div id="ov-state" class="muted">…</div>
+      </div>
+      <div class="card">
+        <b>代理链（F3 继承：账号 → Provider → 全局 → 系统）</b>
+        <div id="ov-proxy" class="muted">…</div>
       </div>
       <div class="card">
         <b>休眠中的账号</b>
@@ -56,7 +61,7 @@
       </div>
       <div class="card">
         <b>任务规则</b>
-        <table id="tbl-rules"><thead><tr><th>ID</th><th>条件</th><th>目标</th><th>命中</th></tr></thead><tbody></tbody></table>
+        <table id="tbl-rules"><thead><tr><th>ID</th><th>说明</th><th>条件</th><th>目标</th><th>命中</th></tr></thead><tbody></tbody></table>
       </div>
       <div class="card">
         <b>调用方默认模型绑定</b>
@@ -64,9 +69,10 @@
       </div>
       <div class="card">
         <b>自定义意图词表</b>
-        <table id="tbl-intents"><thead><tr><th>ID</th><th>展示名</th><th>关键词</th><th>优先级</th></tr></thead><tbody></tbody></table>
+        <p class="muted">求值顺序：自定义（优先级降序）→ 内置 L0 → L1 → 默认组；正则对原文匹配。</p>
+        <table id="tbl-intents"><thead><tr><th>ID</th><th>展示名</th><th>关键词</th><th>正则</th><th>示例句</th><th>优先级</th></tr></thead><tbody></tbody></table>
       </div>
-      <p class="muted">W1 为只读展示；组的策略/成员编辑于 W3 接入写接口。</p>
+      <p class="muted">编辑表单于 W3 接入写接口；当前为只读全景。</p>
     </section>
 
     <!-- 观测 -->
@@ -74,12 +80,14 @@
       <div class="card">
         <div class="row">
           <b>决策追溯</b>
-          <label class="inline">条数 <select id="trace-limit"><option>50</option><option selected>100</option><option>200</option></select></label>
+          <label class="inline">调用方 <input id="trace-agent" placeholder="如 claude-code" size="12"></label>
           <label class="inline">结果 <select id="trace-result"><option value="">全部</option><option value="ok">ok</option><option value="fail">fail</option></select></label>
+          <label class="inline">条数 <select id="trace-limit"><option>50</option><option selected>100</option><option>200</option></select></label>
+          <label class="inline"><input type="checkbox" id="trace-auto"> 自动刷新(30s)</label>
           <button id="btn-trace-refresh">刷新</button>
         </div>
         <table id="tbl-trace">
-          <thead><tr><th>时间</th><th>调用方</th><th>请求模型</th><th>路径</th><th>目标</th><th>结果</th><th>候选链</th><th>总耗时</th></tr></thead>
+          <thead><tr><th></th><th>时间</th><th>调用方</th><th>请求模型</th><th>路径</th><th>目标</th><th>结果</th><th>候选</th><th>总耗时</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
