@@ -40,10 +40,12 @@
       </div>
       <div class="card">
         <b>设置</b>
-        <p class="muted">保存后写入 settings.json；监听地址等装配期字段需重启 serve 完全生效。</p>
+        <p class="muted">保存后写入 settings.json；监听地址与令牌等装配期字段需重启 serve 完全生效。</p>
         <label>全局代理 <input id="set-proxy" placeholder="留空=系统代理；direct=显式直连；http(s)/socks5://…"></label>
         <label>L1 分类器模型 <input id="set-l1" placeholder="provider/model 或 group/&lt;id&gt;；留空=关闭 L1"></label>
         <label>L1 超时 (ms) <input id="set-l1-timeout" type="number" min="0" step="100"></label>
+        <label>监听地址 <input id="set-listen" placeholder="默认 127.0.0.1:8317；局域网共享填 0.0.0.0:8317（强制令牌）"></label>
+        <label>访问令牌 <input id="set-token" type="password" placeholder="留空=保留现有；仅本机使用可留空"></label>
         <div class="row">
           <button id="btn-save-settings" class="primary">保存设置</button>
           <span id="settings-msg" class="muted"></span>

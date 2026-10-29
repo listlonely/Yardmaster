@@ -43,4 +43,6 @@ jobs:
             pack/*.tar.gz
             pack/*.zip
             pack/SHA256SUMS
+            scripts/install.sh
+            scripts/install.ps1
           generate_release_notes: true # changelog 由 PR/commit 生成

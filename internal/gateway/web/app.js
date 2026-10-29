@@ -13,11 +13,58 @@ const q = (sel) => document.querySelector(sel);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+// ---------- 访问令牌（M2-W5） ----------
+
+// 会话内令牌（sessionStorage）：网关开启 token 校验后，API 401 驱动
+// 输入模态框并自动重试；静态壳不设防（无敏感数据），数据面全过闸。
+let authToken = sessionStorage.getItem('ym-token') || '';
+
 async function api(path, opts) {
+  opts = opts || {};
+  opts.headers = Object.assign({}, opts.headers,
+    authToken ? { 'X-Gw-Token': authToken } : {});
   const r = await fetch(path, opts);
+  if (r.status === 401) {
+    await promptToken(); // 取消则 reject 冒泡
+    return api(path, opts); // 取到令牌后重试
+  }
   const body = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
   return body;
+}
+
+// 单飞令牌提示：启动时多个并发请求同时 401，若各自弹框会叠层残留
+// （实测缺陷），共享同一 Promise，所有等待方在令牌到手后各自重试。
+let tokenPrompt = null;
+
+function promptToken() {
+  if (tokenPrompt) return tokenPrompt;
+  tokenPrompt = new Promise((resolve, reject) => {
+    const back = document.createElement('div');
+    back.className = 'modal-back';
+    back.innerHTML = `<div class="modal"><h3>需要访问令牌</h3>
+      <p class="muted">网关已开启令牌校验（settings.json 的 token 字段）。令牌仅存于本会话。</p>
+      <form>
+        <label><span>令牌</span><input name="token" type="password" required autofocus></label>
+        <div class="row">
+          <span class="modal-err"></span>
+          <button type="button" class="modal-cancel">取消</button>
+          <button type="submit" class="primary">保存</button>
+        </div>
+      </form></div>`;
+    $('modal-root').appendChild(back);
+    const done = (fn, val) => { back.remove(); tokenPrompt = null; fn(val); };
+    back.querySelector('.modal-cancel').onclick = () => done(reject, new Error('未提供访问令牌'));
+    back.querySelector('form').onsubmit = (e) => {
+      e.preventDefault();
+      const t = new FormData(e.target).get('token').trim();
+      if (!t) return;
+      authToken = t;
+      sessionStorage.setItem('ym-token', t);
+      done(resolve, null);
+    };
+  });
+  return tokenPrompt;
 }
 
 function toast(msg, isErr = false) {
@@ -140,6 +187,9 @@ async function loadSettings() {
     $('set-proxy').value = s.global_proxy || '';
     $('set-l1').value = s.l1_classifier || '';
     $('set-l1-timeout').value = s.l1_timeout_ms || '';
+    $('set-listen').value = s.listen || '';
+    $('set-token').value = ''; // 令牌脱敏返回，留空即保留（placeholder 提示）
+    $('set-token').placeholder = s.token ? `已设置（${s.token}），留空=保留` : '留空=保留现有；仅本机使用可留空';
   } catch { /* settings.json 不存在：保持空表单 */ }
 }
 
@@ -148,6 +198,8 @@ $('btn-save-settings').addEventListener('click', async () => {
     global_proxy: $('set-proxy').value.trim(),
     l1_classifier: $('set-l1').value.trim(),
     l1_timeout_ms: parseInt($('set-l1-timeout').value, 10) || 0,
+    listen: $('set-listen').value.trim(),
+    token: $('set-token').value, // 空值由服务端按「保留现有」处理
   };
   try {
     const r = await api('/api/config/settings', {

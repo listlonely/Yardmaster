@@ -63,12 +63,18 @@ type Server struct {
 	Traces        *TraceLog    // 决策追溯（F9）；nil=不记录
 	AppDir        string       // 数据目录（管理 API 备份/写配置用）；空=禁用写接口
 	ProvidersPath string       // providers.json 路径（/api/reload 热重载用）
+	Token         string       // 访问令牌（M2-W5）：非空时 /v1 与 /api 要求匹配；空=本机信任态
 	started       time.Time
 }
 
 // Handler 返回网关路由表。
 func (s *Server) Handler() http.Handler {
 	s.started = time.Now()
+	return s.authMiddleware(s.routes())
+}
+
+// routes 是裸路由表（authMiddleware 的内层）。
+func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, map[string]string{"name": "yardmaster", "status": "ok"})

@@ -58,8 +58,10 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		return runSettings(args[1:], stdout, stderr)
 	case "agents":
 		return runAgents(args[1:], stdout, stderr)
+	case "update":
+		return updateCheck(args[1:], stdout, stderr)
 	default:
-		fmt.Fprintf(stderr, "未知子命令 %q；可用：serve、version、provider、group、rules、keys、intents、trace、settings、agents、price、cost\n", args[0])
+		fmt.Fprintf(stderr, "未知子命令 %q；可用：serve、version、provider、group、rules、keys、intents、trace、settings、agents、price、cost、update\n", args[0])
 		return ErrUsage
 	}
 }
@@ -78,8 +80,18 @@ func runServe(stdout io.Writer) error {
 		return fmt.Errorf("读取设置: %w", serr)
 	}
 
+	// 监听地址归一化 + 安全基线把关（F10）：非回环监听必须配置令牌，
+	// 否则拒绝启动（宁可不起也不无鉴权暴露，M2-W5）。
+	listen := settings.Listen
+	if listen == "" {
+		listen = gateway.DefaultAddr
+	}
+	if err := gateway.ValidateSecurity(listen, settings.Token); err != nil {
+		return err
+	}
+
 	srv := &gateway.Server{
-		Addr:          gateway.DefaultAddr,
+		Addr:          listen,
 		Planner:       planner,
 		Version:       Version,
 		GlobalProxy:   settings.GlobalProxy,
@@ -88,8 +100,9 @@ func runServe(stdout io.Writer) error {
 		Traces:        gateway.NewTraceLog(paths.TraceDir()),
 		AppDir:        paths.AppDir,
 		ProvidersPath: paths.ProvidersPath(),
+		Token:         settings.Token,
 		Intents: gateway.NewIntentChain(paths.IntentsPath(), settings.L1Classifier,
-			l1TimeoutOrDefault(settings), newL1Caller(gateway.DefaultAddr, settings.L1Classifier)),
+			l1TimeoutOrDefault(settings), newL1Caller(listen, settings.Token, settings.L1Classifier)),
 	}
 	defer srv.Traces.Close()
 
@@ -126,8 +139,9 @@ func runServe(stdout io.Writer) error {
 }
 
 // newL1Caller 构造 L1 分类回调：经网关自身推断端点调用分类模型
-// （享受故障转移与代理，F8），带内部标记头防止递归分类。
-func newL1Caller(addr, model string) gateway.L1Caller {
+// （享受故障转移与代理，F8），带内部标记头防止递归分类；token 非空时
+// 携带访问令牌（M2-W5：本机回环 + token 态下自调用也须过闸）。
+func newL1Caller(addr, token, model string) gateway.L1Caller {
 	if model == "" {
 		return nil
 	}
@@ -148,6 +162,9 @@ func newL1Caller(addr, model string) gateway.L1Caller {
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set(gateway.L1SelfHeader, gateway.L1SelfValue)
+		if token != "" {
+			req.Header.Set("X-Gw-Token", token)
+		}
 		resp, err := client.Do(req)
 		if err != nil {
 			return "", err

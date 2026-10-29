@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -64,6 +65,8 @@ func (s *Server) handleConfigGet(w http.ResponseWriter, name string) {
 			writeAPIErr(w, err)
 			return
 		}
+		// Token 脱敏输出（§4.4，与 api_key 同规）。
+		f.Token = maskAPIKey(f.Token)
 		writeJSON(w, f)
 	case cfgRules:
 		var f RulesFile
@@ -130,6 +133,34 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, name st
 	case cfgSettings:
 		var f store.Settings
 		if err := strictDecode(dec, &f); err != nil {
+			writeAPIErr(w, badRequest(err))
+			return
+		}
+		// Token 保留语义（用户值优先）：空值/脱敏形 → 保留现存令牌，
+		// 脱敏 GET → PUT 往返不破坏令牌；显式新值才采纳。
+		var cur store.Settings
+		if err := s.loadCurrentForWrite(s.settingsPath(), &cur); err != nil {
+			writeAPIErr(w, err)
+			return
+		}
+		if f.Token == "" || f.Token == maskAPIKey(cur.Token) {
+			f.Token = cur.Token
+		}
+		if f.Listen == "" {
+			f.Listen = cur.Listen
+		}
+		// 安全基线（F10）：非回环监听必须带令牌；非法地址拒绝落盘。
+		if f.Listen != "" {
+			if _, _, err := net.SplitHostPort(f.Listen); err != nil {
+				writeAPIErr(w, badRequest(fmt.Errorf("listen 须为 host:port 形式: %v", err)))
+				return
+			}
+		}
+		listen := f.Listen
+		if listen == "" {
+			listen = DefaultAddr
+		}
+		if err := ValidateSecurity(listen, f.Token); err != nil {
 			writeAPIErr(w, badRequest(err))
 			return
 		}

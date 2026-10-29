@@ -4,7 +4,8 @@
 
 | 部分 | 职责 | 真源 |
 | --- | --- | --- |
-| 端点 | `/v1/chat/completions`、`/v1/messages`（推断）、`/v1/models`、`/healthz`、`/api/state`、`/api/trace`、`/api/config/*`、`/api/reload`（管理 API，M2-W1）、`/`（控制台）、`/web/*`（静态资源） | [`gateway.go`](../../internal/gateway/gateway.go)、[`api.go`](../../internal/gateway/api.go) |
+| 端点 | `/v1/chat/completions`、`/v1/messages`（推断）、`/v1/models`、`/healthz`、`/api/state`、`/api/trace`、`/api/cost`、`/api/config/*`、`/api/reload`（管理 API）、`/`（控制台）、`/web/*`（静态资源） | [`gateway.go`](../../internal/gateway/gateway.go)、[`api.go`](../../internal/gateway/api.go) |
+| 访问控制 | `authMiddleware`（M2-W5）：settings `token` 非空时 `/v1/*` 与 `/api/*` 要求令牌（X-Gw-Token / Authorization Bearer / x-api-key，constant-time 比对）；`/healthz`、`/`、`/web/*` 豁免（静态壳无敏感数据，数据面由 API 401 驱动控制台令牌输入）；`ValidateSecurity`：非回环监听（settings `listen`，如 0.0.0.0:8317）必须配令牌——serve 启动、CLI `settings set`、管理 API PUT settings 三口同一规则拒绝，宁可不起也不无鉴权暴露 | [`auth.go`](../../internal/gateway/auth.go) |
 | 候选计划 | `Planner.Plan`：目标解析（`provider/model`、裸 provider id 自动组、`group/<id>`）→ 跨 provider 候选展开 → 醒/短休眠/额度耗尽三段 → 组策略（order/rotate/smart/usage/weight）→ 会话亲和提前；休眠表（进程内存） | [`plan.go`](../../internal/gateway/plan.go) |
 | 路由组 | `provider.Group{ID,Strategy,Members,Weights}` 存 providers.json；CLI `group add/list/rm`；usage=当日用量升序（负载均衡，无需额度配置）；weight=平滑加权轮询（nginx smooth WRR，权重键优先级 账号 > 成员 > provider > 缺省 1） | [`provider.go`](../../internal/provider/provider.go)、[`plan.go`](../../internal/gateway/plan.go) |
 | 任务规则 | `RuleEngine`：rules.json 首条命中（intent/regex/max_tokens/caller_key 条件，留空=不限）；mtime 热重载（按 ID 保留 hits）；hits 写穿落盘 | [`rules.go`](../../internal/gateway/rules.go) |
@@ -56,6 +57,7 @@
 - 生效语义：providers PUT 即时生效（写后自动 Reload）；rules/keys/intents 引擎热读取即时生效；settings 装配期读取，响应 `effect:"restart"`。
 - 控制台：`/` 出入口 + `/web/*` 静态资源（embed 进二进制）；总览（数据卡/代理继承链/休眠/设置保存）/Provider（账号、脱敏密钥、实时用量进度条、有效代理标注、模型清单、额度设置）/路由（组/规则/意图词表的完整编辑：新建/编辑/删除，成员引用有效性标注）/观测（trace 查询、caller 筛选、行展开候选链详情、自动刷新）四页。
 - 控制台编辑安全（W3）：所有写操作经管理 API（严格校验 + 写前备份 + 审计）；提交前 fresh GET 构造全文档（last-writer-wins 窗口最小化）；providers 的密钥以脱敏形往返由服务端保留；删除类操作二次确认；客户端预校验（正则编译/成员引用/示例 ≤5）失败即拦截不发请求，服务端校验失败不落盘，错误内联显示于表单。
+- 局域网共享与分发（W5）：settings 新增 `listen`（空=127.0.0.1:8317）与 `token`；令牌脱敏往返语义与 api_key 同规（空/脱敏形保留现存）；控制台 401 驱动单飞令牌输入（sessionStorage 会话内有效，并发 401 共享同一 Promise 防叠层——实测缺陷修复）；升级提示 `yardmaster update check`（GitHub releases 比较，dev 态跳过）；安装脚本 `scripts/install.ps1`（-File 离线/-NoPath 供测试；**UTF-8 BOM 必需**——PowerShell 5.1 无 BOM 按 ANSI 解析中文注释即语法错误）与 `scripts/install.sh`（--user/--file），随 release 产物分发。
 - 账号实时状态：`/api/state` 附 `accounts` 数组（key/status/used_tokens/quota_tokens_day/usage_day，Planner 内存快照），控制台 join 该数据展示实时用量——配置文件里的 used_tokens 经 60s 节流落盘，直接读会滞后。
 
 ## 约束与失效行为

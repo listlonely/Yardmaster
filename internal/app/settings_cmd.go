@@ -6,14 +6,24 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"yardmaster/internal/gateway"
 	"yardmaster/internal/netproxy"
 	"yardmaster/internal/store"
 )
+
+// maskSecret 脱敏显示令牌（***+末 4 位；不足 4 位整体 ***）。
+func maskSecret(s string) string {
+	if len(s) <= 4 {
+		return "***"
+	}
+	return "***" + s[len(s)-4:]
+}
 
 func runSettings(args []string, stdout, stderr io.Writer) error {
 	paths, err := store.DefaultPaths()
@@ -21,7 +31,7 @@ func runSettings(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "用法: yardmaster settings <get|set> [键 值]；当前支持键：global_proxy、l1_classifier、l1_timeout_ms")
+		fmt.Fprintln(stderr, "用法: yardmaster settings <get|set> [键 值]；当前支持键：global_proxy、l1_classifier、l1_timeout_ms、listen、token")
 		return ErrUsage
 	}
 	switch args[0] {
@@ -41,6 +51,16 @@ func runSettings(args []string, stdout, stderr io.Writer) error {
 			fmt.Fprintf(stdout, "l1_classifier = %s\n", s.L1Classifier)
 		}
 		fmt.Fprintf(stdout, "l1_timeout_ms = %d\n", l1TimeoutOrDefault(s).Milliseconds())
+		listen := s.Listen
+		if listen == "" {
+			listen = "127.0.0.1:8317（默认）"
+		}
+		fmt.Fprintf(stdout, "listen = %s\n", listen)
+		if s.Token == "" {
+			fmt.Fprintln(stdout, "token = （空，仅本机使用可留空）")
+		} else {
+			fmt.Fprintf(stdout, "token = %s\n", maskSecret(s.Token))
+		}
 		return nil
 	case "set":
 		fs := flag.NewFlagSet("settings set", flag.ContinueOnError)
@@ -78,8 +98,28 @@ func runSettings(args []string, stdout, stderr io.Writer) error {
 				return ErrUsage
 			}
 			s.L1TimeoutMS = n
+		case "listen":
+			if val != "" {
+				if _, _, err := net.SplitHostPort(val); err != nil {
+					fmt.Fprintf(stderr, "listen 须为 host:port 形式: %v\n", err)
+					return ErrUsage
+				}
+			}
+			s.Listen = val
+		case "token":
+			s.Token = val
 		default:
-			fmt.Fprintf(stderr, "不支持的设置键 %q；当前支持：global_proxy、l1_classifier、l1_timeout_ms\n", key)
+			fmt.Fprintf(stderr, "不支持的设置键 %q；当前支持：global_proxy、l1_classifier、l1_timeout_ms、listen、token\n", key)
+			return ErrUsage
+		}
+		// 安全基线（F10）：非回环监听必须带令牌（M2-W5，serve 拒启的
+		// 同一规则提前到保存口拦截）。
+		listen := s.Listen
+		if listen == "" {
+			listen = gateway.DefaultAddr
+		}
+		if err := gateway.ValidateSecurity(listen, s.Token); err != nil {
+			fmt.Fprintln(stderr, err)
 			return ErrUsage
 		}
 		if err := store.SaveSettings(paths, s); err != nil {
