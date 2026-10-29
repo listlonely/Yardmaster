@@ -8,74 +8,41 @@ permissions:
   contents: write # GitHub Release 上传产物
 
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - goos: linux
-            goarch: amd64
-            ext: ""
-            archive: tar.gz
-          - goos: linux
-            goarch: arm64
-            ext: ""
-            archive: tar.gz
-          - goos: windows
-            goarch: amd64
-            ext: .exe
-            archive: zip
+  release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      # 单 job 串行完成构建→打包→校验和→发布：消除跨 job artifact
+      # 传输的结构不确定性（曾两次在 SHA256SUMS 步骤失败且无日志可查）。
       - name: Build
         shell: bash
         run: |
           ver="${GITHUB_REF_NAME#v}"
-          mkdir -p dist
-          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
-            go build -trimpath -ldflags "-s -w -X agenthub/internal/app.Version=$ver" \
-            -o "dist/agenthub_${{ matrix.goos }}_${{ matrix.goarch }}${{ matrix.ext }}" \
-            ./cmd/agenthub
+          for t in linux/amd64: linux/arm64: windows/amd64:.exe; do
+            os=${t%%/*}; rest=${t#*/}; arch=${rest%%:*}; ext=${rest#*:}
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch \
+              go build -trimpath -ldflags "-s -w -X agenthub/internal/app.Version=$ver" \
+              -o "pack/agenthub_$os-$arch$ext" ./cmd/agenthub
+          done
       - name: Package
         shell: bash
         run: |
-          ver="${GITHUB_REF_NAME#v}"
-          dir="agenthub_${{ matrix.goos }}_${{ matrix.goarch }}"
-          mkdir -p "pack/$dir"
-          cp "dist/agenthub_${{ matrix.goos }}_${{ matrix.goarch }}${{ matrix.ext }}" "pack/$dir/agenthub${{ matrix.ext }}"
-          cp README.md "pack/$dir/"
           cd pack
-          case "${{ matrix.archive }}" in
-            tar.gz) tar czf "$dir.tar.gz" "$dir" ;;
-            zip) zip -qr "$dir.zip" "$dir" ;;
-          esac
-          cd ..
-      - uses: actions/upload-artifact@v4
-        with:
-          name: pack-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: pack/
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          path: pack
-          merge-multiple: true
-      - name: SHA256SUMS
-        shell: bash
-        run: |
-          cd pack
-          # download-artifact 合并后的嵌套深度不定：先把压缩包摊平再校验
-          find . -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec mv {} . \;
-          find . -mindepth 1 -type d -empty -delete
-          sha256sum agenthub_* > SHA256SUMS
+          for p in agenthub_linux-amd64 agenthub_linux-arm64 agenthub_windows-amd64.exe; do
+            base=${p%.exe}; base=${base#agenthub_} # linux-amd64 / windows-amd64
+            mkdir -p "agenthub_$base"
+            cp "$p" "agenthub_$base/agenthub${p#agenthub_$base}"
+            cp ../README.md "agenthub_$base/"
+          done
+          tar czf agenthub_linux-amd64.tar.gz agenthub_linux-amd64
+          tar czf agenthub_linux-arm64.tar.gz agenthub_linux-arm64
+          zip -qr agenthub_windows-amd64.zip agenthub_windows-amd64
+          rm -rf agenthub_linux-amd64 agenthub_linux-arm64 agenthub_windows-amd64
+          rm -f agenthub_linux-amd64 agenthub_linux-arm64 agenthub_windows-amd64.exe
+          sha256sum agenthub_*.tar.gz agenthub_*.zip > SHA256SUMS
           ls -l
       - name: GitHub Release
         uses: softprops/action-gh-release@v2
