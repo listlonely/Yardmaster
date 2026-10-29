@@ -49,9 +49,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - uses: golangci/golangci-lint-action@v6
+      - uses: golangci/golangci-lint-action@v7
         with:
           # 锁定与 go.mod（go 1.27）匹配的版本：旧版 golangci-lint 无法
-          # 加载更高 Go 版本的模块（load 失败 exit 3）。
+          # 加载更高 Go 版本的模块（load 失败 exit 3）；golangci-lint v2
+          # 需要 action v7。
           version: v2.15
           args: --timeout 5m
