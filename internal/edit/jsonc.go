@@ -93,6 +93,48 @@ func (d *JSONCDoc) Bytes() []byte {
 	return d.src
 }
 
+// Get 读取 path 指向的值（标量：string/bool/json.Number）。
+// 漂移检测（F5）用；不存在返回 (nil, false)。
+func (d *JSONCDoc) Get(path []string) (any, bool) {
+	if len(path) == 0 {
+		return nil, false
+	}
+	if err := d.ensureFresh(); err != nil {
+		return nil, false
+	}
+	cur := d.root
+	for _, k := range path {
+		if cur.kind != 'o' {
+			return nil, false
+		}
+		idx := findMember(cur, k)
+		if idx < 0 {
+			return nil, false
+		}
+		cur = cur.members[idx].node
+	}
+	if cur.kind != 's' {
+		return nil, false
+	}
+	var v any
+	dec := json.NewDecoder(bytes.NewReader(d.src[cur.start:cur.end]))
+	dec.UseNumber()
+	if err := dec.Decode(&v); err != nil {
+		return nil, false
+	}
+	return v, true
+}
+
+// GetJSONC 一次性助手：从 data 读取 path 的值。
+func GetJSONC(data []byte, path []string) (any, bool, error) {
+	d, err := ParseJSONC(data)
+	if err != nil {
+		return nil, false, err
+	}
+	v, ok := d.Get(path)
+	return v, ok, nil
+}
+
 // SetJSONC 一次性助手：在 data 中设置键并返回新内容。
 func SetJSONC(data []byte, path []string, value any) ([]byte, error) {
 	d, err := ParseJSONC(data)

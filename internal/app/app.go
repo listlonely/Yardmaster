@@ -39,8 +39,10 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		return runProvider(args[1:], stdout, stderr)
 	case "settings":
 		return runSettings(args[1:], stdout, stderr)
+	case "agents":
+		return runAgents(args[1:], stdout, stderr)
 	default:
-		fmt.Fprintf(stderr, "未知子命令 %q；可用：serve、version、provider、settings\n", args[0])
+		fmt.Fprintf(stderr, "未知子命令 %q；可用：serve、version、provider、settings、agents\n", args[0])
 		return ErrUsage
 	}
 }

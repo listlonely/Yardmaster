@@ -35,6 +35,12 @@ func (p Paths) TraceDir() string { return filepath.Join(p.AppDir, "trace") }
 // IntentsPath 返回 intents.json 路径（用户自定义识别策略，PRD F8）。
 func (p Paths) IntentsPath() string { return filepath.Join(p.AppDir, "intents.json") }
 
+// AppliedPath 返回 applied.json 路径（接线审计记录，F4/F5/F10）。
+func (p Paths) AppliedPath() string { return filepath.Join(p.AppDir, "applied.json") }
+
+// StashDir 返回配置备份目录（断开还原用，F4）。
+func (p Paths) StashDir() string { return filepath.Join(p.AppDir, "stash") }
+
 // SaveJSON 以缩进 JSON 原子写入 v（经 edit.WriteAtomic，0600）。
 func SaveJSON(path string, v any) error {
 	data, err := json.MarshalIndent(v, "", "  ")
