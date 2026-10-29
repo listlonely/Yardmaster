@@ -222,8 +222,8 @@ func (m *Manager) Wire(def Def, model string) (WiringRecord, error) {
 	rec := WiringRecord{
 		Agent: def.ID, WiredAt: time.Now().Format(time.RFC3339),
 		Addr: m.Addr, Key: key, Model: model,
-		Files:  []appliedFile{{Original: path, Stash: stashPath}},
-		Ops:    ops,
+		Files: []appliedFile{{Original: path, Stash: stashPath}},
+		Ops:   ops,
 	}
 	applied, err := m.loadApplied()
 	if err != nil {

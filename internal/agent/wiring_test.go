@@ -35,10 +35,10 @@ func newManager(t *testing.T) *Manager {
 	return &Manager{Paths: paths, Addr: "http://127.0.0.1:8317"}
 }
 
-func claudeDef() Def    { def, _ := ByID("claude-code"); return def }
-func codexDef() Def     { def, _ := ByID("codex"); return def }
-func geminiDef() Def    { def, _ := ByID("gemini-cli"); return def }
-func opencodeDef() Def  { def, _ := ByID("opencode"); return def }
+func claudeDef() Def   { def, _ := ByID("claude-code"); return def }
+func codexDef() Def    { def, _ := ByID("codex"); return def }
+func geminiDef() Def   { def, _ := ByID("gemini-cli"); return def }
+func opencodeDef() Def { def, _ := ByID("opencode"); return def }
 
 func TestWireUnwireClaudeCodeRoundTrip(t *testing.T) {
 	m := newManager(t)

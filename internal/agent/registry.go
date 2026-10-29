@@ -15,7 +15,7 @@ import (
 
 // Op 是对目标配置的一次键写入；JSON 格式用 JSONPath，TOML 用表+键。
 type Op struct {
-	Desc      string `json:"desc"`
+	Desc      string   `json:"desc"`
 	JSONPath  []string `json:"json_path,omitempty"`
 	TOMLTable []string `json:"toml_table,omitempty"`
 	TOMLKey   string   `json:"toml_key,omitempty"`

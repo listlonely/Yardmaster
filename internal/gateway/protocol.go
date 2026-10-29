@@ -56,14 +56,14 @@ type ChatMessage struct {
 
 // ChatRequest 是 /v1/chat/completions 请求。
 type ChatRequest struct {
-	Model       string      `json:"model"`
+	Model       string        `json:"model"`
 	Messages    []ChatMessage `json:"messages"`
-	Stream      bool        `json:"stream,omitempty"`
-	MaxTokens   int         `json:"max_tokens,omitempty"`
-	Temperature *float64    `json:"temperature,omitempty"`
-	TopP        *float64    `json:"top_p,omitempty"`
-	Stop        any         `json:"stop,omitempty"`
-	Tools       []ChatTool  `json:"tools,omitempty"`
+	Stream      bool          `json:"stream,omitempty"`
+	MaxTokens   int           `json:"max_tokens,omitempty"`
+	Temperature *float64      `json:"temperature,omitempty"`
+	TopP        *float64      `json:"top_p,omitempty"`
+	Stop        any           `json:"stop,omitempty"`
+	Tools       []ChatTool    `json:"tools,omitempty"`
 }
 
 // ChatChoice 是流式/非流响应的通用选择项。
@@ -95,9 +95,9 @@ type ChatUsage struct {
 type Block struct {
 	Type      string `json:"type"` // text / tool_use / tool_result
 	Text      string `json:"text,omitempty"`
-	ID        string `json:"id,omitempty"`     // tool_use
-	Name      string `json:"name,omitempty"`   // tool_use
-	Input     any    `json:"input,omitempty"`  // tool_use
+	ID        string `json:"id,omitempty"`          // tool_use
+	Name      string `json:"name,omitempty"`        // tool_use
+	Input     any    `json:"input,omitempty"`       // tool_use
 	ToolUseID string `json:"tool_use_id,omitempty"` // tool_result
 	Content   any    `json:"content,omitempty"`     // tool_result
 }
@@ -336,7 +336,7 @@ func writeErr(p ClientProto, status int, msg string) (int, []byte) {
 	var body []byte
 	if p == ProtoMessages {
 		body, _ = json.Marshal(map[string]any{
-			"type": "error",
+			"type":  "error",
 			"error": map[string]any{"type": "api_error", "message": msg},
 		})
 	} else {

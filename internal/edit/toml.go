@@ -76,10 +76,10 @@ func GetTOML(data []byte, table []string, key string) (any, bool) {
 // ---------- 内部 ----------
 
 type tomlSection struct {
-	found     bool
-	headerIdx int // 表头行；顶层为 -1
-	bodyStart int // 键区起始（顶层 0，有表头则 headerIdx+1）
-	bodyEnd   int // 键区结束（下一表头行或文件尾）
+	found      bool
+	headerIdx  int // 表头行；顶层为 -1
+	bodyStart  int // 键区起始（顶层 0，有表头则 headerIdx+1）
+	bodyEnd    int // 键区结束（下一表头行或文件尾）
 	lastKeyIdx int
 }
 

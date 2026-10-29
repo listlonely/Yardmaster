@@ -90,7 +90,7 @@ func TestProviderProbePersistsModels(t *testing.T) {
 	}
 	var cfg struct {
 		Providers []struct {
-			ID     string   `json:"id"`
+			ID     string `json:"id"`
 			Models []struct {
 				ID string `json:"id"`
 			} `json:"models"`

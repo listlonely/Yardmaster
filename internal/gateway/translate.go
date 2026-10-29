@@ -181,11 +181,11 @@ func chatResponseToMessages(mr *MessagesRequest, cc *ChatChunk) *MessagesRespons
 type chatToMsgsStream struct {
 	model      string
 	started    bool
-	curBlock   int  // 当前打开的 anthropic 块索引；-1 无
+	curBlock   int // 当前打开的 anthropic 块索引；-1 无
 	curIsText  bool
 	textOpen   bool
 	nextBlock  int
-	toolBlocks map[int]int    // chat tool index → anthropic 块索引
+	toolBlocks map[int]int // chat tool index → anthropic 块索引
 	stopReason string
 	out        []byte
 }
