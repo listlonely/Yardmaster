@@ -26,8 +26,11 @@
 | :-- | :-- | :-- | :-- | :-- |
 | openai-chat | `POST /v1/chat/completions` | `/chat/completions` | `Authorization: Bearer` | M1 起全功能 |
 | anthropic-messages | `POST /v1/messages` | `/v1/messages` | `x-api-key`（OAuth 走 Bearer+beta） | M1 起全功能 |
-| openai-responses | `POST /v1/responses` | `/responses` | `Authorization: Bearer` | W1 骨架：同协议透传可跑；跨协议翻译 W2 |
-| gemini | —（W3） | `:generateContent`（含模型名，W3） | API key / OAuth（W3 核实） | W1 仅枚举可配置，fail-closed 不参与路由 |
+| openai-responses | `POST /v1/responses` | `/responses` | `Authorization: Bearer` | W2 交付：双向翻译 + 流式事件 + 工具调用 |
+| gemini | `POST /v1beta/models/{model}:generateContent / :streamGenerateContent` | `/v1beta/models/{m}:generateContent(:streamGenerateContent?alt=sse)`（模型名在 URL） | `x-goog-api-key` | W3 交付：入站 + 上游 + 双向翻译 |
+
+> W4 起 translateRequest/translateResponse 已重构为两步式（客户端→
+> ChatRequest→上游），4×4 矩阵测试见 `m4w4_test.go`（32 组合全绿）。
 
 ## 四协议语义差异对照（翻译矩阵的差异源）
 

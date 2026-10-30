@@ -8,7 +8,7 @@ Agent ──▶ 127.0.0.1:8317 ──▶ Yardmaster ──▶ 按任务/额度/�
 
 ## 核心能力
 
-- **双协议网关**：OpenAI Chat Completions ↔ Anthropic Messages 双向解析与翻译（文本 + 工具，流式/非流式）
+- **四协议网关（v0.4.0）**：OpenAI Chat / OpenAI Responses / Anthropic Messages / Google Gemini 四协议任一入站可路由至任意协议上游（4×4 互转矩阵，文本 + 工具调用，流式/非流式）；以 Chat 为内部枢纽，每协议只写一对适配器
 - **Agent 接线**：声明式改写 Agent 配置指向网关（预览 diff、备份栈、一键还原、漂移检测）
 - **订阅账号（OAuth）**：一键导入 Claude Code / Codex / Gemini CLI 的已登录会话凭证（加密存储：Windows DPAPI / 其余 0600），到期自动续期（主动扫描 + 401 被动刷新），.providers.json 永不落 token
 - **厂商预设**：`provider add -preset glm-coding` 等 13 个预设开箱即用；GLM 1113 自动纠偏到 Coding Plan 端点；Zhipu 200 伪装拒绝识别；认证头（x-api-key/Bearer）自动学习
@@ -22,6 +22,7 @@ Agent ──▶ 127.0.0.1:8317 ──▶ Yardmaster ──▶ 按任务/额度/�
 - **代理挂载**：全局 → Provider → 账号三级继承（http/https/socks5/socks5h/direct），HTTP/2 半死连接健康检查
 - **局域网共享**：`listen` + 强制令牌（token）；控制台/API/推断端点统一过闸，默认仅本机
 - **桌面托盘**：`serve -tray` 系统托盘常驻（打开控制台/退出，纯 Go 无 cgo）；启动自动打开控制台（`-no-open` 可关）
+- **OTLP traces 导出（v0.4.0，默认关）**：settings.json `otel{enabled,endpoint,headers}` 开启后，决策 trace 映射 OTel span（gen_ai.* 语义约定）推送 OTLP-HTTP 兼容后端（Jaeger/Tempo/Langfuse），手写 JSON 零 SDK 依赖，失败只降级不阻断推理
 
 ## 安装
 
