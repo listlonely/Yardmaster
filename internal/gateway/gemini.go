@@ -18,9 +18,9 @@ import (
 // GeminiPart 是 contents[].parts 的元素。文本/工具调用/工具结果三形态；
 // thought:true 与 inlineData 等未建模形态忽略（可砍项纪律）。
 type GeminiPart struct {
-	Text             string          `json:"text,omitempty"`
-	FunctionCall     *GeminiFnCall   `json:"functionCall,omitempty"`
-	FunctionResponse *GeminiFnResp   `json:"functionResponse,omitempty"`
+	Text             string        `json:"text,omitempty"`
+	FunctionCall     *GeminiFnCall `json:"functionCall,omitempty"`
+	FunctionResponse *GeminiFnResp `json:"functionResponse,omitempty"`
 }
 
 type GeminiFnCall struct {
@@ -53,11 +53,11 @@ type GeminiTool struct {
 // GeminiRequest 是 generateContent 请求（model/stream 在 URL，不在 body；
 // Model 为网关侧注入的非序列化字段，供翻译到其他协议时使用）。
 type GeminiRequest struct {
-	Contents           []GeminiContent `json:"contents,omitempty"`
-	SystemInstruction  *GeminiContent  `json:"systemInstruction,omitempty"`
-	Tools              []GeminiTool    `json:"tools,omitempty"`
-	GenerationConfig   *GeminiGenCfg   `json:"generationConfig,omitempty"`
-	Model              string          `json:"-"`
+	Contents          []GeminiContent `json:"contents,omitempty"`
+	SystemInstruction *GeminiContent  `json:"systemInstruction,omitempty"`
+	Tools             []GeminiTool    `json:"tools,omitempty"`
+	GenerationConfig  *GeminiGenCfg   `json:"generationConfig,omitempty"`
+	Model             string          `json:"-"`
 }
 
 type GeminiGenCfg struct {
@@ -398,141 +398,151 @@ func chatResponseToGemini(cc *ChatChunk) *GeminiResponse {
 	return gr
 }
 
-// ---------- 流式翻译：Chat chunk → Gemini SSE ----------
+// ---------- 流式翻译：事件 → 客户端 Gemini SSE（M5-W1 encoder） ----------
 
-// chatToGeminiStream 把 chat chunk 流编码为 Gemini 流式事件（每事件一个
-// data JSON，无 [DONE]——Google SDK 兼容，Magpie 同款）。
-type chatToGeminiStream struct {
-	out    []byte
-	parts  []GeminiPart
-	finish string
-	usage  *ChatUsage
+// geminiEncoder 把 gwEvent 编码为 Gemini 流式事件（每事件一个 data JSON，
+// 无 [DONE]——Google SDK 兼容，Magpie 同款；承接 M4 chatToGeminiStream）。
+// 工具调用在参数到位时输出 functionCall part（名字先到则缓存）。
+type geminiEncoder struct {
+	out       *sseOut
+	parts     []GeminiPart
+	finish    string
+	usage     *gwUsage
+	toolNames map[int]string // 顺序号 → 工具名（参数到位时取用）
+	toolEmits map[int]bool   // 顺序号 → 是否已输出过 part
 }
 
-func newChatToGeminiStream() *chatToGeminiStream { return &chatToGeminiStream{} }
-
-func (t *chatToGeminiStream) Feed(data []byte) error {
-	var cc ChatChunk
-	if err := json.Unmarshal(data, &cc); err != nil {
-		return err
-	}
-	if cc.Usage != nil {
-		t.usage = cc.Usage
-	}
-	for _, ch := range cc.Choices {
-		if ch.FinishReason != "" {
-			t.finish = ch.FinishReason
-		}
-		if s, ok := ch.Delta.Content.(string); ok && s != "" {
-			t.emitParts([]GeminiPart{{Text: s}})
-			t.parts = append(t.parts, GeminiPart{Text: s})
-		}
-		for _, tc := range ch.Delta.ToolCalls {
-			var v any
-			if tc.Function.Arguments == "" || json.Unmarshal([]byte(tc.Function.Arguments), &v) != nil {
-				v = map[string]any{}
-			}
-			t.emitParts([]GeminiPart{{FunctionCall: &GeminiFnCall{Name: tc.Function.Name, Args: v}}})
-			t.parts = append(t.parts, GeminiPart{FunctionCall: &GeminiFnCall{Name: tc.Function.Name, Args: v}})
-		}
-	}
-	return nil
+func newGeminiEncoder(out *sseOut) *geminiEncoder {
+	return &geminiEncoder{out: out, toolNames: map[int]string{}, toolEmits: map[int]bool{}}
 }
 
-func (t *chatToGeminiStream) emitParts(parts []GeminiPart) {
+func (t *geminiEncoder) emitParts(parts []GeminiPart) {
 	chunk := GeminiResponse{Candidates: []GeminiCandidate{{Content: GeminiContent{Role: "model", Parts: parts}}}}
-	b, err := json.Marshal(chunk)
-	if err != nil {
-		return
-	}
-	t.out = appendSSE(t.out, "", b)
+	t.parts = append(t.parts, parts...)
+	t.out.emit("", chunk)
 }
 
-// Done 输出终止事件（finishReason + usageMetadata；无 [DONE]）。
-func (t *chatToGeminiStream) Done() []byte {
+// fnPart 输出一个 functionCall part 并累积（args 解析失败/为空回退 {}）。
+func (t *geminiEncoder) fnPart(idx int, args string) {
+	var v any
+	if args == "" || json.Unmarshal([]byte(args), &v) != nil {
+		v = map[string]any{}
+	}
+	t.toolEmits[idx] = true
+	t.emitParts([]GeminiPart{{FunctionCall: &GeminiFnCall{Name: t.toolNames[idx], Args: v}}})
+}
+
+func (t *geminiEncoder) Encode(ev gwEvent) {
+	switch ev.kind {
+	case evText:
+		t.emitParts([]GeminiPart{{Text: ev.text}})
+	case evToolStart:
+		if ev.name != "" {
+			t.toolNames[ev.idx] = ev.name
+		}
+	case evToolArgs:
+		if ev.text != "" {
+			t.fnPart(ev.idx, ev.text)
+		}
+	case evToolDone:
+		if !t.toolEmits[ev.idx] { // 名字先到、始终无参数：补空参 part
+			t.fnPart(ev.idx, "")
+		}
+	case evStop:
+		if ev.stop != "" {
+			t.finish = ev.stop
+		}
+	case evUsage:
+		u := ev.usage
+		t.usage = &u
+	}
+}
+
+// Finish 输出终止事件（finishReason + usageMetadata；无 [DONE]）。
+func (t *geminiEncoder) Finish() {
+	// 名字先到但流戛然而止的工具：补空参 part（防丢调用）。
+	for idx := range t.toolNames {
+		if !t.toolEmits[idx] {
+			t.fnPart(idx, "")
+		}
+	}
 	final := GeminiResponse{Candidates: []GeminiCandidate{{
 		Content: GeminiContent{Role: "model", Parts: nil}, FinishReason: chatFinishToGemini(t.finish),
 	}}}
 	if t.usage != nil {
 		final.UsageMeta = &GeminiUsage{
-			PromptTokenCount: t.usage.PromptTokens, CandidatesTokenCount: t.usage.CompletionTokens,
+			PromptTokenCount: t.usage.prompt, CandidatesTokenCount: t.usage.completion,
 		}
 	}
-	b, _ := json.Marshal(final)
-	t.out = appendSSE(t.out, "", b)
-	return t.out
+	t.out.emit("", final)
 }
 
-// ---------- 流式翻译：Gemini SSE → Chat chunk ----------
+// ---------- 流式翻译：上游 Gemini SSE → 事件（M5-W1 decoder） ----------
 
-type geminiToChatStream struct {
-	out       []byte
-	model     string
+// geminiDecoder 解析上游 Gemini 事件（承接 M4 geminiToChatStream：文本
+// 并接、functionCall 的 Index 恒 0（多调用按参数级联——上游形状如此）、
+// finishReason/usageMetadata 提取）。工具顺序号沿用 0（与 M4 chat chunk
+// tool_calls.index=0 行为一致）。
+type geminiDecoder struct {
 	hasTool   bool
 	sawFinish bool
 }
 
-func newGeminiToChatStream() *geminiToChatStream { return &geminiToChatStream{} }
+func newGeminiDecoder() *geminiDecoder { return &geminiDecoder{} }
 
-func (t *geminiToChatStream) Feed(ev sseEvent) error {
+func (d *geminiDecoder) Feed(ev sseEvent) ([]gwEvent, error) {
 	if string(ev.Data) == "[DONE]" || len(ev.Data) == 0 {
-		return nil
+		return nil, nil
 	}
 	var gr GeminiResponse
 	if err := json.Unmarshal(ev.Data, &gr); err != nil {
-		return err
+		return nil, err
 	}
-	var finish string
+	var out []gwEvent
 	for _, cand := range gr.Candidates {
-		var delta ChatMessage
 		var texts []string
+		first := true
 		for _, p := range cand.Content.Parts {
 			if p.Text != "" {
 				texts = append(texts, p.Text)
 			}
 			if p.FunctionCall != nil {
-				t.hasTool = true
+				d.hasTool = true
 				args, _ := json.Marshal(p.FunctionCall.Args)
-				delta.ToolCalls = append(delta.ToolCalls, ChatToolCall{
-					Type: "function", ID: "gemini-" + p.FunctionCall.Name,
-					Function: ChatFunction{Name: p.FunctionCall.Name, Arguments: orDefault(string(args), "{}")},
+				if first {
+					// 首个调用开 idx 0 的工具事件；后续调用仅追加参数（M4 等价）
+					out = append(out, gwEvent{
+						kind: evToolStart, idx: 0,
+						id: "gemini-" + p.FunctionCall.Name, name: p.FunctionCall.Name,
+					})
+					first = false
+				}
+				out = append(out, gwEvent{
+					kind: evToolArgs, idx: 0, text: orDefault(string(args), "{}"),
 				})
 			}
 		}
-		delta.Content = strings.Join(texts, "")
+		if s := strings.Join(texts, ""); s != "" {
+			out = append(out, gwEvent{kind: evText, text: s})
+		}
 		if cand.FinishReason != "" {
-			finish = geminiStopToChat(cand.FinishReason, t.hasTool)
-			t.sawFinish = true
+			d.sawFinish = true
+			out = append(out, gwEvent{kind: evStop, stop: geminiStopToChat(cand.FinishReason, d.hasTool)})
 		}
-		chunk := &ChatChunk{Choices: []ChatChoice{{Delta: delta, FinishReason: finish}}}
-		if gr.UsageMeta != nil {
-			chunk.Usage = &ChatUsage{
-				PromptTokens:     gr.UsageMeta.PromptTokenCount,
-				CompletionTokens: gr.UsageMeta.CandidatesTokenCount,
-			}
-		}
-		t.emitChat(chunk)
+	}
+	if gr.UsageMeta != nil {
+		out = append(out, gwEvent{kind: evUsage, usage: gwUsage{
+			prompt: gr.UsageMeta.PromptTokenCount, completion: gr.UsageMeta.CandidatesTokenCount,
+		}})
+	}
+	return out, nil
+}
+
+// Done：Gemini 流以最后一个含 finishReason 的事件收束；未出现过则补
+// stop（chat/Messages/Responses 客户端语义的终止兜底）。
+func (d *geminiDecoder) Done() []gwEvent {
+	if !d.sawFinish {
+		return []gwEvent{{kind: evStop, stop: "stop"}}
 	}
 	return nil
-}
-
-func (t *geminiToChatStream) emitChat(cc *ChatChunk) {
-	cc.Object = "chat.completion.chunk"
-	cc.Model = t.model
-	b, err := json.Marshal(cc)
-	if err != nil {
-		return
-	}
-	t.out = appendSSE(t.out, "", b)
-}
-
-func (t *geminiToChatStream) Done() []byte {
-	// Gemini 流以最后一个含 finishReason 的事件收束；若未出现过终止，
-	// 补一个空 delta 终止 chunk + [DONE]（chat/Messages 客户端语义）。
-	if !t.sawFinish {
-		cc := &ChatChunk{Choices: []ChatChoice{{Delta: ChatMessage{}, FinishReason: "stop"}}}
-		t.emitChat(cc)
-	}
-	t.out = append(t.out, []byte("data: [DONE]\n\n")...)
-	return t.out
 }

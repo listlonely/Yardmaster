@@ -5,7 +5,6 @@
 package gateway
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -174,32 +173,29 @@ func chatResponseToMessages(mr *MessagesRequest, cc *ChatChunk) *MessagesRespons
 	return ms
 }
 
-// ---------- 流式翻译：上游 Chat SSE → 客户端 Messages SSE ----------
+// ---------- 流式翻译：事件 → 客户端 Messages SSE（M5-W1 encoder） ----------
 
-// chatToMsgsStream 是无状态推进器：Feed 一条上游 data，吐出若干客户端
-// SSE 事件；流结束后调 Done 收尾。
-type chatToMsgsStream struct {
-	model      string
-	started    bool
-	curBlock   int // 当前打开的 anthropic 块索引；-1 无
-	curIsText  bool
-	textOpen   bool
-	nextBlock  int
-	toolBlocks map[int]int // chat tool index → anthropic 块索引
-	stopReason string
-	out        []byte
+// msgsEncoder 把 gwEvent 编码为 anthropic SSE 事件（承接 M4 chatToMsgsStream
+// 的块状态机：text/tool_use 块开关、块索引、stop_reason 映射）。
+type msgsEncoder struct {
+	out       *sseOut
+	model     string
+	started   bool
+	curBlock  int // 当前打开的 anthropic 块索引；-1 无
+	curIsText bool
+	textOpen  bool
+	nextBlock int
+	toolBlks  map[int]int // 事件工具顺序号 → anthropic 块索引
+	stopMsg   string
 }
 
-func newChatToMsgsStream() *chatToMsgsStream {
-	return &chatToMsgsStream{curBlock: -1, toolBlocks: map[int]int{}}
+func newMsgsEncoder(out *sseOut) *msgsEncoder {
+	return &msgsEncoder{out: out, curBlock: -1, toolBlks: map[int]int{}}
 }
 
-func (t *chatToMsgsStream) emit(name string, v any) {
-	b, _ := json.Marshal(v)
-	t.out = appendSSE(t.out, name, b)
-}
+func (t *msgsEncoder) emit(name string, v any) { t.out.emit(name, v) }
 
-func (t *chatToMsgsStream) openBlock(kind string, blk *Block) {
+func (t *msgsEncoder) openBlock(kind string, blk *Block) {
 	if t.curBlock >= 0 {
 		t.emit("content_block_stop", map[string]any{"type": "content_block_stop", "index": t.curBlock})
 	}
@@ -214,7 +210,7 @@ func (t *chatToMsgsStream) openBlock(kind string, blk *Block) {
 	}
 }
 
-func (t *chatToMsgsStream) start() {
+func (t *msgsEncoder) start() {
 	if t.started {
 		return
 	}
@@ -223,177 +219,144 @@ func (t *chatToMsgsStream) start() {
 	t.emit("message_start", map[string]any{"type": "message_start", "message": msg})
 }
 
-// Feed 处理一条上游 chat SSE data（不含 "data:" 前缀；"[DONE]" 交由 Done）。
-func (t *chatToMsgsStream) Feed(data []byte) error {
-	if string(bytes.TrimSpace(data)) == "[DONE]" {
-		return nil
-	}
-	var chunk ChatChunk
-	if err := json.Unmarshal(data, &chunk); err != nil {
-		return fmt.Errorf("翻译上游 chat 块: %w", err)
-	}
-	if t.model == "" {
-		t.model = chunk.Model
-	}
-	if len(chunk.Choices) == 0 {
-		return nil
-	}
-	delta := chunk.Choices[0].Delta
-	t.start()
-	if delta.Content != nil {
-		if s, ok := delta.Content.(string); ok && s != "" {
-			if !t.textOpen || !t.curIsText {
-				t.openBlock("text", nil)
-			}
-			t.emit("content_block_delta", map[string]any{
-				"type": "content_block_delta", "index": t.curBlock,
-				"delta": map[string]any{"type": "text_delta", "text": s},
-			})
+func (t *msgsEncoder) Encode(ev gwEvent) {
+	switch ev.kind {
+	case evStart:
+		if t.model == "" {
+			t.model = ev.model
 		}
-	}
-	for _, tc := range delta.ToolCalls {
-		blkIdx, ok := t.toolBlocks[tc.Index]
-		if !ok {
-			blkIdx = t.nextBlock
-			t.toolBlocks[tc.Index] = blkIdx
-			blk := &Block{Type: "tool_use", ID: tc.ID, Name: tc.Function.Name, Input: map[string]any{}}
+		t.start()
+	case evText:
+		t.start() // 惰性启动：上游无显式开始事件时（resp/gemini），首个内容前发 message_start
+		if !t.textOpen || !t.curIsText {
+			t.openBlock("text", nil)
+		}
+		t.emit("content_block_delta", map[string]any{
+			"type": "content_block_delta", "index": t.curBlock,
+			"delta": map[string]any{"type": "text_delta", "text": ev.text},
+		})
+	case evToolStart:
+		t.start() // 惰性启动：工具调用先于文本时同样需要 message_start 在首
+		if _, ok := t.toolBlks[ev.idx]; !ok {
+			t.toolBlks[ev.idx] = t.nextBlock
+			blk := &Block{Type: "tool_use", ID: ev.id, Name: ev.name, Input: map[string]any{}}
 			t.openBlock("tool_use", blk)
 		}
-		if tc.Function.Arguments != "" {
+	case evToolArgs:
+		t.start()
+		if blkIdx, ok := t.toolBlks[ev.idx]; ok && ev.text != "" {
 			t.emit("content_block_delta", map[string]any{
 				"type": "content_block_delta", "index": blkIdx,
-				"delta": map[string]any{"type": "input_json_delta", "partial_json": tc.Function.Arguments},
+				"delta": map[string]any{"type": "input_json_delta", "partial_json": ev.text},
 			})
 		}
+	case evStop:
+		if ev.stop != "" {
+			t.stopMsg = chatFinishToMsg(ev.stop)
+		}
 	}
-	if fr := chunk.Choices[0].FinishReason; fr != "" {
-		t.stopReason = chatFinishToMsg(fr)
-	}
-	return nil
 }
 
-// Done 收尾：关闭打开块，输出 message_delta/message_stop。
-func (t *chatToMsgsStream) Done() []byte {
+// Finish 收尾：关闭打开块，输出 message_delta/message_stop。
+func (t *msgsEncoder) Finish() {
 	t.start()
 	if t.curBlock >= 0 {
 		t.emit("content_block_stop", map[string]any{"type": "content_block_stop", "index": t.curBlock})
 		t.curBlock = -1
 		t.textOpen = false
 	}
-	if t.stopReason == "" {
-		t.stopReason = "end_turn"
+	if t.stopMsg == "" {
+		t.stopMsg = "end_turn"
 	}
 	t.emit("message_delta", map[string]any{
 		"type":  "message_delta",
-		"delta": map[string]any{"stop_reason": t.stopReason},
+		"delta": map[string]any{"stop_reason": t.stopMsg},
 		"usage": map[string]any{"output_tokens": 0},
 	})
 	t.emit("message_stop", map[string]any{"type": "message_stop"})
-	out := t.out
-	t.out = nil
-	return out
 }
 
-// ---------- 流式翻译：上游 Messages SSE → 客户端 Chat SSE ----------
+// ---------- 流式翻译：上游 Messages SSE → 事件（M5-W1 decoder） ----------
 
-// msgsToChatStream 同样是无状态推进器。
-type msgsToChatStream struct {
+// msgsDecoder 解析上游 anthropic SSE 事件（承接 M4 msgsToChatStream 的
+// 块索引→顺序号归一与 stop 映射）。
+type msgsDecoder struct {
 	started   bool
 	stopChat  string
-	toolIdx   map[int]int // anthropic 块索引 → chat tool index
+	toolIdx   map[int]int // anthropic 块索引 → 事件工具顺序号
 	toolCount int
-	out       []byte
 }
 
-func newMsgsToChatStream() *msgsToChatStream {
-	return &msgsToChatStream{toolIdx: map[int]int{}}
-}
-
-func (t *msgsToChatStream) emitChunk(delta ChatMessage, finish string) {
-	chunk := map[string]any{
-		"object": "chat.completion.chunk",
-		"choices": []any{map[string]any{
-			"index":         0,
-			"delta":         delta,
-			"finish_reason": finish,
-		}},
-	}
-	b, _ := json.Marshal(chunk)
-	t.out = append(t.out, []byte("data: ")...)
-	t.out = append(t.out, b...)
-	t.out = append(t.out, []byte("\n\n")...)
-}
+func newMsgsDecoder() *msgsDecoder { return &msgsDecoder{toolIdx: map[int]int{}} }
 
 // Feed 处理一条上游 anthropic SSE 事件（name/data 成对）。
-func (t *msgsToChatStream) Feed(ev sseEvent) error {
-	if string(bytes.TrimSpace(ev.Data)) == "" {
-		return nil
+func (d *msgsDecoder) Feed(ev sseEvent) ([]gwEvent, error) {
+	if len(ev.Data) == 0 {
+		return nil, nil
 	}
 	var e msgEvent
 	if err := json.Unmarshal(ev.Data, &e); err != nil {
-		return fmt.Errorf("翻译上游 messages 事件: %w", err)
+		return nil, fmt.Errorf("翻译上游 messages 事件: %w", err)
 	}
 	if e.Type == "" && ev.Name != "" {
 		e.Type = ev.Name
 	}
+	var out []gwEvent
 	switch e.Type {
 	case "message_start":
-		if !t.started {
-			t.started = true
-			t.emitChunk(ChatMessage{Role: "assistant"}, "")
+		if !d.started {
+			d.started = true
+			model := ""
+			if e.Message != nil {
+				model = e.Message.Model
+			}
+			out = append(out, gwEvent{kind: evStart, model: model})
 		}
 	case "content_block_start":
 		if e.ContentBlock != nil && e.ContentBlock.Type == "tool_use" {
-			idx := t.toolCount
-			t.toolCount++
-			t.toolIdx[e.Index] = idx
-			t.emitChunk(ChatMessage{ToolCalls: []ChatToolCall{{
-				Index: idx, ID: e.ContentBlock.ID, Type: "function",
-				Function: ChatFunction{Name: e.ContentBlock.Name},
-			}}}, "")
+			idx := d.toolCount
+			d.toolCount++
+			d.toolIdx[e.Index] = idx
+			out = append(out, gwEvent{kind: evToolStart, idx: idx, id: e.ContentBlock.ID, name: e.ContentBlock.Name})
 		}
 	case "content_block_delta":
 		switch e.Delta.Type {
 		case "text_delta":
 			if e.Delta.Text != "" {
-				t.emitChunk(ChatMessage{Content: e.Delta.Text}, "")
+				out = append(out, gwEvent{kind: evText, text: e.Delta.Text})
 			}
 		case "input_json_delta":
-			if idx, ok := t.toolIdx[e.Index]; ok && e.Delta.PartialJSON != "" {
-				t.emitChunk(ChatMessage{ToolCalls: []ChatToolCall{{
-					Index: idx, Type: "function",
-					Function: ChatFunction{Arguments: e.Delta.PartialJSON},
-				}}}, "")
+			if idx, ok := d.toolIdx[e.Index]; ok && e.Delta.PartialJSON != "" {
+				out = append(out, gwEvent{kind: evToolArgs, idx: idx, text: e.Delta.PartialJSON})
 			}
 		}
 	case "message_delta":
 		if e.Delta.StopReason != "" {
-			t.stopChat = msgStopToChat(e.Delta.StopReason)
+			d.stopChat = msgStopToChat(e.Delta.StopReason)
 		}
 	case "ping":
 		// 忽略
 	case "error":
-		return fmt.Errorf("上游流式错误: %s", func() string {
+		return nil, fmt.Errorf("上游流式错误: %s", func() string {
 			if e.Error != nil {
 				return e.Error.Message
 			}
 			return "unknown"
 		}())
 	}
-	return nil
+	return out, nil
 }
 
-// Done 收尾：输出 finish_reason 与 [DONE]。
-func (t *msgsToChatStream) Done() []byte {
-	if !t.started {
-		t.emitChunk(ChatMessage{Role: "assistant"}, "")
+// Done 收尾：未启动则补 start，输出终止事件（stop 兜底 stop）。
+func (d *msgsDecoder) Done() []gwEvent {
+	var out []gwEvent
+	if !d.started {
+		d.started = true
+		out = append(out, gwEvent{kind: evStart})
 	}
-	if t.stopChat == "" {
-		t.stopChat = "stop"
+	if d.stopChat == "" {
+		d.stopChat = "stop"
 	}
-	t.emitChunk(ChatMessage{}, t.stopChat)
-	t.out = append(t.out, []byte("data: [DONE]\n\n")...)
-	out := t.out
-	t.out = nil
+	out = append(out, gwEvent{kind: evStop, stop: d.stopChat})
 	return out
 }

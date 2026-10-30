@@ -293,20 +293,20 @@ func chatResponseToResponses(model string, cc *ChatChunk) *ResponsesResponse {
 	return rsp
 }
 
-// ---------- 流式翻译：Chat SSE → Responses 事件 ----------
+// ---------- 流式翻译：事件 → 客户端 Responses 事件（M5-W1 encoder） ----------
 
-// chatToRespStream 把上游 chat chunk 流编码为 Responses SSE 事件序列。
-// 结构对齐 chatToMsgsStream（Feed/out/Done），事件对照 protocol.md。
-type chatToRespStream struct {
-	out     []byte
+// respEncoder 把 gwEvent 编码为 Responses SSE 事件序列（承接 M4
+// chatToRespStream 的 item 状态机与 response.completed 收尾）。
+type respEncoder struct {
+	out     *sseOut
 	respID  string
 	itemSeq int              // 已开 item 计数（output_index 递增）
 	msgOpen bool             // message item 已 added
 	textAll strings.Builder  // 累积全文（output_text.done 用）
-	fcOpen  map[int]*fcState // chat tool_calls index → 状态
+	fcOpen  map[int]*fcState // 事件工具顺序号 → 状态
 	fcDone  []ResponsesOutputItem
 	finish  string
-	usage   *ChatUsage
+	usage   *gwUsage
 }
 
 type fcState struct {
@@ -317,41 +317,47 @@ type fcState struct {
 	outputIdx int
 }
 
-func newChatToRespStream() *chatToRespStream {
-	return &chatToRespStream{respID: "resp_" + traceID(time.Now()), fcOpen: map[int]*fcState{}}
+func newRespEncoder(out *sseOut) *respEncoder {
+	return &respEncoder{out: out, respID: "resp_" + traceID(time.Now()), fcOpen: map[int]*fcState{}}
 }
 
-// Feed 处理一条上游 chat chunk 的 data 体。
-func (t *chatToRespStream) Feed(data []byte) error {
-	var cc ChatChunk
-	if err := json.Unmarshal(data, &cc); err != nil {
-		return fmt.Errorf("解析 chat chunk: %w", err)
-	}
-	if cc.ID != "" {
-		t.respID = cc.ID
-	}
-	if cc.Usage != nil {
-		t.usage = cc.Usage
-	}
-	for _, ch := range cc.Choices {
-		if ch.FinishReason != "" {
-			t.finish = ch.FinishReason
+func (t *respEncoder) emit(name string, body map[string]any) {
+	body["type"] = name
+	t.out.emit(name, body)
+}
+
+func (t *respEncoder) Encode(ev gwEvent) {
+	switch ev.kind {
+	case evStart:
+		if ev.msgID != "" {
+			t.respID = ev.msgID
 		}
-		if s, ok := ch.Delta.Content.(string); ok && s != "" {
-			t.openMessage()
-			t.emit("response.output_text.delta", map[string]any{
-				"item_id": "msg_0", "output_index": 0, "content_index": 0, "delta": s,
+	case evText:
+		t.openMessage()
+		t.emit("response.output_text.delta", map[string]any{
+			"item_id": "msg_0", "output_index": 0, "content_index": 0, "delta": ev.text,
+		})
+		t.textAll.WriteString(ev.text)
+	case evToolStart:
+		t.toolStart(ev.idx, ev.id, ev.name)
+	case evToolArgs:
+		if st := t.fcOpen[ev.idx]; st != nil && ev.text != "" {
+			st.args.WriteString(ev.text)
+			t.emit("response.function_call_arguments.delta", map[string]any{
+				"item_id": st.itemID, "output_index": st.outputIdx, "delta": ev.text,
 			})
-			t.textAll.WriteString(s)
 		}
-		for _, tc := range ch.Delta.ToolCalls {
-			t.openFunctionCall(tc)
+	case evStop:
+		if ev.stop != "" {
+			t.finish = ev.stop
 		}
+	case evUsage:
+		u := ev.usage
+		t.usage = &u
 	}
-	return nil
 }
 
-func (t *chatToRespStream) openMessage() {
+func (t *respEncoder) openMessage() {
 	if t.msgOpen {
 		return
 	}
@@ -367,15 +373,16 @@ func (t *chatToRespStream) openMessage() {
 	})
 }
 
-func (t *chatToRespStream) openFunctionCall(tc ChatToolCall) {
-	st := t.fcOpen[tc.Index]
+// toolStart：新顺序号开 function_call item；已知顺序号名字后到则补记。
+func (t *respEncoder) toolStart(idx int, id, name string) {
+	st := t.fcOpen[idx]
 	if st == nil {
 		t.itemSeq++
 		st = &fcState{
 			itemID: fmt.Sprintf("fc_%d", t.itemSeq), outputIdx: t.itemSeq,
-			callID: tc.ID, name: tc.Function.Name,
+			callID: id, name: name,
 		}
-		t.fcOpen[tc.Index] = st
+		t.fcOpen[idx] = st
 		t.emit("response.output_item.added", map[string]any{
 			"output_index": st.outputIdx, "item": map[string]any{
 				"type": "function_call", "id": st.itemID, "call_id": st.callID,
@@ -383,19 +390,13 @@ func (t *chatToRespStream) openFunctionCall(tc ChatToolCall) {
 			},
 		})
 	}
-	if tc.Function.Name != "" && st.name == "" {
-		st.name = tc.Function.Name
-	}
-	if tc.Function.Arguments != "" {
-		st.args.WriteString(tc.Function.Arguments)
-		t.emit("response.function_call_arguments.delta", map[string]any{
-			"item_id": st.itemID, "output_index": st.outputIdx, "delta": tc.Function.Arguments,
-		})
+	if name != "" && st.name == "" {
+		st.name = name
 	}
 }
 
-// Done 收尾：闭合各 item 并发 response.completed / incomplete。
-func (t *chatToRespStream) Done() []byte {
+// Finish 收尾：闭合各 item 并发 response.completed / incomplete。
+func (t *respEncoder) Finish() {
 	if t.msgOpen {
 		full := t.textAll.String()
 		t.emit("response.output_text.done", map[string]any{
@@ -451,14 +452,13 @@ func (t *chatToRespStream) Done() []byte {
 		resp["incomplete_details"] = map[string]any{"reason": reason}
 	}
 	if t.usage != nil {
-		resp["usage"] = map[string]any{"input_tokens": t.usage.PromptTokens, "output_tokens": t.usage.CompletionTokens}
+		resp["usage"] = map[string]any{"input_tokens": t.usage.prompt, "output_tokens": t.usage.completion}
 	}
 	evt := "response.completed"
 	if status == "incomplete" {
 		evt = "response.incomplete"
 	}
 	t.emit(evt, map[string]any{"type": evt, "response": resp})
-	return t.out
 }
 
 func maxFCIndex(m map[int]*fcState) int {
@@ -482,62 +482,53 @@ func fcItemsAsAny(items []ResponsesOutputItem) []any {
 	return out
 }
 
-func (t *chatToRespStream) emit(name string, body map[string]any) {
-	body["type"] = name
-	data, err := json.Marshal(body)
-	if err != nil {
-		return
-	}
-	t.out = appendSSE(t.out, name, data)
-}
+// ---------- 流式翻译：上游 Responses SSE → 事件（M5-W1 decoder） ----------
 
-// ---------- 流式翻译：Responses SSE → Chat chunk ----------
-
-// respToChatStream 把上游 Responses 事件流翻译为 chat chunk 流
-// （供 Responses 上游 × Chat/Messages 客户端使用；后者经
-// chatToMsgsStream 二级串联）。
-type respToChatStream struct {
-	out     []byte
-	model   string
+// respDecoder 解析上游 Responses 事件（承接 M4 respToChatStream：文本
+// delta 直通、function_call 以 output_item.done 完整参数为准、终态事件
+// 提取 status/usage）。
+type respDecoder struct {
 	toolAny bool
-	fcArgs  map[string]*strings.Builder // item_id → 参数累积
+	fcArgs  map[string]*strings.Builder // item_id → 参数累积（done 缺参时兜底）
 	fcItems []ResponsesOutputItem
 	status  string
 	incomp  string
 	usage   *ResponsesUsage
 }
 
-func newRespToChatStream() *respToChatStream { return &respToChatStream{fcArgs: map[string]*strings.Builder{}} }
+func newRespDecoder() *respDecoder { return &respDecoder{fcArgs: map[string]*strings.Builder{}} }
 
 // Feed 处理一条上游 Responses 事件（data 体）。
-func (t *respToChatStream) Feed(ev sseEvent) error {
+func (d *respDecoder) Feed(ev sseEvent) ([]gwEvent, error) {
 	var body struct {
-		Type   string `json:"type"`
-		Delta  string `json:"delta"`
-		Item   *ResponsesOutputItem `json:"item"`
-		ItemID string `json:"item_id"`
+		Type     string               `json:"type"`
+		Delta    string               `json:"delta"`
+		Item     *ResponsesOutputItem `json:"item"`
+		ItemID   string               `json:"item_id"`
 		Response *struct {
-			ID     string          `json:"id"`
-			Model  string          `json:"model"`
-			Status string          `json:"status"`
-			Usage  *ResponsesUsage `json:"usage"`
+			ID         string          `json:"id"`
+			Model      string          `json:"model"`
+			Status     string          `json:"status"`
+			Usage      *ResponsesUsage `json:"usage"`
 			Incomplete *struct {
 				Reason string `json:"reason"`
 			} `json:"incomplete_details"`
 		} `json:"response"`
 	}
 	if err := json.Unmarshal(ev.Data, &body); err != nil {
-		return fmt.Errorf("解析 responses 事件: %w", err)
+		return nil, fmt.Errorf("解析 responses 事件: %w", err)
 	}
 	switch body.Type {
 	case "response.output_text.delta":
-		t.emitChat(&ChatChunk{Choices: []ChatChoice{{Delta: ChatMessage{Content: body.Delta}}}})
+		if body.Delta != "" {
+			return []gwEvent{{kind: evText, text: body.Delta}}, nil
+		}
 	case "response.function_call_arguments.delta":
 		if body.ItemID != "" {
-			b := t.fcArgs[body.ItemID]
+			b := d.fcArgs[body.ItemID]
 			if b == nil {
 				b = &strings.Builder{}
-				t.fcArgs[body.ItemID] = b
+				d.fcArgs[body.ItemID] = b
 			}
 			b.WriteString(body.Delta)
 		}
@@ -545,65 +536,45 @@ func (t *respToChatStream) Feed(ev sseEvent) error {
 		if body.Item != nil && body.Item.Type == "function_call" {
 			// 以 done 项的完整参数为准（delta 累积仅兜底）
 			if body.Item.Args == "" {
-				body.Item.Args = t.fcArgs[body.Item.ID].String()
+				body.Item.Args = d.fcArgs[body.Item.ID].String()
 			}
-			t.fcItems = append(t.fcItems, *body.Item)
-			t.toolAny = true
-			t.emitToolCall(*body.Item, len(t.fcItems)-1)
+			d.fcItems = append(d.fcItems, *body.Item)
+			d.toolAny = true
+			idx := len(d.fcItems) - 1
+			item := d.fcItems[idx]
+			return []gwEvent{
+				{kind: evToolStart, idx: idx, id: orDefault(item.CallID, item.ID), name: item.Name},
+				{kind: evToolArgs, idx: idx, text: orDefault(item.Args, "{}")},
+				{kind: evToolDone, idx: idx},
+			}, nil
 		}
 	case "response.completed", "response.incomplete", "response.failed":
 		if body.Response != nil {
-			t.status = orDefault(body.Response.Status, "completed")
+			d.status = orDefault(body.Response.Status, "completed")
 			if body.Response.Incomplete != nil {
-				t.incomp = body.Response.Incomplete.Reason
+				d.incomp = body.Response.Incomplete.Reason
 			}
-			t.usage = body.Response.Usage
-			if body.Response.Model != "" {
-				t.model = body.Response.Model
-			}
+			d.usage = body.Response.Usage
 		}
 		if body.Type == "response.failed" {
-			t.status = "failed"
+			d.status = "failed"
 		}
 	}
-	return nil
+	return nil, nil
 }
 
-func (t *respToChatStream) emitToolCall(item ResponsesOutputItem, idx int) {
-	cc := &ChatChunk{Choices: []ChatChoice{{
-		Delta: ChatMessage{ToolCalls: []ChatToolCall{{
-			Index: idx, ID: orDefault(item.CallID, item.ID), Type: "function",
-			Function: ChatFunction{Name: item.Name, Arguments: orDefault(item.Args, "{}")},
-		}}},
-	}}}
-	t.emitChat(cc)
-}
-
-func (t *respToChatStream) emitChat(cc *ChatChunk) {
-	cc.Object = "chat.completion.chunk"
-	if cc.Model == "" {
-		cc.Model = t.model
-	}
-	data, err := json.Marshal(cc)
-	if err != nil {
-		return
-	}
-	t.out = appendSSE(t.out, "", data)
-}
-
-// Done 输出终止 chunk（finish_reason + usage）与 [DONE]。
-func (t *respToChatStream) Done() []byte {
-	status := t.status
+// Done 输出终止事件（finish 映射 + usage 快照）。
+func (d *respDecoder) Done() []gwEvent {
+	status := d.status
 	if status == "" {
 		status = "completed"
 	}
-	finish := respStopToChat(status, t.incomp, t.toolAny || len(t.fcItems) > 0)
-	cc := &ChatChunk{Choices: []ChatChoice{{Delta: ChatMessage{}, FinishReason: finish}}}
-	if t.usage != nil {
-		cc.Usage = &ChatUsage{PromptTokens: t.usage.InputTokens, CompletionTokens: t.usage.OutputTokens}
+	finish := respStopToChat(status, d.incomp, d.toolAny || len(d.fcItems) > 0)
+	out := []gwEvent{{kind: evStop, stop: finish}}
+	if d.usage != nil {
+		out = append(out, gwEvent{kind: evUsage, usage: gwUsage{
+			prompt: d.usage.InputTokens, completion: d.usage.OutputTokens,
+		}})
 	}
-	data, _ := json.Marshal(cc)
-	t.out = appendSSE(t.out, "", data)
-	t.out = append(t.out, []byte("data: [DONE]\n\n")...)
-	return t.out
+	return out
 }

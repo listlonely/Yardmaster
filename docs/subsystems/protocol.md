@@ -2,6 +2,8 @@
 
 > M4-W1 定稿（开发文档 §9.5）。载体 `internal/gateway`（protocol.go /
 > responses.go / translate.go）；协议枚举在 `internal/provider`。
+> [2026-10-30-事件化中间流] M5-W1 起流式中间表示由 chat chunk 字节流
+> 改为内存事件 `gwEvent`（见下文「流式事件层」），非流路径不变。
 
 ## 枢纽选型决策（W1 决策点）
 
@@ -19,6 +21,22 @@
 从 IR 派生）。优点是语义单点维护；缺点是 Chat↔Messages 既有行为必须
 等价迁移（M1 以来的流式状态机重写），回归面大。触发升级条件：矩阵
 测试（W4）发现「直连保留」方案出现语义缺口。
+
+## 流式事件层（M5-W1）
+
+流式跨协议翻译自 M5-W1 起为「上游 decoder → 逐事件 → 客户端
+encoder」（`internal/gateway/event.go`），中间表示为七类内存事件
+`gwEvent`（start/text/toolStart/toolArgs/toolDone/stop/usage，参考
+Magpie ir.go 的 Event 裁剪）。原「chat chunk 中间流」的
+`splitSSEData`（SSE 字节再拆包的 JSON round-trip）已删除。
+
+- 四协议各一对 decoder/encoder：chatDecoder/chatEncoder（event.go）、
+  msgsDecoder/msgsEncoder（translate.go）、respDecoder/respEncoder
+  （translate_responses.go）、geminiDecoder/geminiEncoder（gemini.go）。
+- 事件层词表约定：stop 原因用 chat 词表（协议特有词表由 encoder 就地
+  映射）；工具调用用 decoder 归一的顺序号 idx。
+- 事件对照表单测 `event_test.go`；既有 4×4 流式矩阵与 M4 流式测试
+  **原样通过**作为等价迁移证明（非流路径与同协议透传未动）。
 
 ## 协议清单与状态
 

@@ -781,112 +781,15 @@ func (s *Server) relayLastError(w http.ResponseWriter, client ClientProto, last 
 }
 
 // translateStream 逐事件把上游 SSE 翻译为客户端协议的 SSE。
-// M4-W2：Responses 组合经「chat chunk 中间流」串联——非 Chat 上游先
-// 解码为 chat chunk（msgsToChat/respToChat），非 Chat 客户端再从
-// chat chunk 编码（chatToMsgs/chatToResp）。收尾顺序必须「先上游解码
-// 器 Done（其终止 chunk 进入编码链）→ 再客户端编码器 Done」。
+// M5-W1：中间表示由「chat chunk 字节流」改为内存事件 gwEvent——
+// 上游 decoder → 逐事件 → 客户端 encoder，消除 chat chunk 的 JSON
+// round-trip（原 splitSSEData 已删）。收尾顺序「上游 decoder Done
+// （终止/兜底事件进入编码链）→ 客户端 encoder Finish」不变。
 func (s *Server) translateStream(w http.ResponseWriter, fw *flushWriter,
 	client, upstream ClientProto, body io.Reader) {
 	br := bufio.NewReaderSize(body, 64<<10)
-	// 上游解码适配器：把上游事件变为 chat chunk data 列表（nil 表示
-	// 上游本就是 chat，data 直接透传）。
-	var feed func(ev sseEvent) [][]byte
-	var decDone func() [][]byte
-	switch upstream {
-	case ProtoMessages:
-		t := newMsgsToChatStream()
-		feed = func(ev sseEvent) [][]byte {
-			if err := t.Feed(ev); err != nil {
-				slog.Warn("流式翻译失败", "err", err)
-			}
-			out := t.out
-			t.out = nil
-			return splitSSEData(out)
-		}
-		decDone = func() [][]byte { return splitSSEData(t.Done()) }
-	case ProtoResponses:
-		t := newRespToChatStream()
-		feed = func(ev sseEvent) [][]byte {
-			if err := t.Feed(ev); err != nil {
-				slog.Warn("流式翻译失败", "err", err)
-			}
-			out := t.out
-			t.out = nil
-			return splitSSEData(out)
-		}
-		decDone = func() [][]byte { return splitSSEData(t.Done()) }
-	case ProtoGemini:
-		t := newGeminiToChatStream()
-		feed = func(ev sseEvent) [][]byte {
-			if err := t.Feed(ev); err != nil {
-				slog.Warn("流式翻译失败", "err", err)
-			}
-			out := t.out
-			t.out = nil
-			return splitSSEData(out)
-		}
-		decDone = func() [][]byte { return splitSSEData(t.Done()) }
-	default: // 上游是 chat：data 即 chat chunk
-		feed = func(ev sseEvent) [][]byte {
-			if string(ev.Data) == "[DONE]" {
-				return nil
-			}
-			return [][]byte{ev.Data}
-		}
-	}
-	// 客户端编码器：从 chat chunk data 产出客户端协议 SSE。
-	var encode func(chunkData []byte)
-	var finish func()
-	switch client {
-	case ProtoMessages:
-		t := newChatToMsgsStream()
-		encode = func(chunkData []byte) {
-			if err := t.Feed(chunkData); err != nil {
-				slog.Warn("流式翻译失败", "err", err)
-			}
-			if t.out != nil {
-				_, _ = w.Write(t.out)
-				t.out = nil
-				fw.flush()
-			}
-		}
-		finish = func() { _, _ = w.Write(t.Done()); fw.flush() }
-	case ProtoResponses:
-		t := newChatToRespStream()
-		encode = func(chunkData []byte) {
-			if err := t.Feed(chunkData); err != nil {
-				slog.Warn("流式翻译失败", "err", err)
-			}
-			if t.out != nil {
-				_, _ = w.Write(t.out)
-				t.out = nil
-				fw.flush()
-			}
-		}
-		finish = func() { _, _ = w.Write(t.Done()); fw.flush() }
-	case ProtoGemini: // M4-W3：chat chunk → gemini 事件（无 [DONE]）
-		t := newChatToGeminiStream()
-		encode = func(chunkData []byte) {
-			if err := t.Feed(chunkData); err != nil {
-				slog.Warn("流式翻译失败", "err", err)
-			}
-			if t.out != nil {
-				_, _ = w.Write(t.out)
-				t.out = nil
-				fw.flush()
-			}
-		}
-		finish = func() { _, _ = w.Write(t.Done()); fw.flush() }
-	default: // Chat 客户端：chat chunk 原样透传
-		encode = func(chunkData []byte) {
-			_, _ = w.Write(appendSSE(nil, "", chunkData))
-			fw.flush()
-		}
-		finish = func() {
-			_, _ = w.Write([]byte("data: [DONE]\n\n"))
-			fw.flush()
-		}
-	}
+	dec := newEventDecoder(upstream)
+	enc := newEventEncoder(client, w, fw.flush)
 	for {
 		ev, err := scanSSE(br)
 		if err == io.EOF {
@@ -896,32 +799,19 @@ func (s *Server) translateStream(w http.ResponseWriter, fw *flushWriter,
 			slog.Warn("上游 SSE 读取失败", "err", err)
 			break
 		}
-		for _, chunk := range feed(ev) {
-			encode(chunk)
+		evs, err := dec.Feed(ev)
+		if err != nil {
+			slog.Warn("流式翻译失败", "err", err)
+		}
+		for _, ge := range evs {
+			enc.Encode(ge)
 		}
 	}
-	// 收尾：上游解码器先 done（终止 chunk 进入编码链），再 finish。
-	if decDone != nil {
-		for _, chunk := range decDone() {
-			encode(chunk)
-		}
+	// 收尾：上游解码器先 Done（终止事件进入编码链），再 Finish。
+	for _, ge := range dec.Done() {
+		enc.Encode(ge)
 	}
-	finish()
-}
-
-// splitSSEData 从一段完整 SSE 字节流中拆出各 data 体（不含 [DONE]）。
-func splitSSEData(b []byte) [][]byte {
-	var out [][]byte
-	for _, line := range strings.Split(string(b), "\n") {
-		line = strings.TrimRight(line, "\r")
-		if after, ok := strings.CutPrefix(line, "data: "); ok {
-			if after == "[DONE]" {
-				continue
-			}
-			out = append(out, []byte(after))
-		}
-	}
-	return out
+	enc.Finish()
 }
 
 // ---------- 小工具 ----------
