@@ -204,7 +204,7 @@ func TestProviderAddOAuthPipeline(t *testing.T) {
 	out := runOK(t, "provider", "add-oauth",
 		"-id", "anthropic", "-name", "Anthropic",
 		"-base-url", "https://api.anthropic.com",
-		"-from", "test-fixture:"+claudeFixturePath)
+		"-from", "claude-code:"+claudeFixturePath)
 	if !strings.Contains(out, "已添加") || !strings.Contains(out, "OAuth") {
 		t.Fatalf("add-oauth 输出: %s", out)
 	}
@@ -244,8 +244,20 @@ func TestProviderAddOAuthPipeline(t *testing.T) {
 		t.Fatalf("list 应展示 oauth 标记: %s", out)
 	}
 	// 重复导入需 -replace
-	if err := Run([]string{"provider", "add-oauth", "-id", "anthropic", "-from", "test-fixture:" + claudeFixturePath}, &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
+	if err := Run([]string{"provider", "add-oauth", "-id", "anthropic", "-from", "claude-code:" + claudeFixturePath}, &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
 		t.Fatal("重复导入应拒绝")
+	}
+}
+
+func TestProviderAddOAuthDefaultPathHint(t *testing.T) {
+	testenv.New(t)
+	// 省略路径的内置格式：默认路径不存在 → 读不到=未知，不落盘
+	var errBuf bytes.Buffer
+	if err := Run([]string{"provider", "add-oauth", "-id", "anthropic", "-base-url", "https://api.anthropic.com", "-from", "claude-code"}, &bytes.Buffer{}, &errBuf); err == nil {
+		t.Fatal("默认凭证文件缺失应失败")
+	}
+	if !strings.Contains(errBuf.String(), "读不懂=未知") {
+		t.Fatalf("stderr: %s", errBuf.String())
 	}
 }
 
@@ -258,7 +270,7 @@ func TestProviderAddOAuthFailsClosed(t *testing.T) {
 		want string
 	}{
 		{"未知格式", []string{"provider", "add-oauth", "-id", "x", "-from", "nope:whatever"}, "未支持的导入格式"},
-		{"from 缺格式", []string{"provider", "add-oauth", "-id", "x", "-from", "just-a-path"}, "-from 须为"},
+		{"from 缺格式", []string{"provider", "add-oauth", "-id", "x", "-from", "just-a-path"}, "未支持的导入格式"},
 		{"源文件缺失", []string{"provider", "add-oauth", "-id", "x", "-base-url", "https://x", "-from", "test-fixture:./no-such-file.json"}, "读不懂=未知"},
 	}
 	for _, tc := range cases {
@@ -296,7 +308,7 @@ func TestProviderAddOAuthReplaceConvertsAPIKey(t *testing.T) {
 
 	out := runOK(t, "provider", "add-oauth",
 		"-id", "anthropic", "-account", "main", "-replace",
-		"-from", "test-fixture:"+claudeFixturePath)
+		"-from", "claude-code:"+claudeFixturePath)
 	if !strings.Contains(out, "已转换") {
 		t.Fatalf("转换输出: %s", out)
 	}

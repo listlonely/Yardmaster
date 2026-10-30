@@ -232,6 +232,12 @@ $('btn-reload').addEventListener('click', async () => {
 
 const statusBadge = (st) => `<span class="badge ${esc(st || 'available')}">${esc(st || 'available')}</span>`;
 
+// OAuth 账号过期时间展示（M3-W2）：expires_at 为 Unix 秒，0/缺失=未知。
+const oauthExpiryText = (m) => {
+  if (!m || !m.expires_at) return '未知';
+  return new Date(m.expires_at * 1000).toLocaleString();
+};
+
 // usageBar：当日用量进度条（无额度设置时只显示数字）。
 function usageBar(a) {
   const used = a.used_tokens || 0;
@@ -285,10 +291,14 @@ async function loadProviders() {
             quota_tokens_day: lv.quota_tokens_day ?? a.quota_tokens_day,
           };
           const eff = effectiveProxy(a, p, global);
+          const credCell = a.auth === 'oauth'
+            ? `<span class="badge oauth">OAuth</span>${a.oauth?.state === 'stale' ? ' <span class="badge resting">已过期待刷新</span>' : ''}
+               <div class="muted">过期 ${esc(oauthExpiryText(a.oauth))}</div>`
+            : `<code>${esc(a.api_key || '（未设置）')}</code>`;
           return `
           <tr>
             <td>${esc(a.name)}</td>
-            <td><code>${esc(a.api_key || '（未设置）')}</code></td>
+            <td>${credCell}</td>
             <td>${statusBadge(view.status)}${restUntil ? `<div class="muted">休眠至 ${esc(restUntil.replace('T', ' '))}</div>` : ''}</td>
             <td>${usageBar(view)} <a class="quota-btn" data-p="${esc(p.id)}" data-a="${esc(a.name)}">额度</a></td>
             <td><code>${esc(eff.v)}</code> <span class="muted">（${eff.src}层）</span></td>

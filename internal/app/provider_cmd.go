@@ -237,19 +237,29 @@ func providerAddOAuth(paths store.Paths, args []string, stdout, stderr io.Writer
 		return ErrUsage
 	}
 	if *id == "" || *from == "" {
-		fmt.Fprintln(stderr, "缺少必填参数：-id、-from <格式>:<文件路径>")
+		fmt.Fprintln(stderr, "缺少必填参数：-id、-from <格式>[:<文件路径>]")
 		return ErrUsage
 	}
-	format, srcPath, ok := strings.Cut(*from, ":")
-	if !ok || strings.TrimSpace(format) == "" || strings.TrimSpace(srcPath) == "" {
-		fmt.Fprintln(stderr, "-from 须为 <格式>:<文件路径>（如 claude-code:~/.claude/.credentials.json）")
+	format, srcPath, _ := strings.Cut(*from, ":")
+	format = strings.TrimSpace(format)
+	if format == "" {
+		fmt.Fprintln(stderr, "-from 须为 <格式>[:<文件路径>]（如 claude-code、claude-code:~/.claude/.credentials.json）")
 		return ErrUsage
 	}
 	parse, ok := credential.Lookup(format)
 	if !ok {
-		fmt.Fprintf(stderr, "未支持的导入格式 %q；可用：%s（内置解析器随 M3-W2 扩充）\n",
-			format, strings.Join(credential.Names(), ", "))
+		fmt.Fprintf(stderr, "未支持的导入格式 %q；可用：%s\n", format, strings.Join(credential.Names(), ", "))
 		return ErrUsage
+	}
+	srcPath = strings.TrimSpace(srcPath)
+	if srcPath == "" {
+		// 省略路径：用该 Agent 的默认凭证文件路径
+		def, ok := credential.DefaultPath(format)
+		if !ok {
+			fmt.Fprintf(stderr, "格式 %q 无默认路径，请显式给出：<格式>:<文件路径>\n", format)
+			return ErrUsage
+		}
+		srcPath = def
 	}
 	if p := provider.Protocol(*protocol); p != provider.ProtocolChat && p != provider.ProtocolMessages {
 		fmt.Fprintln(stderr, "-protocol 仅支持 openai-chat | anthropic-messages")
@@ -369,7 +379,7 @@ func providerAddOAuth(paths store.Paths, args []string, stdout, stderr io.Writer
 	default:
 		fmt.Fprintf(stdout, "已添加 %s / OAuth 账号 %q。过期时间: %s\n", *id, *account, oauthExpiryText(meta))
 	}
-	fmt.Fprintln(stdout, "内置解析器随 M3-W2 扩充后，无需手工改配置即可接入订阅账号。")
+	fmt.Fprintln(stdout, "默认按各 Agent 凭证文件导入；刷新机制见 W3。")
 	return nil
 }
 

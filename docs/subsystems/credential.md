@@ -10,8 +10,8 @@
 | 凭证模型 | `OAuth{AccessToken, RefreshToken, ExpiresAt(Unix 秒), Scopes, Extra}` |
 | 凭证库 | 单文件 `~/.yardmaster/credentials.bin`（Windows，DPAPI 密文）/ `credentials.json`（其余，0600 明文 JSON） |
 | 键 | `Ref = "<provider-id>/<account>"`，两段禁止路径分隔符（防注入） |
-| 导入解析器 | `RegisterParser/Lookup/Names` 注册表；内置解析器 M3-W2 落地（claude-code/codex/gemini-cli） |
-| CLI | `provider add-oauth <id> <account> -from <格式>:<文件路径> [-replace]`；`provider list` 展示 oauth/过期标记 |
+| 导入解析器 | `RegisterParser/Lookup/Names` 注册表；内置：`claude-code`（`~/.claude/.credentials.json`，`claudeAiOauth` 嵌套、毫秒时间戳）、`codex`（`~/.codex/auth.json`，`tokens` 嵌套、API key 登录拒绝导入）、`gemini-cli`（`~/.gemini/oauth_creds.json`，平铺、`expiry_date` 毫秒）。形状样例见 `testdata/credentials/`（README 含 W2 真实凭证复核要求） |
+| CLI | `provider add-oauth <id> <account> -from <格式>[:<路径>] [-replace]`（省略路径用 `DefaultPath`）；`provider list` 展示 oauth/过期标记；控制台 Provider 页 OAuth 徽标 + 过期时间 + stale 提示 |
 
 ## 安全约束（不可协商）
 
@@ -71,5 +71,10 @@ go test -race -run 'TestProviderAddOAuth|TestCredential|TestAccountValidate' ./.
 | 键注入 | `TestNewRefRejectsInjection` |
 | oauth×api_key 互斥/未知形态 | `TestAccountValidateMutualExclusion` |
 | 导入全管道 + 泄漏断言 | `TestProviderAddOAuthPipeline` |
+| 内置解析器回放（形状样例） | `TestParseClaudeCodeFixture` / `TestParseCodexFixture` / `TestParseGeminiFixture` |
+| 解析器 fail-closed（缺字段/空 token/API key 登录） | `TestParsersFailClosed` |
+| BOM 容错 | `TestParsersBOMTolerant` |
+| 毫秒→秒归一 / 默认路径 | `TestNormExpirySec` / `TestDefaultPath` |
+| 省略路径走默认路径（缺失即败） | `TestProviderAddOAuthDefaultPathHint` |
 | 未知格式/缺格式/源缺失/形状不对 → 不落盘 | `TestProviderAddOAuthFailsClosed` |
 | api_key 账号显式转换清除旧 key | `TestProviderAddOAuthReplaceConvertsAPIKey` |

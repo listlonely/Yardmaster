@@ -30,6 +30,7 @@ button.primary { background:var(--accent); border-color:var(--accent); color:#ff
 .badge.resting { background:#fef9c3; color:#a16207 }
 .badge.prefail,.badge.bad-credential { background:#fee2e2; color:#b91c1c }
 .badge.disabled { background:#f1f3f7; color:#6b7280 }
+.badge.oauth { background:#e0e7ff; color:#4338ca }
 .toast { position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#1e2430; color:#fff; padding:8px 18px; border-radius:10px; font-size:.9rem; opacity:0; transition:opacity .25s; pointer-events:none }
 .toast.show { opacity:.95 }
 .cards { display:flex; gap:10px; flex-wrap:wrap; margin:10px 0 }

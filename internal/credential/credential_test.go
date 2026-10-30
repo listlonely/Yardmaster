@@ -51,8 +51,8 @@ func TestCredentialRoundtrip(t *testing.T) {
 	if _, err := s.Load(ref); err != nil {
 		t.Fatalf("ref 应仍可读: %v", err)
 	}
-	// 凭证库不得以明文出现在 providers.json（本包文件除外）：
-	// Windows 为 DPAPI 密文，直接断言密文中无明文 token。
+	// Windows 凭证库应为 DPAPI 密文，不得含明文 token（其余平台为
+	// 0600 明文 JSON，依赖文件权限，无需断言内容）。
 	if _, err := os.Stat(filepath.Join(appDir, "credentials.bin")); err == nil {
 		raw, _ := os.ReadFile(s.Path)
 		if strings.Contains(string(raw), "at-EXAMPLE-0123456789abcdef") {
@@ -158,8 +158,11 @@ func TestNewRefRejectsInjection(t *testing.T) {
 }
 
 func TestParserRegistry(t *testing.T) {
-	if got := Names(); len(got) != 0 {
-		t.Fatalf("W1 不应内置解析器，got %v", got)
+	// W2 起内置三大 Agent 解析器
+	for _, want := range []string{"claude-code", "codex", "gemini-cli"} {
+		if _, ok := Lookup(want); !ok {
+			t.Fatalf("内置解析器 %q 应已注册", want)
+		}
 	}
 	if err := RegisterParser("test-fixture", func(b []byte) (OAuth, error) { return OAuth{AccessToken: string(b)}, nil }); err != nil {
 		t.Fatalf("RegisterParser: %v", err)
