@@ -19,11 +19,11 @@ func TestValidateSecurity(t *testing.T) {
 		listen, token string
 		ok            bool
 	}{
-		{"127.0.0.1:8317", "", true},  // 默认本机
-		{"localhost:8317", "", true},  // localhost 视为回环
-		{"", "", true},                // 空 host 视为回环
-		{"[::1]:8317", "", true},      // IPv6 回环
-		{"0.0.0.0:8317", "", false},   // 局域网共享无令牌：拒绝
+		{"127.0.0.1:8317", "", true}, // 默认本机
+		{"localhost:8317", "", true}, // localhost 视为回环
+		{"", "", true},               // 空 host 视为回环
+		{"[::1]:8317", "", true},     // IPv6 回环
+		{"0.0.0.0:8317", "", false},  // 局域网共享无令牌：拒绝
 		{"192.168.1.5:8317", "", false},
 		{"0.0.0.0:8317", "secret", true}, // 带令牌放行
 	}
@@ -69,9 +69,9 @@ func TestAuthMiddleware(t *testing.T) {
 	}
 	// 三种携带方式均放行（与 callerKeyOf 同源）
 	for name, hdr := range map[string][]string{
-		"X-Gw-Token":     {"secret-1234"},
-		"Authorization":  {"Bearer secret-1234"},
-		"X-Api-Key":      {"secret-1234"},
+		"X-Gw-Token":    {"secret-1234"},
+		"Authorization": {"Bearer secret-1234"},
+		"X-Api-Key":     {"secret-1234"},
 	} {
 		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/state", nil)
 		req.Header.Set(name, hdr[0])

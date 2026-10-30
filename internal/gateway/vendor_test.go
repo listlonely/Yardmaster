@@ -113,7 +113,7 @@ func TestAttemptGLMCorrectionEndToEnd(t *testing.T) {
 	paths := store.Paths{AppDir: appDir}
 	prov := provider.Provider{
 		ID: "glm", Protocol: provider.ProtocolChat,
-		BaseURL: "https://open.bigmodel.cn/api/paas/v4",
+		BaseURL:  "https://open.bigmodel.cn/api/paas/v4",
 		Accounts: []provider.Account{{Name: "main", APIKey: "k", Status: provider.AccountAvailable}},
 	}
 	if err := store.SaveProvidersFile(paths.ProvidersPath(), store.ProvidersFile{Providers: []provider.Provider{prov}}); err != nil {

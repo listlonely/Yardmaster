@@ -41,11 +41,11 @@ type refreshFlight struct {
 // oauthRuntime 是 Server 的 OAuth 运行态（懒初始化，零值可用）。
 type oauthRuntime struct {
 	mu     sync.Mutex
-	cache  map[string]cachedToken          // "provider/account" → token
-	fails  map[string]int                  // "provider/account" → 连续刷新失败次数
-	flight map[string]*refreshFlight       // single-flight
+	cache  map[string]cachedToken            // "provider/account" → token
+	fails  map[string]int                    // "provider/account" → 连续刷新失败次数
+	flight map[string]*refreshFlight         // single-flight
 	specs  map[string]credential.RefreshSpec // 刷新规格覆盖（测试注入；缺省用内置）
-	httpC  *http.Client                    // 刷新 HTTP 客户端（测试注入）；nil 用默认
+	httpC  *http.Client                      // 刷新 HTTP 客户端（测试注入）；nil 用默认
 }
 
 func (o *oauthRuntime) ensure() {

@@ -72,12 +72,12 @@ type CostBucket struct {
 
 // CostReport 是一个时间窗的成本聚合。
 type CostReport struct {
-	Days      int                    `json:"days"`
-	From      string                 `json:"from"` // "2006-01-02"（含）
-	To        string                 `json:"to"`   // "2006-01-02"（含）
-	ByAccount map[string]CostBucket  `json:"by_account"` // key: "provider/account"
-	ByModel   map[string]CostBucket  `json:"by_model"`   // key: 上游模型名
-	Unpriced  int                    `json:"unpriced"`   // 有用量但无单价的调用次数
+	Days      int                   `json:"days"`
+	From      string                `json:"from"`       // "2006-01-02"（含）
+	To        string                `json:"to"`         // "2006-01-02"（含）
+	ByAccount map[string]CostBucket `json:"by_account"` // key: "provider/account"
+	ByModel   map[string]CostBucket `json:"by_model"`   // key: 上游模型名
+	Unpriced  int                   `json:"unpriced"`   // 有用量但无单价的调用次数
 }
 
 // ComputeCost 从 trace 集合计算最近 days 天（含当日）的成本报告。

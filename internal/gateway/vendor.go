@@ -98,7 +98,7 @@ func glmCorrectedBase(base string, errBody []byte) (string, bool) {
 }
 
 // CorrectBaseURL 端点纠偏：更新内存快照并读改写落盘 providers.json
-//（写前备份；重读文件只改该 provider 的 base_url，不覆盖运行期其他
+// （写前备份；重读文件只改该 provider 的 base_url，不覆盖运行期其他
 // 编辑——与 FlushUsage 同规）。base 相同或文件不存在时为空操作。
 func (p *Planner) CorrectBaseURL(providerID, newBase, providersPath string) error {
 	p.mu.Lock()

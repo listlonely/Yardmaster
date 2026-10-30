@@ -127,7 +127,7 @@ func TestCostReportCompute(t *testing.T) {
 	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.Local)
 	mk := func(dayOffset int, served, model string, in, out int64, outcome string) Trace {
 		return Trace{
-			Time: now.AddDate(0, 0, -dayOffset).Format(time.RFC3339),
+			Time:   now.AddDate(0, 0, -dayOffset).Format(time.RFC3339),
 			Served: served, ServedModel: model, Outcome: outcome,
 			Usage: &TraceUsage{Prompt: in, Completion: out},
 		}

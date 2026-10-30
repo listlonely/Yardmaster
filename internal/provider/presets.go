@@ -28,7 +28,7 @@ var Presets = []Preset{
 	{ID: "zai-coding-messages", Name: "Z.ai GLM Coding Plan（Anthropic 协议）", Protocol: ProtocolMessages,
 		BaseURL: "https://api.z.ai/api/anthropic"},
 	{ID: "zai", Name: "Z.ai 开放平台（按量计费）", Protocol: ProtocolChat,
-		BaseURL: "https://api.z.ai/api/paas/v4",
+		BaseURL:    "https://api.z.ai/api/paas/v4",
 		QuotaProbe: &QuotaProbe{URL: "https://api.z.ai/api/paas/v4/finance/balance"}},
 	{ID: "deepseek", Name: "DeepSeek（OpenAI 协议）", Protocol: ProtocolChat,
 		BaseURL: "https://api.deepseek.com"},

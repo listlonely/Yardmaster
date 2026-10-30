@@ -646,11 +646,11 @@ type StateAccount struct {
 	UsedTokens  int64   `json:"used_tokens"`
 	QuotaTokens int64   `json:"quota_tokens_day"`
 	UsageDay    string  `json:"usage_day"`
-	Inflight    int     `json:"inflight,omitempty"`             // 在途请求（M3-W5）
-	Balance     float64 `json:"balance,omitempty"`              // 余额轮询结果（M3-W5）
-	BalanceAt   int64   `json:"balance_at,omitempty"`           // 余额更新时刻
-	WindowState string  `json:"window_status,omitempty"`        // 订阅窗口状态（M3-W5）
-	WindowReset int64   `json:"window_reset_at,omitempty"`      // 窗口重置时刻
+	Inflight    int     `json:"inflight,omitempty"`        // 在途请求（M3-W5）
+	Balance     float64 `json:"balance,omitempty"`         // 余额轮询结果（M3-W5）
+	BalanceAt   int64   `json:"balance_at,omitempty"`      // 余额更新时刻
+	WindowState string  `json:"window_status,omitempty"`   // 订阅窗口状态（M3-W5）
+	WindowReset int64   `json:"window_reset_at,omitempty"` // 窗口重置时刻
 }
 
 // StateGroup 是 /api/state 用的路由组投影。
