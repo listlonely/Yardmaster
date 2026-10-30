@@ -137,10 +137,14 @@ type Session struct {
 	live     *LiveBuffer
 }
 
-// Output 返回会话输出尾部（运行中实时、结束后即最终尾部）。
+// Output 返回会话输出尾部（运行中实时、结束后即最终尾部；恢复的
+// 历史会话无 live 缓冲，回退到 Result.Output——M6-W2 持久化）。
 func (s *Session) Output() string {
 	if s.live != nil {
 		return s.live.Tail()
+	}
+	if s.Result != nil {
+		return s.Result.Output
 	}
 	return ""
 }
@@ -170,6 +174,7 @@ type Engine struct {
 	global   chan struct{}
 	sems     map[string]chan struct{}
 	now      func() time.Time
+	store    *SessionStore // 会话终态落盘（M6-W2）；nil=不持久化
 
 	// OnFinish 在会话终态时回调（观察者：派发 trace/OTLP 导出经此接入；
 	// nil=无）。回调在会话 goroutine 内执行，应快速返回。
@@ -309,6 +314,12 @@ func (e *Engine) Submit(parent context.Context, agent AgentSpec, task, model str
 			s.Status = "failed"
 		}
 		e.mu.Unlock()
+		// 终态落盘（M6-W2）：先于 close(finished)——Wait 返回即历史已
+		// 落盘（确定性完成信号，避免 TempDir 清理与异步尾写竞态）；字段
+		// 此后只读，锁外拷贝安全；Append 内部自持锁，失败只降级。
+		if e.store != nil {
+			e.store.Append(s.snapshot())
+		}
 		close(s.finished)
 		if e.OnFinish != nil {
 			e.OnFinish(s)
@@ -344,12 +355,44 @@ func (e *Engine) Snapshot(id string) (Session, bool) {
 	return Session{}, false
 }
 
-// snapshot 在持锁前提下拷贝会话字段（Result 指针写入后不再变更）。
+// snapshot 在持锁前提下拷贝会话字段（Result 指针写入后不再变更；
+// finished 一并携带——恢复会话预置为已关闭，快照 Wait 立即返回，
+// 运行会话快照 Wait 等真实信号）。
 func (s *Session) snapshot() Session {
 	return Session{
 		ID: s.ID, Agent: s.Agent, Task: s.Task, Model: s.Model,
 		Status: s.Status, StartedAt: s.StartedAt, EndedAt: s.EndedAt,
-		Result: s.Result, live: s.live,
+		Result: s.Result, live: s.live, finished: s.finished,
+	}
+}
+
+// AttachStore 挂载会话终态落盘器（M6-W2；serve 启动装配，Submit 前
+// 调用一次）。nil 传参恢复为不持久化。
+func (e *Engine) AttachStore(s *SessionStore) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.store = s
+}
+
+// RestoreSessions 把落盘恢复的历史会话注入内存环形（旧→新追加，超出
+// SessionRingCap 截断最旧）。恢复会话均为终态：finished 预置为已关闭
+// （Wait 立即返回），无 live 缓冲（Output 回退 Result.Output）。
+func (e *Engine) RestoreSessions(ss []Session) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for i := range ss {
+		s := ss[i]
+		if s.Status == "running" {
+			s.Status = "failed" // 进程重启时运行中的会话已被杀：标失败（不猜结果）
+		}
+		closed := make(chan struct{})
+		close(closed)
+		s.finished = closed
+		s.cancel, s.runCtx, s.live = nil, nil, nil
+		e.sessions = append(e.sessions, &s)
+	}
+	if len(e.sessions) > SessionRingCap {
+		e.sessions = e.sessions[len(e.sessions)-SessionRingCap:]
 	}
 }
 

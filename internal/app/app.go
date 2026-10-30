@@ -141,6 +141,15 @@ func setupGateway() (*serveSetup, error) {
 		slog.Info("已加载派发配置", "agents", len(dispEngine.Agents()))
 	}
 	if derr == nil {
+		// 会话持久化（M6-W2）：终态追加落盘 + 启动恢复最近环形进内存
+		// ——控制台「派发」页历史跨重启可见。恢复的 running 会话标失败
+		// （进程重启即被杀，不猜结果）。
+		sstore := dispatch.NewSessionStore(paths.DispatchSessionsPath())
+		dispEngine.AttachStore(sstore)
+		dispEngine.RestoreSessions(sstore.Recent(dispatch.SessionRingCap))
+		if n := len(dispEngine.Sessions()); n > 0 {
+			slog.Info("已恢复派发会话历史", "count", n)
+		}
 		srv.AttachDispatch(dispEngine)
 	}
 	return &serveSetup{srv: srv, planner: planner, paths: paths, settings: settings, listen: listen}, nil

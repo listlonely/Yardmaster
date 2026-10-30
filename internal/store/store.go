@@ -34,6 +34,12 @@ func (p Paths) ProvidersPath() string { return filepath.Join(p.AppDir, "provider
 // TraceDir 返回决策记录目录（保留 30 天，F9）。
 func (p Paths) TraceDir() string { return filepath.Join(p.AppDir, "trace") }
 
+// DispatchSessionsPath 返回派发会话持久化文件（M6-W2；与 trace 同目录、
+// 同 30 天留存策略）。
+func (p Paths) DispatchSessionsPath() string {
+	return filepath.Join(p.TraceDir(), "dispatch-sessions.jsonl")
+}
+
 // IntentsPath 返回 intents.json 路径（用户自定义识别策略，PRD F8）。
 func (p Paths) IntentsPath() string { return filepath.Join(p.AppDir, "intents.json") }
 
