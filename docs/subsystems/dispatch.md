@@ -5,6 +5,8 @@
 > 主要风险，已用「text 输出模式为缺省 + 形状实测列入 W6」缓解，无需
 > 切换插件体系备选。载体 `internal/dispatch`（W3：runner 原语）+
 > `internal/app/run_cmd.go`（CLI run）。
+> [2026-10-30-真实校准] M6-W1 已完成 Claude Code 真实冒烟（形状/事件
+> 词表/缓存对账闭环，见 §九）；codex/gemini 降级留档。
 
 ## 一、产品形态（产品设计文档 §1 差异化定位）
 
@@ -65,14 +67,22 @@ stdout，结果与耗时留痕。与 `internal/agent` 接线子系统协同成�
   - `text`：stdout 整体即最终文本（缺省，形状无关，最稳）；
   - `jsonl`：每行一个 JSON 事件，取**最后一条**含 `text`/`content`/
     `result` 字段的字符串值为结果（容错解析：单行解析失败跳过）。
-- 三家建议形状（**未经真实凭证实测**，官方公开文档口径；W6 冒烟核实，
-  未实测项如实标注）：
+- 三家建议形状（官方公开文档口径；用户可在 dispatch.json 覆盖）：
 
-| Agent | 建议命令（用户可在 dispatch.json 覆盖） | 输出模式 | 备注 |
+| Agent | 建议命令 | 输出模式 | 备注 |
 | :-- | :-- | :-- | :-- |
-| Claude Code | `claude -p --output-format text` | text | `-p` 非交互；stdin 收任务 |
-| Codex CLI | `codex exec --json` | jsonl | 事件流形状待实测 |
-| Gemini CLI | `gemini -p` | text | `-p` 非交互 |
+| Claude Code | `claude -p --output-format stream-json --verbose` | jsonl | **已实测**（[2026-10-30-claude真实冒烟]）：`-p` 非交互、stdin 收任务；stream-json 须配 `--verbose` |
+| Codex CLI | `codex exec --json` | jsonl | 事件流形状待实测（本机无 OpenAI 订阅，降级留档） |
+| Gemini CLI | `gemini -p` | text | 形状待实测（本机无 Google 登录，降级留档） |
+
+- Claude Code 实测事件词表（stream-json，W3 事件解析词表依据）：
+  `{"type":"system","subtype":"init",…}` → `{"type":"assistant","message":{content:[{type:"text",…}]}}`
+  →（工具轮次 `{"type":"user",…}`）→ `{"type":"result","subtype":"success","result":"…","usage":{…}}`。
+  终态 `result` 字段与 ExtractResult 的键表命中；`subtype` 取 success/error。
+- 接线模板（经网关回环，[2026-10-30-claude真实冒烟] 验证）：env 三件套
+  `ANTHROPIC_BASE_URL=http://127.0.0.1:8317`、`ANTHROPIC_AUTH_TOKEN=<网关key>`、
+  `ANTHROPIC_MODEL=<provider/model 形式>`（planner 只认 provider/model；
+  claude 对带前缀模型名报 unrecognized_model 警告但不影响调用）。
 
 - 内置建议条目仅作 `dispatch init` 模板来源（写入前打印预览），
   **不自动注册**——命令形状由用户确认，ToS 边界（不代装、不代登录）
@@ -103,12 +113,40 @@ stdout，结果与耗时留痕。与 `internal/agent` 接线子系统协同成�
 
 未实测项（如实标注）：
 
-- 三家真实 Agent headless 形状（本机未安装 claude/codex/gemini CLI；
-  读不懂=未知纪律，按官方文档建模的 command 形状待真实冒烟核实）。
-- Linux 侧真实派发冒烟（CI 仅覆盖构建与单测）。
-- OTLP 真实后端联调、真实上游缓存命中对账（沿用 v0.4.0 未实测标注）。
+- ~~三家真实 Agent headless 形状~~ → **Claude Code 已实测**（2026-10-30
+  M6-W1，见下「真实校准记录」）；codex/gemini 本机无对应订阅/登录，
+  降级留档（形状沿用官方文档口径）。
+- Linux 侧真实派发冒烟（无 WSL/实机；降级为 CI fake-agent 冒烟）。
 
-## 八、边界与铁律对照
+## 九、真实校准记录（M6-W1，2026-10-30）[2026-10-30-真实校准]
+
+- **Claude Code headless 真实冒烟**（claude-code 2.1.314，Windows 本机）：
+  `claude -p`（stdin 任务）→ 网关 `/v1/messages`（anthropic 入站）→ 翻译
+  → 硅基流动（openai-chat 上游）→ 回翻 → claude 解析成功，exit=0，
+  `result` 字段正确；dispatch 引擎全链路 `d-* · ok`。gemini-cli/codex
+  因无对应订阅未实测（降级留档）。
+- **OTLP 真实后端**（Jaeger v2.22.0 all-in-one，OTLP/HTTP JSON）：
+  `receiver_accepted_spans=20` + `exporter_sent_spans=20` 双指标证实
+  接收与落库（注：Windows 端口排除段 4301-4400/8838-8937 挡默认
+  4317/4318/8888，本机配置挪 14317/14318/18888）。
+- **缓存命中对账**：硅基流动回 cached=6912；网关 trace
+  `{prompt:11879, completion:64, cached:6912}` ↔ claude 端
+  `input_tokens:4967 + cache_read_input_tokens:6912`（11879=4967+6912
+  咬合），claude 端成本核算随之按缓存价计算（$0.0488→$0.0226）。
+- **校准抓出并修复的缺陷**（回归测试 m6w1_test.go，还原旧代码即失败）：
+  1. msgsEncoder 流式回翻 usage 硬编码 `output_tokens:0` 且不处理
+     evUsage——真实客户端用量统计全零；
+  2. 事件层 gwUsage 无 cached 字段，缓存命中在客户端侧丢失——补齐
+     gwUsage.cached 后四 decoder 提取（chat 的 prompt_tokens_details/
+     responses 的 input_tokens_details/gemini 的 cachedContentTokenCount/
+     anthropic 的 message_start.usage 折叠）、四 encoder 按各家语义展开
+     （anthropic/responses 出口拆「未命中+命中」两列，chat/gemini 原样
+     携带），五处非流式翻译同步对齐（内部统一「prompt 含命中」口径，
+     出口按目标协议展开）。
+- **sealed reasoning 终局**：本机无 Codex 订阅凭证，维持 M5-W2 的 (b)
+  标注方案，降级留档。
+
+## 十、边界与铁律对照
 
 - ToS：仅启动用户已安装的 Agent（launch 失败报错指引），不代装不代登录。
 - 纯 Go：进程管理仅 os/exec，无 cgo，交叉编译矩阵不变。

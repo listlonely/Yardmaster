@@ -418,11 +418,12 @@ func ExtractResult(output, mode string) string {
 	return output
 }
 
-// Suggestions 返回三家 Agent 的建议条目（形状未经真实凭证实测，仅作
-// dispatch init 预览模板，不自动注册——设计稿 §五）。
+// Suggestions 返回三家 Agent 的建议条目（claude-code 形状经 M6-W1 真实
+// 冒烟核实；codex/gemini 未经实测仅作文档口径模板，不自动注册——设计稿
+// §五）。
 func Suggestions() []AgentSpec {
 	return []AgentSpec{
-		{ID: "claude-code", Command: []string{"claude", "-p", "--output-format", "text"}, Output: "text", Default: false, Match: &Match{Intent: "coding"}},
+		{ID: "claude-code", Command: []string{"claude", "-p", "--output-format", "stream-json", "--verbose"}, Output: "jsonl", Match: &Match{Intent: "coding"}},
 		{ID: "codex", Command: []string{"codex", "exec", "--json"}, Output: "jsonl", Match: &Match{Intent: "coding"}},
 		{ID: "gemini-cli", Command: []string{"gemini", "-p"}, Output: "text"},
 	}
