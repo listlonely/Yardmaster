@@ -1,4 +1,4 @@
-﻿// tui 子命令（M2-W6 最小版）：终端交互面板——状态总览 / 决策追溯 /
+// tui 子命令（M2-W6 最小版）：终端交互面板——状态总览 / 决策追溯 /
 // 调用方默认模型绑定切换。
 //
 // 设计取舍（排期标注的「可砍项」按最小可用交付）：
@@ -37,6 +37,7 @@ type tuiView struct {
 
 func runTUI(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("tui", flag.ContinueOnError)
+	fs.SetOutput(stderr) // flag 用法错误输出到 stderr
 	addr := fs.String("addr", "http://127.0.0.1:8317", "网关管理 API 地址")
 	token := fs.String("token", "", "访问令牌（留空则读 settings.json 的 token）")
 	if err := fs.Parse(args); err != nil {

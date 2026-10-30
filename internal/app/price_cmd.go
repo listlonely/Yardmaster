@@ -132,6 +132,7 @@ func priceList(path string, stdout io.Writer) error {
 // runCost 输出最近 N 天的成本报告（默认 7，上限 30=trace 保留期）。
 func runCost(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("cost", flag.ContinueOnError)
+	fs.SetOutput(stderr) // flag 用法错误输出到 stderr（unparam：参数必须被使用）
 	days := fs.Int("days", 7, "统计天数（1-30）")
 	if err := fs.Parse(args); err != nil {
 		return ErrUsage

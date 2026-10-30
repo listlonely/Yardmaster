@@ -19,6 +19,7 @@ const repoAPI = "https://api.github.com/repos/listlonely/Yardmaster/releases/lat
 // updateCheck 查询 GitHub 最新 release 并与当前版本比较（升级提示）。
 func updateCheck(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("update", flag.ContinueOnError)
+	fs.SetOutput(stderr) // flag 用法错误输出到 stderr
 	if err := fs.Parse(args); err != nil {
 		return ErrUsage
 	}
