@@ -95,6 +95,8 @@ type TraceLog struct {
 	dropped atomic.Int64 // 队列满被丢弃的条数（日志可见）
 	wg      sync.WaitGroup
 
+	OnTrace func(Trace) // 观察者（M4-W5 OTLP 导出等）；nil=无；Record 内联调用
+
 	keepDays int   // 保留天数（默认 30；测试注入）
 	maxBytes int64 // 总量上限（默认 200MB；测试注入）
 }
@@ -119,14 +121,19 @@ func NewTraceLog(dir string) *TraceLog {
 func (t *TraceLog) SetNow(f func() time.Time) { t.now = f }
 
 // Record 异步记录一条 trace：内存环形缓冲立即更新（/api/trace 用），
-// 落盘走后台队列；永不阻塞、永不失败（队列满丢弃并计数）。
+// 落盘走后台队列；永不阻塞、永不失败（队列满丢弃并计数）。观察者
+// （OTLP 导出等）在锁外调用，观察者自身必须不阻塞（导出器内部有界队列）。
 func (t *TraceLog) Record(tr Trace) {
 	t.mu.Lock()
 	if len(t.mem) >= traceMemCap {
 		t.mem = t.mem[len(t.mem)-traceMemCap+1:]
 	}
 	t.mem = append(t.mem, tr)
+	obs := t.OnTrace
 	t.mu.Unlock()
+	if obs != nil {
+		obs(tr)
+	}
 	select {
 	case t.ch <- tr:
 	default:

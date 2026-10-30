@@ -23,6 +23,17 @@ type Settings struct {
 	// 的公开常量，但 GitHub secret scanning 拦截仓库内字面量，故经设置
 	// 注入（取值见 Gemini CLI 自身源码）；空=gemini-cli 凭证无法刷新。
 	GeminiClientSecret string `json:"gemini_client_secret,omitempty"`
+
+	// OTLP traces 导出（M4-W5）：默认关。Enabled 且 Endpoint 非空才装配
+	// 导出器（otlphttp JSON，OTel 兼容后端）；失败只降级不阻断主流程。
+	OTel OTelSettings `json:"otel,omitempty"`
+}
+
+// OTelSettings 是 OTLP 导出配置。
+type OTelSettings struct {
+	Enabled  bool              `json:"enabled,omitempty"`
+	Endpoint string            `json:"endpoint,omitempty"` // 基础端点，自动追加 /v1/traces
+	Headers  map[string]string `json:"headers,omitempty"`  // 附加头（如 Authorization）
 }
 
 // LoadSettings 读取设置；文件不存在返回 os.ErrNotExist（调用方按零值

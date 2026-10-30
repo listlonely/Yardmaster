@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"yardmaster/internal/provider"
@@ -75,12 +76,12 @@ func TestSettingsRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out != s {
+	if !reflect.DeepEqual(out, s) {
 		t.Fatalf("roundtrip = %+v, want %+v", out, s)
 	}
 	// 缺文件返回 os.ErrNotExist（调用方按零值处理）
 	empty, err := LoadSettings(Paths{AppDir: t.TempDir()})
-	if !errors.Is(err, os.ErrNotExist) || empty != (Settings{}) {
+	if !errors.Is(err, os.ErrNotExist) || !reflect.DeepEqual(empty, Settings{}) {
 		t.Fatalf("缺文件应返回 ErrNotExist+零值: %+v %v", empty, err)
 	}
 }

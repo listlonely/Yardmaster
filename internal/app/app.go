@@ -21,6 +21,7 @@ import (
 	"yardmaster/internal/credential"
 	"yardmaster/internal/gateway"
 	"yardmaster/internal/netproxy"
+	"yardmaster/internal/otlp"
 	"yardmaster/internal/store"
 )
 
@@ -120,6 +121,15 @@ func runServe(args []string, stdout io.Writer) error {
 			l1TimeoutOrDefault(settings), newL1Caller(listen, settings.Token, settings.L1Classifier)),
 	}
 	defer srv.Traces.Close()
+
+	// OTLP traces 导出（M4-W5）：默认关；开启后经观察者异步推送，导出
+	// 失败只降级（丢弃本批），绝不阻断推理主流程。
+	if settings.OTel.Enabled && settings.OTel.Endpoint != "" {
+		exp := otlp.NewExporter(settings.OTel.Endpoint, settings.OTel.Headers)
+		defer exp.Close()
+		srv.Traces.OnTrace = exp.Export
+		slog.Info("otlp traces 导出已开启", "endpoint", settings.OTel.Endpoint)
+	}
 
 	// OAuth 到期前主动刷新（M3-W3）：每分钟扫描，提前 10 分钟续期。
 	// gemini-cli 的 client secret 经 settings 注入（公开常量但不入仓库，
