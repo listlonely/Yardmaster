@@ -4,3 +4,4 @@ coverage.out
 *.exe
 *.test
 .DS_Store
+coverage
