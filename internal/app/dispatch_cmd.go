@@ -43,11 +43,14 @@ func runDispatch(args []string, stdout, stderr io.Writer) error {
 }
 
 // loadEngineOrErr 读 dispatch.json：损坏 → fail-closed 报错（不静默空跑）。
+// 会话终态落盘（M6-W2）：CLI 派发与网关派发同留档（恢复仅在 serve
+// 装配做——CLI 一次性进程无历史可见需求）。
 func loadEngineOrErr(paths store.Paths) (*dispatch.Engine, error) {
 	e, err := dispatch.LoadEngine(paths.DispatchPath())
 	if err != nil {
 		return nil, err
 	}
+	e.AttachStore(dispatch.NewSessionStore(paths.DispatchSessionsPath()))
 	return e, nil
 }
 
