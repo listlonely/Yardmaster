@@ -6,11 +6,12 @@ package provider
 
 // Preset 是一个厂商接入预设。
 type Preset struct {
-	ID       string   `json:"id"`   // 预设 ID（provider add -preset）
-	Name     string   `json:"name"` // 默认显示名
-	Protocol Protocol `json:"protocol"`
-	BaseURL  string   `json:"base_url"` // 按 Protocol 的上游前缀（网关追加 /chat/completions 或 /v1/messages）
-	Note     string   `json:"note,omitempty"`
+	ID         string      `json:"id"`   // 预设 ID（provider add -preset）
+	Name       string      `json:"name"` // 默认显示名
+	Protocol   Protocol    `json:"protocol"`
+	BaseURL    string      `json:"base_url"` // 按 Protocol 的上游前缀（网关追加 /chat/completions 或 /v1/messages）
+	Note       string      `json:"note,omitempty"`
+	QuotaProbe *QuotaProbe `json:"quota_probe,omitempty"` // 余额轮询端点（M3-W5）
 }
 
 // Presets 是内置预设表（ID 唯一；后缀 -messages 表示 Anthropic 协议形态）。
@@ -20,13 +21,15 @@ var Presets = []Preset{
 	{ID: "glm-coding-messages", Name: "智谱 GLM Coding Plan（Anthropic 协议）", Protocol: ProtocolMessages,
 		BaseURL: "https://open.bigmodel.cn/api/anthropic"},
 	{ID: "glm", Name: "智谱开放平台（按量计费）", Protocol: ProtocolChat,
-		BaseURL: "https://open.bigmodel.cn/api/paas/v4", Note: "Coding Plan key 会被 1113 拒绝并自动纠偏到 coding 端点"},
+		BaseURL: "https://open.bigmodel.cn/api/paas/v4", Note: "Coding Plan key 会被 1113 拒绝并自动纠偏到 coding 端点",
+		QuotaProbe: &QuotaProbe{URL: "https://open.bigmodel.cn/api/paas/v4/finance/balance"}},
 	{ID: "zai-coding", Name: "Z.ai GLM Coding Plan", Protocol: ProtocolChat,
 		BaseURL: "https://api.z.ai/api/coding/paas/v4"},
 	{ID: "zai-coding-messages", Name: "Z.ai GLM Coding Plan（Anthropic 协议）", Protocol: ProtocolMessages,
 		BaseURL: "https://api.z.ai/api/anthropic"},
 	{ID: "zai", Name: "Z.ai 开放平台（按量计费）", Protocol: ProtocolChat,
-		BaseURL: "https://api.z.ai/api/paas/v4"},
+		BaseURL: "https://api.z.ai/api/paas/v4",
+		QuotaProbe: &QuotaProbe{URL: "https://api.z.ai/api/paas/v4/finance/balance"}},
 	{ID: "deepseek", Name: "DeepSeek（OpenAI 协议）", Protocol: ProtocolChat,
 		BaseURL: "https://api.deepseek.com"},
 	{ID: "deepseek-messages", Name: "DeepSeek（Anthropic 协议）", Protocol: ProtocolMessages,

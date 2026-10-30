@@ -38,6 +38,14 @@ const (
 	AccountBadCred   AccountStatus = "bad-credential" // 凭证失败：切走但标记需人工处理，不自动重试
 )
 
+// QuotaProbe 是 Provider 级的余额/用量查询配置（M3-W5）：网关后台
+// 轮询喂路由（余额耗尽 → 与额度感知同等休眠，SwitchWhenSpent）。
+type QuotaProbe struct {
+	URL      string            `json:"url"`                // 余额查询端点（GET，带账号凭证）
+	Interval int               `json:"interval,omitempty"` // 轮询间隔秒；0=默认 30 分钟
+	Headers  map[string]string `json:"headers,omitempty"`  // 额外请求头
+}
+
 // Provider 是一个上游模型服务商。
 type Provider struct {
 	ID       string       `json:"id"`
@@ -49,9 +57,10 @@ type Provider struct {
 	// AuthStyle 是 Anthropic 协议的认证头形态（M3-W4 自动学习）：
 	// 空=按默认 x-api-key；"bearer"=Authorization Bearer（预检 401 时
 	// 自动学习并落盘）。OpenAI 协议恒为 Bearer，不受此字段影响。
-	AuthStyle string   `json:"auth_style,omitempty"`
-	Models    []Model  `json:"models,omitempty"` // 预检拉取的模型清单（F2）
-	Accounts  []Account `json:"accounts"`
+	AuthStyle  string      `json:"auth_style,omitempty"`
+	QuotaProbe *QuotaProbe `json:"quota_probe,omitempty"` // 余额轮询（M3-W5；预设自动带上）
+	Models     []Model     `json:"models,omitempty"`      // 预检拉取的模型清单（F2）
+	Accounts   []Account   `json:"accounts"`
 }
 
 // AuthKind 是账号的认证形态（M3-W1）。零值为 api_key，兼容既有配置。
@@ -110,6 +119,18 @@ type Account struct {
 	UsedTokens     int64  `json:"used_tokens,omitempty"`
 	QuotaTokensDay int64  `json:"quota_tokens_day,omitempty"`
 	UsageDay       string `json:"usage_day,omitempty"`
+
+	// 多 Key 经营（M3-W5）：
+	// MaxConcurrent 是账号最大并发（0=不限；超限候选排入休眠段）。
+	MaxConcurrent int `json:"max_concurrent,omitempty"`
+	// Balance/ BalanceAt 是余额轮询结果（元；-1=未知）与更新时刻。
+	// BalanceAt>0 且 Balance<=0 → 订阅/余额用尽，休眠至次日（SwitchWhenSpent）。
+	Balance   float64 `json:"balance,omitempty"`
+	BalanceAt int64   `json:"balance_at,omitempty"`
+	// WindowStatus/WindowResetAt 是厂商订阅窗口运行态（响应头学习）：
+	// restricted 且未到 reset → 候选排末段（窗口重置自动回归）。
+	WindowStatus  string `json:"window_status,omitempty"`
+	WindowResetAt int64  `json:"window_reset_at,omitempty"`
 }
 
 // Validate 校验账号认证形态一致性（配置矛盾即拒绝，fail-closed）：

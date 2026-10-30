@@ -47,6 +47,7 @@ type Planner struct {
 	wrr        map[string][]int     // weight 策略平滑加权状态：策略键 → 各候选当前权重
 	affinity   map[string]string    // stickyKey → 候选 key
 	usage      map[string]usageEntry
+	inflight   map[string]int // 账号在途请求计数（按 key 并发上限，M3-W5）
 	usageDirty bool
 	now        func() time.Time
 }
@@ -67,6 +68,7 @@ func NewPlanner(providers []provider.Provider, groups []provider.Group) *Planner
 		wrr:       map[string][]int{},
 		affinity:  map[string]string{},
 		usage:     map[string]usageEntry{},
+		inflight:  map[string]int{},
 		now:       time.Now,
 	}
 }
@@ -219,8 +221,12 @@ func (p *Planner) accountsOf(prov *provider.Provider, upstreamModel string, now 
 		c := Candidate{Provider: prov, Account: acc, UpstreamModel: upstreamModel}
 		until, timeResting := p.resting[c.Key()]
 		switch {
+		case acc.MaxConcurrent > 0 && p.inflightOf(c.Key()) >= acc.MaxConcurrent:
+			resting = append(resting, c) // 按 key 并发上限：满载候选排末段（M3-W5）
 		case accountExhausted(acc, today):
 			exhausted = append(exhausted, c) // 额度耗尽：休眠至次日重置（读侧计算）
+		case accountSpent(acc, now):
+			exhausted = append(exhausted, c) // 订阅窗口 restricted/余额耗尽（M3-W5 SwitchWhenSpent）
 		case timeResting && until.After(now):
 			resting = append(resting, c)
 		default:
@@ -238,8 +244,12 @@ func (p *Planner) splitAwake(cands []Candidate, now time.Time) (awake, resting [
 	for _, c := range cands {
 		until, timeResting := p.resting[c.Key()]
 		switch {
+		case c.Account.MaxConcurrent > 0 && p.inflightOf(c.Key()) >= c.Account.MaxConcurrent:
+			shortRest = append(shortRest, c) // 并发满载（M3-W5）
 		case accountExhausted(c.Account, today):
 			exhausted = append(exhausted, c)
+		case accountSpent(c.Account, now):
+			exhausted = append(exhausted, c) // 订阅窗口/余额用尽（M3-W5）
 		case timeResting && until.After(now):
 			shortRest = append(shortRest, c)
 		default:
@@ -629,13 +639,18 @@ func (p *Planner) AllModels() []string {
 
 // StateAccount 是 /api/state 用的账号状态投影（锁内复制的值）。
 type StateAccount struct {
-	Key         string `json:"key"`
-	Provider    string `json:"provider"`
-	Name        string `json:"name"`
-	Status      string `json:"status"`
-	UsedTokens  int64  `json:"used_tokens"`
-	QuotaTokens int64  `json:"quota_tokens_day"`
-	UsageDay    string `json:"usage_day"`
+	Key         string  `json:"key"`
+	Provider    string  `json:"provider"`
+	Name        string  `json:"name"`
+	Status      string  `json:"status"`
+	UsedTokens  int64   `json:"used_tokens"`
+	QuotaTokens int64   `json:"quota_tokens_day"`
+	UsageDay    string  `json:"usage_day"`
+	Inflight    int     `json:"inflight,omitempty"`             // 在途请求（M3-W5）
+	Balance     float64 `json:"balance,omitempty"`              // 余额轮询结果（M3-W5）
+	BalanceAt   int64   `json:"balance_at,omitempty"`           // 余额更新时刻
+	WindowState string  `json:"window_status,omitempty"`        // 订阅窗口状态（M3-W5）
+	WindowReset int64   `json:"window_reset_at,omitempty"`      // 窗口重置时刻
 }
 
 // StateGroup 是 /api/state 用的路由组投影。
@@ -664,6 +679,11 @@ func (p *Planner) StateSnapshot() (providers []map[string]any, accounts []StateA
 				UsedTokens:  acc.UsedTokens,
 				QuotaTokens: acc.QuotaTokensDay,
 				UsageDay:    acc.UsageDay,
+				Inflight:    p.inflight[prov.ID+"/"+acc.Name],
+				Balance:     acc.Balance,
+				BalanceAt:   acc.BalanceAt,
+				WindowState: acc.WindowStatus,
+				WindowReset: acc.WindowResetAt,
 			})
 		}
 	}

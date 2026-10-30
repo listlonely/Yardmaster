@@ -355,7 +355,7 @@ func (s *Server) serveWithFailover(w http.ResponseWriter, r *http.Request,
 	var last attemptResult
 	for _, cand := range cands {
 		t0 := time.Now()
-		res := s.attempt(r.Context(), client, clientReq, rawBody, stream, cand)
+		res := s.attemptTracked(r.Context(), client, clientReq, rawBody, stream, cand)
 		dur := time.Since(t0).Milliseconds()
 		// 候选尝试链留痕（F9）：结果、状态码、失败原因、耗时、出口
 		if tr != nil {
@@ -430,6 +430,12 @@ func (s *Server) serveWithFailover(w http.ResponseWriter, r *http.Request,
 		usage := s.relay(w, client, clientReq, cand, res, stream)
 		switched := tr != nil && len(tr.Candidates) > 1
 		s.finishTrace(tr, "ok", res.status, start, usage, switched)
+		// 订阅窗口学习（M3-W5）：厂商限频响应头喂路由（SwitchWhenSpent）
+		if res.resp != nil {
+			if st, reset := parseWindowHeaders(res.resp.Header); st != "" {
+				s.Planner.SetWindow(cand.Key(), st, reset)
+			}
+		}
 		// 当日用量累计（W6）：smart 策略与额度观测的数据源。
 		if usage != nil {
 			s.Planner.NoteUsage(cand, usage.Prompt+usage.Completion)
@@ -443,6 +449,15 @@ func (s *Server) serveWithFailover(w http.ResponseWriter, r *http.Request,
 	}
 	s.finishTrace(tr, "fail", status, start, nil, false)
 	s.relayLastError(w, client, last)
+}
+
+// attemptTracked 在 attempt 外层维护账号在途计数（按 key 并发上限，
+// M3-W5）：进入计数、退出归还，span 仅覆盖上游请求本身。
+func (s *Server) attemptTracked(ctx context.Context, client ClientProto, clientReq any,
+	rawBody []byte, stream bool, cand Candidate) attemptResult {
+	s.Planner.Enter(cand.Key())
+	defer s.Planner.Exit(cand.Key())
+	return s.attempt(ctx, client, clientReq, rawBody, stream, cand)
 }
 
 // classifyAttempt 把尝试结果映射为 trace 候选结果分类。

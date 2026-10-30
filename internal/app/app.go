@@ -121,6 +121,8 @@ func runServe(stdout io.Writer) error {
 		})
 	}
 	srv.StartOAuthRefresher(ctx)
+	// 余额轮询（M3-W5）：每 30 分钟（或 QuotaProbe.Interval），失败只降级。
+	srv.StartQuotaPoller(ctx)
 
 	// 当日用量节流落盘（W6）：每分钟一次 + 退出前一次。
 	go func() {

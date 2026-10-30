@@ -133,6 +133,7 @@ func providerAdd(paths store.Paths, args []string, stdout, stderr io.Writer) err
 	key := fs.String("key", "", "API key（必填，仅存本机）")
 	account := fs.String("account", "main", "账号名")
 	presetID := fs.String("preset", "", "厂商预设 ID（yardmaster provider presets 查看；自动填 id/name/protocol/base_url）")
+	maxConc := fs.Int("max-concurrent", 0, "账号最大并发（0=不限，M3-W5）")
 	proxy := fs.String("proxy", "", "账号级代理（http/https/socks5/socks5h/direct）")
 	providerProxy := fs.String("provider-proxy", "", "Provider 级代理（账号未配置时继承）")
 	replace := fs.Bool("replace", false, "账号已存在时更新其凭证与代理")
@@ -189,6 +190,7 @@ func providerAdd(paths store.Paths, args []string, stdout, stderr io.Writer) err
 		cfg.Providers = append(cfg.Providers, provider.Provider{
 			ID: *id, Name: *name, Protocol: provider.Protocol(*protocol),
 			BaseURL: *baseURL, Proxy: netproxy.Ref(*providerProxy),
+			QuotaProbe: preset.QuotaProbe,
 		})
 		target = &cfg.Providers[len(cfg.Providers)-1]
 	}
@@ -197,6 +199,9 @@ func providerAdd(paths store.Paths, args []string, stdout, stderr io.Writer) err
 	}
 	if *providerProxy != "" {
 		target.Proxy = netproxy.Ref(*providerProxy)
+	}
+	if target.QuotaProbe == nil && preset.QuotaProbe != nil {
+		target.QuotaProbe = preset.QuotaProbe
 	}
 	if *baseURL != "" && *baseURL != target.BaseURL {
 		target.BaseURL = *baseURL
@@ -220,7 +225,8 @@ func providerAdd(paths store.Paths, args []string, stdout, stderr io.Writer) err
 		return nil
 	}
 	target.Accounts = append(target.Accounts, provider.Account{
-		Name: *account, APIKey: *key, Proxy: netproxy.Ref(*proxy), Status: provider.AccountAvailable,
+		Name: *account, APIKey: *key, Proxy: netproxy.Ref(*proxy),
+		Status: provider.AccountAvailable, MaxConcurrent: *maxConc,
 	})
 	if err := saveProvidersFile(paths, cfg); err != nil {
 		return err
@@ -429,14 +435,25 @@ func providerList(paths store.Paths, stdout io.Writer) error {
 		accInfo := make([]string, 0, len(p.Accounts))
 		for _, a := range p.Accounts {
 			px, _ := gateway.ResolveProxyRef(string(a.Proxy), string(p.Proxy), "")
-			info := fmt.Sprintf("%s[%s|代理:%s]", a.Name, a.Status, netproxy.Redact(px))
-			if a.Auth == provider.AuthOAuth {
-				info = fmt.Sprintf("%s[%s|oauth|过期:%s|代理:%s]", a.Name, a.Status, oauthExpiryText(a.OAuth), netproxy.Redact(px))
+			var extra string
+			switch {
+			case a.Auth == provider.AuthOAuth:
+				extra = fmt.Sprintf("|oauth|过期:%s", oauthExpiryText(a.OAuth))
+			case a.MaxConcurrent > 0:
+				extra = fmt.Sprintf("|并发≤%d", a.MaxConcurrent)
 			}
+			if a.BalanceAt > 0 {
+				extra += fmt.Sprintf("|余额:%.2f", a.Balance)
+			}
+			info := fmt.Sprintf("%s[%s%s|代理:%s]", a.Name, a.Status, extra, netproxy.Redact(px))
 			accInfo = append(accInfo, info)
 		}
-		fmt.Fprintf(stdout, "%s  %-18s %-18s 模型 %2d  账号: %s\n",
-			p.ID, p.Name, p.Protocol, len(p.Models), strings.Join(accInfo, " "))
+		qp := ""
+		if p.QuotaProbe != nil {
+			qp = "  余额轮询: " + netproxy.Redact(p.QuotaProbe.URL)
+		}
+		fmt.Fprintf(stdout, "%s  %-18s %-18s 模型 %2d  账号: %s%s\n",
+			p.ID, p.Name, p.Protocol, len(p.Models), strings.Join(accInfo, " "), qp)
 	}
 	return nil
 }
