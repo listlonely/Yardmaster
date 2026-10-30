@@ -351,6 +351,74 @@ func Test429RestsCandidate(t *testing.T) {
 	}
 }
 
+// Test429WithResetTimeRestsUntil：上游 429 给出重置时间（GLM 1308 实测
+// 形状）→ RestUntil 精准休眠 + 窗口学习进 state（还原旧代码固定 5 分钟
+// 休眠即失败：resting 与 window_reset_at 均对不上）。
+func Test429WithResetTimeRestsUntil(t *testing.T) {
+	until := time.Now().Add(time.Hour).Truncate(time.Second) // 秒级文案
+	up := newFakeUpstream(t, func(rec recordedReq, n int) (int, string, string) {
+		if rec.auth == "Bearer sk-one" {
+			return 429, "application/json", fmt.Sprintf(
+				`{"error":{"code":"1308","message":"已达到 5 小时的使用上限。您的限额将在 %s 重置。"}}`,
+				until.Format("2006-01-02 15:04:05"))
+		}
+		return 200, "application/json", `{"id":"c3","object":"chat.completion","model":"up-m","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`
+	})
+	gw := newGateway(t, chatProvider(up.srv.URL))
+
+	resp := post(t, gw.URL, "/v1/chat/completions", chatReqBody("prov/up-m", false))
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	// state：resting 截止 = 上游给的重置时刻（±2s 容整秒截断偏差）；
+	// 窗口字段同步（Provider 页「窗口限频」徽章的数据源）。
+	var st struct {
+		Resting  map[string]string `json:"resting"`
+		Accounts []struct {
+			Key         string `json:"key"`
+			WindowState string `json:"window_status"`
+			WindowReset int64  `json:"window_reset_at"`
+		} `json:"accounts"`
+	}
+	if err := json.Unmarshal(getBody(t, gw.URL+"/api/state"), &st); err != nil {
+		t.Fatalf("state 解析: %v", err)
+	}
+	gotRest, ok := st.Resting["prov/one"]
+	if !ok {
+		t.Fatalf("state 缺 resting[prov/one]: %v", st.Resting)
+	}
+	gotUntil, err := time.Parse(time.RFC3339, gotRest)
+	if err != nil {
+		t.Fatalf("resting 时刻: %v", err)
+	}
+	if d := gotUntil.Sub(until); d > 2*time.Second || d < -2*time.Second {
+		t.Fatalf("resting = %v，应为上游重置时刻 %v（旧代码为 now+5m）", gotUntil, until)
+	}
+	for _, a := range st.Accounts {
+		if a.Key != "prov/one" {
+			continue
+		}
+		if a.WindowState != "restricted" || a.WindowReset != until.Unix() {
+			t.Fatalf("窗口字段 = (%q, %d)，应为 (restricted, %d)", a.WindowState, a.WindowReset, until.Unix())
+		}
+	}
+}
+
+// getBody 请求并返回响应体（state 断言用）。
+func getBody(t *testing.T, url string) []byte {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("读响应: %v", err)
+	}
+	return b
+}
+
 func TestRequestErrorNoFailover(t *testing.T) {
 	attempts := 0
 	up := newFakeUpstream(t, func(rec recordedReq, n int) (int, string, string) {

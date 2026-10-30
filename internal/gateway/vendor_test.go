@@ -77,6 +77,35 @@ func TestGLMCorrectedBase(t *testing.T) {
 	}
 }
 
+// TestGLMQuotaReset：429 错误体重置时刻解析（M6-W1 实测 1308 文案）。
+func TestGLMQuotaReset(t *testing.T) {
+	// M6-W1 冒烟实测样本（智谱 Coding Plan 1308）。
+	got, ok := glmQuotaReset([]byte(`{"error":{"code":"1308","message":"已达到 5 小时的使用上限。您的限额将在 2026-10-30 16:23:38 重置。"}}`))
+	if !ok {
+		t.Fatal("1308 样本应解析出重置时刻")
+	}
+	want := time.Date(2026, 10, 30, 16, 23, 38, 0, time.Local)
+	if !got.Equal(want) {
+		t.Fatalf("解析 = %v, want %v", got, want)
+	}
+	// 秒缺省形态
+	got, ok = glmQuotaReset([]byte(`{"error":{"code":"1308","message":"您的限额将在 2026-10-30 16:23 重置"}}`))
+	if !ok || got != time.Date(2026, 10, 30, 16, 23, 0, 0, time.Local) {
+		t.Fatalf("秒缺省 = %v, %v", got, ok)
+	}
+	// 读不懂=未知：无重置时间 / 英文文案 / 畸形日期
+	for _, body := range []string{
+		`{"error":{"message":"quota"}}`,
+		`{"error":{"message":"Rate limit exceeded, please try again later"}}`,
+		`{"error":{"code":"1308","message":"您的限额将在明天重置"}}`,
+		`{"error":{"code":"1308","message":"限额将在 2026-13-99 99:99:99 重置"}}`,
+	} {
+		if _, ok := glmQuotaReset([]byte(body)); ok {
+			t.Fatalf("不应解析出时刻: %s", body)
+		}
+	}
+}
+
 func TestCorrectBaseURLPersists(t *testing.T) {
 	appDir := t.TempDir()
 	paths := store.Paths{AppDir: appDir}

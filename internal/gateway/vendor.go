@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"yardmaster/internal/provider"
 	"yardmaster/internal/store"
@@ -95,6 +96,33 @@ func glmCorrectedBase(base string, errBody []byte) (string, bool) {
 		return "", false
 	}
 	return strings.Replace(base, "/api/paas/v4", "/api/coding/paas/v4", 1), true
+}
+
+// reGlmQuotaReset 匹配 GLM/Zhipu 429 文案中的重置时刻（M6-W1 实测样本：
+// 「已达到 5 小时的使用上限。您的限额将在 2026-10-30 16:23:38 重置。」）。
+// 秒可缺省；日期段固定 YYYY-MM-DD。
+var reGlmQuotaReset = regexp.MustCompile(
+	`将(?:于|在)\s*(\d{4}-\d{2}-\d{2})\s+(\d{1,2}:\d{2})(?::(\d{2}))?\s*重置`)
+
+// glmQuotaReset 从 429 错误体提取上游明确给出的重置时刻（RestUntil
+// 精准休眠 + SetWindow「窗口限频」徽章的数据源）。读不懂=未知：返回
+// false 走默认休眠。厂商文案无时区标记，按本地时区（部署侧与厂商
+// 同域时正确；否则误差为时区差，仍有兜底 5 分钟节奏可比对）。
+func glmQuotaReset(body []byte) (time.Time, bool) {
+	m := reGlmQuotaReset.FindSubmatch(body)
+	if m == nil {
+		return time.Time{}, false
+	}
+	sec := "00"
+	if m[3] != nil {
+		sec = string(m[3])
+	}
+	t, err := time.ParseInLocation("2006-01-02 15:04:05",
+		string(m[1])+" "+string(m[2])+":"+sec, time.Local)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
 }
 
 // CorrectBaseURL 端点纠偏：更新内存快照并读改写落盘 providers.json

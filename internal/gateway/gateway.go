@@ -433,7 +433,17 @@ func (s *Server) serveWithFailover(w http.ResponseWriter, r *http.Request,
 		}
 		switch {
 		case res.status == http.StatusTooManyRequests:
-			s.Planner.Rest(cand, restQuota)
+			// 上游明确给出重置时间（GLM 1308「将在 …重置」，M6-W1）→
+			// RestUntil 精准休眠 + 窗口学习（Provider 页「窗口限频」徽章）；
+			// 读不懂=未知退默认 5 分钟。已过期的重置时刻视为无效文案。
+			if until, ok := glmQuotaReset(res.body); ok && until.After(time.Now()) {
+				s.Planner.RestUntil(cand, until)
+				s.Planner.SetWindow(cand.Key(), "restricted", until.Unix())
+				slog.Info("上游限频含重置时间，精准休眠", "provider", cand.Provider.ID,
+					"account", cand.Account.Name, "reset_at", until.Format(time.RFC3339))
+			} else {
+				s.Planner.Rest(cand, restQuota)
+			}
 			last = res
 			continue
 		case res.status == http.StatusPaymentRequired:
