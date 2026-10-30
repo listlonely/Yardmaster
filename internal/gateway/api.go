@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"yardmaster/internal/classify"
+	"yardmaster/internal/dispatch"
 	"yardmaster/internal/provider"
 	"yardmaster/internal/store"
 )
@@ -41,7 +42,8 @@ const (
 	cfgRules     = "rules"
 	cfgKeys      = "keys"
 	cfgIntents   = "intents"
-	cfgPricing   = "pricing" // M2-W4：模型单价表
+	cfgPricing   = "pricing"  // M2-W4：模型单价表
+	cfgDispatch  = "dispatch" // M5-W5：任务→Agent 派发配置
 )
 
 // maxConfigBody 限制配置写回请求体大小（含模型清单的 providers.json
@@ -92,6 +94,13 @@ func (s *Server) handleConfigGet(w http.ResponseWriter, name string) {
 	case cfgPricing:
 		var f PricingFile
 		if err := s.loadCurrent(s.pricingPath(), &f); err != nil {
+			writeAPIErr(w, err)
+			return
+		}
+		writeJSON(w, f)
+	case cfgDispatch:
+		var f dispatch.DispatchFile
+		if err := s.loadCurrent(s.dispatchPath(), &f); err != nil {
 			writeAPIErr(w, err)
 			return
 		}
@@ -240,6 +249,28 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, name st
 			return
 		}
 		s.writeResult(w, effectImmediate, f)
+	case cfgDispatch:
+		var f dispatch.DispatchFile
+		if err := strictDecode(dec, &f); err != nil {
+			writeAPIErr(w, badRequest(err))
+			return
+		}
+		if err := dispatch.ValidateDispatch(f); err != nil {
+			writeAPIErr(w, badRequest(err))
+			return
+		}
+		if err := s.writeConfig(s.dispatchPath(), cfgDispatch, f); err != nil {
+			writeAPIErr(w, err)
+			return
+		}
+		// 热生效：引擎 agent 表热替换（运行中会话不受影响）。
+		if s.Dispatch != nil {
+			if err := s.Dispatch.Reload(f); err != nil {
+				writeAPIErr(w, badRequest(err))
+				return
+			}
+		}
+		s.writeResult(w, effectImmediate, f)
 	default:
 		writeAPIErr(w, errUnknownConfig{name})
 	}
@@ -286,6 +317,7 @@ func (s *Server) rulesPath() string    { return filepath.Join(s.AppDir, "rules.j
 func (s *Server) keysPath() string     { return filepath.Join(s.AppDir, "keys.json") }
 func (s *Server) intentsPath() string  { return filepath.Join(s.AppDir, "intents.json") }
 func (s *Server) pricingPath() string  { return filepath.Join(s.AppDir, "pricing.json") }
+func (s *Server) dispatchPath() string { return filepath.Join(s.AppDir, "dispatch.json") }
 
 // handleCost 返回最近 N 天的成本报告（M2-W4）：单价表 × trace 聚合，
 // 查询时计算、无新增持久化。查询参数：days（默认 7，上限 30=trace 保留期）。
@@ -578,7 +610,7 @@ func (e *apiError) Error() string { return e.Msg }
 type errUnknownConfig struct{ name string }
 
 func (e errUnknownConfig) Error() string {
-	return "未知配置名 " + e.name + "（可用: providers | settings | rules | keys | intents | pricing）"
+	return "未知配置名 " + e.name + "（可用: providers | settings | rules | keys | intents | pricing | dispatch）"
 }
 
 func (e errUnknownConfig) status() int { return http.StatusNotFound }

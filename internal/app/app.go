@@ -70,8 +70,10 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		return runTUI(args[1:], stdout, stderr)
 	case "run": // M5-W3：headless Agent 启动原语（stdin 任务 → stdout 透传）
 		return runRun(args[1:], os.Stdin, stdout, stderr)
+	case "dispatch": // M5-W5：任务→Agent 派发（agents/init/run）
+		return runDispatch(args[1:], stdout, stderr)
 	default:
-		fmt.Fprintf(stderr, "未知子命令 %q；可用：serve、version、provider、group、rules、keys、intents、trace、settings、agents、price、cost、update、tui、run\n", args[0])
+		fmt.Fprintf(stderr, "未知子命令 %q；可用：serve、version、provider、group、rules、keys、intents、trace、settings、agents、price、cost、update、tui、run、dispatch\n", args[0])
 		return ErrUsage
 	}
 }
@@ -183,7 +185,7 @@ func runServe(args []string, stdout io.Writer) error {
 		fmt.Fprintf(stdout, "  全局代理: %s\n", netproxy.Redact(settings.GlobalProxy))
 	}
 	fmt.Fprintf(stdout, "  端点: /v1/chat/completions · /v1/messages · /healthz · /api/state · /api/trace\n")
-	fmt.Fprintf(stdout, "  控制台: %s（总览/Provider/路由/观测；管理 API /api/config/* · /api/reload）\n", consoleURL)
+	fmt.Fprintf(stdout, "  控制台: %s（总览/Provider/路由/观测/派发；管理 API /api/config/* · /api/reload）\n", consoleURL)
 	if settings.L1Classifier != "" {
 		fmt.Fprintf(stdout, "  L1 分类: %s（超时 %s）\n", settings.L1Classifier, l1TimeoutOrDefault(settings))
 	}

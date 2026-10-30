@@ -134,6 +134,31 @@ type Session struct {
 	cancel   context.CancelFunc
 	runCtx   context.Context
 	finished chan struct{}
+	live     *LiveBuffer
+}
+
+// Output 返回会话输出尾部（运行中实时、结束后即最终尾部）。
+func (s *Session) Output() string {
+	if s.live != nil {
+		return s.live.Tail()
+	}
+	return ""
+}
+
+// LiveBuffer 是会话级输出缓冲：转发到下游（可 nil）并保留尾部，运行中
+// 即可读取（控制台实时视图）。
+type LiveBuffer struct{ tw *tailWriter }
+
+// NewLiveBuffer 构造输出缓冲（out 可为 nil：仅留存）。
+func NewLiveBuffer(out io.Writer) *LiveBuffer { return &LiveBuffer{newTailWriter(out)} }
+
+func (l *LiveBuffer) Write(p []byte) (int, error) { return l.tw.Write(p) }
+
+// Tail 返回尾部留存文本。
+func (l *LiveBuffer) Tail() string {
+	l.tw.mu.Lock()
+	defer l.tw.mu.Unlock()
+	return string(l.tw.tail)
 }
 
 // Engine 持有派发配置与会话表；零值不可用，经 NewEngine 构造。
@@ -260,6 +285,7 @@ func (e *Engine) Submit(parent context.Context, agent AgentSpec, task, model str
 		Agent: agent.ID, Task: summary(task), Model: model,
 		Status: "running", StartedAt: e.now().UTC().Format(time.RFC3339),
 		finished: make(chan struct{}),
+		live:     NewLiveBuffer(stream),
 	}
 	ctx, cancel := context.WithCancel(parent)
 	s.cancel, s.runCtx = cancel, ctx
@@ -271,7 +297,7 @@ func (e *Engine) Submit(parent context.Context, agent AgentSpec, task, model str
 
 	go func() {
 		defer func() { <-sem; <-e.global; cancel() }()
-		res := Run(ctx, spec, task, model, stream)
+		res := Run(ctx, spec, task, model, s.live)
 		e.mu.Lock()
 		s.Result, s.EndedAt = &res, e.now().UTC().Format(time.RFC3339)
 		switch res.Outcome {
@@ -302,6 +328,31 @@ func (e *Engine) Cancel(id string) bool {
 		}
 	}
 	return false
+}
+
+// SessionByID 返回会话指针（详情/实时输出用）；调用方只读。
+func (e *Engine) SessionByID(id string) (*Session, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, s := range e.sessions {
+		if s.ID == id {
+			return s, true
+		}
+	}
+	return nil, false
+}
+
+// Reload 热替换 agent 表（PUT /api/config/dispatch 写后路径）：运行中
+// 会话不受影响（各自持有旧并发槽，归还即废弃）。
+func (e *Engine) Reload(f DispatchFile) error {
+	if err := ValidateDispatch(f); err != nil {
+		return err
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.agents = f.Agents
+	e.sems = map[string]chan struct{}{}
+	return nil
 }
 
 // Sessions 返回会话快照（新→旧）。

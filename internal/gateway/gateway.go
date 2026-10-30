@@ -102,6 +102,16 @@ func (s *Server) routes() http.Handler {
 	})
 	mux.HandleFunc("POST /api/reload", s.handleReload)
 	mux.HandleFunc("GET /api/cost", s.handleCost)
+	// 派发管理面（M5-W5）：提交/清单/详情/取消；配置读写走 /api/config/dispatch
+	mux.HandleFunc("POST /api/dispatch/run", s.handleDispatchRun)
+	mux.HandleFunc("GET /api/dispatch/agents", s.handleDispatchAgents)
+	mux.HandleFunc("GET /api/dispatch/sessions", s.handleDispatchSessions)
+	mux.HandleFunc("GET /api/dispatch/sessions/{id}", func(w http.ResponseWriter, r *http.Request) {
+		s.handleDispatchSession(w, r.PathValue("id"))
+	})
+	mux.HandleFunc("POST /api/dispatch/sessions/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
+		s.handleDispatchCancel(w, r.PathValue("id"))
+	})
 	mux.Handle("GET /web/", http.StripPrefix("/web/", http.FileServerFS(webSub())))
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {
 		index, err := fs.ReadFile(webFS, "web/index.html")

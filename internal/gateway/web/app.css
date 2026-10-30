@@ -68,3 +68,8 @@ a.quota-btn { cursor:pointer; font-size:.82rem; color:var(--accent) }
 .modal .row { justify-content:flex-end }
 .modal .hint { font-size:.78rem; color:var(--muted); margin:2px 0 0 6.5rem }
 .modal-err { color:#b91c1c; font-size:.85rem }
+/* 派发页（M5-W5） */
+#disp-task { width:100%; padding:6px 10px; border:1px solid var(--line); border-radius:8px; font:inherit; resize:vertical; box-sizing:border-box; margin:6px 0 }
+.disp-output { background:#0f172a; color:#dbeafe; border-radius:8px; padding:10px 12px; max-height:16rem; overflow:auto; font-size:.8rem; white-space:pre-wrap; word-break:break-all; margin-top:8px }
+#tbl-dispatch tr.sel { background:#eef4ff }
+textarea, input, select { font-family:inherit }

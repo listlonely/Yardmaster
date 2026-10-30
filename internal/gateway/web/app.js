@@ -99,6 +99,7 @@ function activateTab(name) {
   document.querySelectorAll('.page').forEach((p) =>
     p.classList.toggle('active', p.id === 'page-' + name));
   if (name === 'observe') { loadTraces(); loadCost(); loadPricing(); }
+  if (name === 'dispatch') { loadDispatchAgents(); loadDispatchSessions(); }
 }
 
 // ---------- 总览 ----------
@@ -881,6 +882,103 @@ q('#tbl-pricing tbody').addEventListener('click', async (e) => {
   if (e.target.classList.contains('del')) deletePrice(model);
 });
 $('btn-add-price').addEventListener('click', () => priceModal(null));
+
+// ---------- 派发（M5-W5：任务→Agent headless） ----------
+
+let dispSelected = null; // 当前查看输出的会话 ID
+
+async function loadDispatchAgents() {
+  const sel = $('disp-agent');
+  const cur = sel.value;
+  try {
+    const r = await api('/api/dispatch/agents');
+    sel.innerHTML = '<option value="">自动（按匹配规则）</option>' +
+      (r.agents || []).map((a) => `<option value="${esc(a.id)}">${esc(a.id)}</option>`).join('');
+    if (cur) sel.value = cur;
+  } catch (e) {
+    sel.innerHTML = '<option value="">派发不可用</option>';
+    toast('派发配置加载失败: ' + e.message, true);
+  }
+}
+
+async function loadDispatchSessions() {
+  try {
+    const r = await api('/api/dispatch/sessions');
+    const rows = (r.sessions || []).map((s) => {
+      const badge = { done: 'ok', failed: 'prefail' }[s.status] || '';
+      const dur = s.result ? `${s.result.duration_ms} ms` : '…';
+      const act = s.status === 'running'
+        ? `<button class="mini disp-cancel" data-id="${esc(s.id)}">取消</button> `
+        : '';
+      const view = `<button class="mini disp-view" data-id="${esc(s.id)}">输出</button>`;
+      return `<tr class="${dispSelected === s.id ? 'sel' : ''}">
+        <td><code>${esc(s.id)}</code></td>
+        <td>${esc(s.agent)}</td>
+        <td title="${esc(s.task)}">${esc((s.task || '').slice(0, 40))}</td>
+        <td><span class="badge ${badge}">${esc(s.status)}</span>${s.result && s.result.outcome ? ` <span class="muted">${esc(s.result.outcome)}</span>` : ''}</td>
+        <td class="muted">${dur}</td>
+        <td>${act}${view}</td></tr>`;
+    }).join('');
+    q('#tbl-dispatch tbody').innerHTML = rows || '<tr><td colspan="6" class="muted">暂无会话</td></tr>';
+    if (dispSelected) await showDispatchOutput(dispSelected);
+  } catch (e) {
+    toast('会话加载失败: ' + e.message, true);
+  }
+}
+
+async function showDispatchOutput(id) {
+  dispSelected = id;
+  try {
+    const d = await api('/api/dispatch/sessions/' + encodeURIComponent(id));
+    const pre = $('disp-output');
+    pre.hidden = false;
+    pre.textContent = d.output || '（暂无输出）';
+  } catch (e) {
+    $('disp-output').hidden = true;
+    dispSelected = null;
+  }
+}
+
+q('#tbl-dispatch tbody').addEventListener('click', async (e) => {
+  const view = e.target.closest('.disp-view');
+  const cancel = e.target.closest('.disp-cancel');
+  if (view) { showDispatchOutput(view.dataset.id); return; }
+  if (cancel) {
+    try {
+      await api('/api/dispatch/sessions/' + encodeURIComponent(cancel.dataset.id) + '/cancel', { method: 'POST' });
+      toast('已请求取消 ' + cancel.dataset.id);
+      loadDispatchSessions();
+    } catch (ex) {
+      toast('取消失败: ' + ex.message, true);
+    }
+  }
+});
+
+$('btn-dispatch-run').addEventListener('click', async () => {
+  const task = $('disp-task').value.trim();
+  if (!task) { toast('任务文本不能为空', true); return; }
+  const body = { task, agent: $('disp-agent').value, model: $('disp-model').value.trim() };
+  try {
+    const r = await api('/api/dispatch/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    toast(`已派发 → ${r.session.agent}（${r.session.id}${r.intent ? '，意图 ' + r.intent : ''}）`);
+    $('disp-task').value = '';
+    dispSelected = r.session.id;
+    loadDispatchSessions();
+  } catch (e) {
+    toast('派发失败: ' + e.message, true);
+  }
+});
+
+$('btn-disp-refresh').addEventListener('click', loadDispatchSessions);
+setInterval(() => {
+  if (q('#page-dispatch').classList.contains('active') && $('disp-auto').checked) {
+    loadDispatchSessions();
+  }
+}, 5000);
 
 // ---------- 启动 ----------
 

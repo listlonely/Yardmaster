@@ -14,6 +14,7 @@
       <a href="#providers" data-tab="providers">Provider</a>
       <a href="#routing" data-tab="routing">路由</a>
       <a href="#observe" data-tab="observe">观测</a>
+      <a href="#dispatch" data-tab="dispatch">派发</a>
     </nav>
     <div class="spacer"></div>
     <button id="btn-reload" title="重读 providers.json 并热替换路由快照">重载配置</button>
@@ -109,6 +110,31 @@
         <p class="muted">单位：美元 / 1M tokens；价格键 provider/model（精确）优先于裸 model；models.dev 自动目录为后续里程碑。</p>
         <table id="tbl-pricing"><thead><tr><th>价格键</th><th>输入 $/1M</th><th>输出 $/1M</th><th></th></tr></thead><tbody></tbody></table>
       </div>
+    </section>
+    <!-- 派发（M5-W5：任务→Agent headless 派发） -->
+    <section id="page-dispatch" class="page">
+      <div class="card">
+        <b>提交任务</b>
+        <p class="muted">任务文本经 stdin 交给本机已安装的 Agent（headless）；选择规则见 dispatch.json（意图→Agent 匹配，无匹配走 default 兜底）。ToS 边界：不代装、不代登录。</p>
+        <textarea id="disp-task" rows="3" placeholder="例：把 src 下的 TODO 注释整理成清单"></textarea>
+        <div class="row">
+          <label class="inline">Agent <select id="disp-agent"><option value="">自动（按匹配规则）</option></select></label>
+          <label class="inline">模型占位 <input id="disp-model" placeholder="{model} 替换值（可选）" size="14"></label>
+          <span class="spacer"></span>
+          <button id="btn-dispatch-run" class="primary">派发</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="row"><b>会话</b><span class="spacer"></span>
+          <label class="inline"><input type="checkbox" id="disp-auto" checked> 自动刷新(5s)</label>
+          <button id="btn-disp-refresh">刷新</button></div>
+        <table id="tbl-dispatch">
+          <thead><tr><th>会话</th><th>Agent</th><th>任务</th><th>状态</th><th>耗时</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <pre id="disp-output" class="disp-output" hidden></pre>
+      </div>
+      <p class="muted">派发配置经管理 API（PUT /api/config/dispatch：严格校验、写前备份、审计）；会话终态写入观测页 trace（RoutePath=dispatch）。</p>
     </section>
   </main>
 

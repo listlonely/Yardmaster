@@ -83,8 +83,8 @@ stdout，结果与耗时留痕。与 `internal/agent` 接线子系统协同成�
 | 周 | 交付 | 状态 |
 | :-- | :-- | :-- |
 | W3 | 本设计稿 + runner 原语（Run/Outcome/Result）+ CLI `run` 直通 | 已交付 |
-| W4 | dispatch.json 加载校验（fail-closed）+ 匹配引擎 + 会话表 + 派发 trace | 计划 |
-| W5 | 管理面 API（run/sessions/cancel）+ 控制台派发页 + CLI `dispatch` | 计划 |
+| W4 | dispatch.json 加载校验（fail-closed）+ 匹配引擎 + 会话表 + 派发 trace | 已交付 |
+| W5 | 管理面 API（run/agents/sessions/cancel + config/dispatch 写路径热替换）+ 控制台派发页 + CLI `dispatch` | 已交付 |
 | W6 | 三家真实形状冒烟（本机未装 → 如实标注未实测）+ 发布 v0.5.0 | 计划 |
 
 ## 七、边界与铁律对照

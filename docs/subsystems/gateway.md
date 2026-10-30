@@ -56,10 +56,11 @@
 - fail-closed：当前文件解析失败时 GET 报 500、PUT/`/api/reload` 报 409 拒绝覆写（读不懂=未知，绝不把损坏文件当空配置覆盖）。
 - 热重载：`POST /api/reload` 重读 providers.json → `Planner.Reload` 热替换快照；进程内运行态按「键仍存在才保留」剪枝（休眠表、当日用量、亲和表），策略游标保留。补齐 CLI 编辑 providers「重启 serve 生效」缺口。
 - 生效语义：providers PUT 即时生效（写后自动 Reload）；rules/keys/intents 引擎热读取即时生效；settings 装配期读取，响应 `effect:"restart"`。
-- 控制台：`/` 出入口 + `/web/*` 静态资源（embed 进二进制）；总览（数据卡/代理继承链/休眠/设置保存）/Provider（账号、脱敏密钥、实时用量进度条、有效代理标注、模型清单、额度设置）/路由（组/规则/意图词表的完整编辑：新建/编辑/删除，成员引用有效性标注）/观测（trace 查询、caller 筛选、行展开候选链详情、自动刷新）四页。
+- 控制台：`/` 出入口 + `/web/*` 静态资源（embed 进二进制）；总览（数据卡/代理继承链/休眠/设置保存）/Provider（账号、脱敏密钥、实时用量进度条、有效代理标注、模型清单、额度设置）/路由（组/规则/意图词表的完整编辑：新建/编辑/删除，成员引用有效性标注）/观测（trace 查询、caller 筛选、行展开候选链详情、自动刷新）/派发（任务提交、会话实时输出，M5-W5）五页。
 - 控制台编辑安全（W3）：所有写操作经管理 API（严格校验 + 写前备份 + 审计）；提交前 fresh GET 构造全文档（last-writer-wins 窗口最小化）；providers 的密钥以脱敏形往返由服务端保留；删除类操作二次确认；客户端预校验（正则编译/成员引用/示例 ≤5）失败即拦截不发请求，服务端校验失败不落盘，错误内联显示于表单。
 - 局域网共享与分发（W5）：settings 新增 `listen`（空=127.0.0.1:8317）与 `token`；令牌脱敏往返语义与 api_key 同规（空/脱敏形保留现存）；控制台 401 驱动单飞令牌输入（sessionStorage 会话内有效，并发 401 共享同一 Promise 防叠层——实测缺陷修复）；升级提示 `yardmaster update check`（GitHub releases 比较，dev 态跳过）；安装脚本 `scripts/install.ps1`（-File 离线/-NoPath 供测试；**UTF-8 BOM 必需**——PowerShell 5.1 无 BOM 按 ANSI 解析中文注释即语法错误）与 `scripts/install.sh`（--user/--file），随 release 产物分发。
 - 账号实时状态：`/api/state` 附 `accounts` 数组（key/status/used_tokens/quota_tokens_day/usage_day，Planner 内存快照），控制台 join 该数据展示实时用量——配置文件里的 used_tokens 经 60s 节流落盘，直接读会滞后。
+- 派发管理面（M5-W5，[2026-10-30-派发管理面]）：`POST /api/dispatch/run`（意图链尽力分类 → match/default 选择 → 后台 ctx 提交，会话生命周期独立于请求）、`GET /api/dispatch/agents|sessions|sessions/{id}`（详情含实时输出尾部）、`POST /api/dispatch/sessions/{id}/cancel`；配置读写 `GET/PUT /api/config/dispatch`（校验+备份+审计，写后引擎热替换）；控制台「派发」页（提交表单/会话表/实时输出/取消，5s 自动刷新）；会话终态记 trace（RoutePath=dispatch，Served=agent/&lt;id&gt;，见 dispatch.md）。
 
 ## 约束与失效行为
 
