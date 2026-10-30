@@ -18,7 +18,7 @@
 | SSE | `scanSSE`：单 Reader 逐事件扫描，注释/心跳跳过，EOF 前最后一条无换行事件可回收 | [`protocol.go`](../../internal/gateway/protocol.go) |
 | 上游通道 | `netproxy.SharedTransport`：账号→Provider→全局代理继承；连接池复用 + HTTP/2 健康检查 | [`transport.go`](../../internal/netproxy/transport.go) |
 
-## 路由判定顺序（W5 定稿）
+## 路由判定顺序（W5 定稿）[2026-10-29-路由判定顺序]
 
 1. 任务规则命中 → 规则 `target` 覆盖（响应带 `X-Gw-Rule`）。
 2. 未命中 → 客户端请求的 `model`。
@@ -35,10 +35,10 @@
 2. 请求进入：解析协议请求 → 提取 caller key（`x-api-key` 优先，其次 `Authorization: Bearer`）→ 路由判定（上节顺序）→ `Plan(target, stickyKey)`。
 3. 逐候选 `attempt`：按候选改写上游模型名（同协议改原始字节、跨协议改结构体——组内各候选模型名可不同），补认证头，路径按协议拼接。
 4. 失败分类入休眠表（429 默认 5 分钟；5xx/网络错 5 分钟；401/403 短休眠 30s）。smart 策略读取账号 `used_tokens/quota_tokens_day`（W6 由响应 usage 填充）按剩余比例降序。
-5. 2xx → `X-Gw-Provider/X-Gw-Account/X-Gw-Model`（+`X-Gw-Rule` 若规则命中）→ 同协议透传 / 跨协议翻译 → `Clear` 休眠 + 记录亲和。
+5. 2xx → `X-Gw-Provider/X-Gw-Account/X-Gw-Model`（+`X-Gw-Rule` 若规则命中）→ 同协议透传 / 跨协议翻译（流式为事件层，M5-W1）→ `Clear` 休眠 + 记录亲和。[2026-10-30-事件化流式]
 6. 全部失败：最后一次的原始错误原样回给 Agent（不伪装 200）。
 
-## 决策追溯与用量（W6）
+## 决策追溯与用量（W6）[2026-10-29-决策追溯]
 
 - trace 记录时机：路由判定起（解析失败/全败也留痕，Outcome=fail）；候选链逐次尝试记录结果分类（ok/net/quota/5xx/cred/client）、状态码、原因摘要（错误响应片段，`netproxy.Snippet` 截断）、耗时、实际代理出口（脱敏）。
 - 首字节（ttfb_ms）= 请求进入到上游 2xx 响应头到达；total_ms = 到响应写完。token：非流式与流式均尽力从上游响应体提取（usage 正则、取最后一次出现；流式只扫尾部 8KB 窗口，usage 跨块截断时可能漏计——尽力而为语义）。
@@ -47,7 +47,7 @@
 - 落盘：`<数据目录>/trace/trace-YYYYMMDD.jsonl`（0600）；启动时清理 + 跨天滚动时清理；只存元数据与失败原因，永不落盘对话内容（§4.4）。
 - 用量：`NoteUsage` 累计（内存 + 账号快照字段，跨日按 UsageDay 重置）；`FlushUsage` 重读 providers.json 只更新跟踪账号（不覆盖运行期 CLI 编辑），serve 期间每分钟 + 退出前各一次；`yardmaster provider quota <p> <acc> <tokens|0>` 配置账号当日额度，>0 后 smart 策略按剩余比例排序。
 - 额度感知路由（M2-W4）：`accountExhausted` 读侧计算（QuotaTokensDay>0 且当日 UsedTokens≥Quota），耗尽账号进入候选末段（与短休眠段独立，休眠至次日 UsageDay 翻转自动恢复）；亲和候选耗尽同样不提前；`NoteUsage` 跨线时告警一次；`/api/state` 的 `exhausted` 数组展示。
-- 成本核算（M2-W4）：单价表 pricing.json（`price set/rm/list` + 控制台编辑，价格键 provider/model 精确优先于裸 model）；成本报告 = 单价 × trace 聚合（`LoadTraceFiles` → `ComputeCost`），只统计 outcome=ok 且带 usage 的请求，无单价调用计入 Unpriced 计数不静默丢弃；`GET /api/cost?days=N`（上限 30）与 `yardmaster cost --days N`；零新增持久化（trace 保留 30 天即成本数据窗）。
+- 成本核算（M2-W4）：单价表 pricing.json（`price set/rm/list` + 控制台编辑，价格键 provider/model 精确优先于裸 model）；成本报告 = 单价 × trace 聚合（`LoadTraceFiles` → `ComputeCost`），只统计 outcome=ok 且带 usage 的请求，无单价调用计入 Unpriced 计数不静默丢弃；`GET /api/cost?days=N`（上限 30）与 `yardmaster cost --days N`；零新增持久化（trace 保留 30 天即成本数据窗）。[2026-10-30-缓存扣除] M5-W2 起用量捕获缓存命中细分（openai `cached_tokens`/gemini `cachedContentTokenCount` 含于 prompt 总数；anthropic `cache_read_input_tokens` 折叠进 prompt 统一语义），命中部分按 `cached_input_per_m` 计价（缺省 0=扣除语义），报告桶新增 `cached_tokens` 列。
 
 ## 管理 API 与控制台（M2-W1）
 

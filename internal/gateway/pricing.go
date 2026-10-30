@@ -10,7 +10,10 @@
 //   - 价格键匹配顺序："provider/model"（精确，Served+ServedModel）
 //     → 裸 "model"（ServedModel）→ 未计价（成本 0，报告计数呈现，
 //     绝不静默丢弃调用次数）；
-//   - 只统计 outcome=ok 且带 usage 的请求（失败请求上游未计费）。
+//   - 只统计 outcome=ok 且带 usage 的请求（失败请求上游未计费）；
+//   - [2026-10-30-缓存扣除] M5-W2 起缓存命中单列：命中部分按
+//     cached_input_per_m 计（未配置=0，即「扣除缓存命中」语义），
+//     未命中部分 = prompt - cached 按全价计。
 package gateway
 
 import (
@@ -22,11 +25,12 @@ import (
 	"yardmaster/internal/store"
 )
 
-// PriceEntry 是一个模型的三元单价。
+// PriceEntry 是一个模型的单价（cached 列 M5-W2 增补，缺省 0）。
 type PriceEntry struct {
-	Model      string  `json:"model"`        // "provider/model" 或裸 "model"
-	InputPerM  float64 `json:"input_per_m"`  // 美元 / 1M 输入 token
-	OutputPerM float64 `json:"output_per_m"` // 美元 / 1M 输出 token
+	Model          string  `json:"model"`              // "provider/model" 或裸 "model"
+	InputPerM      float64 `json:"input_per_m"`        // 美元 / 1M 输入 token
+	OutputPerM     float64 `json:"output_per_m"`       // 美元 / 1M 输出 token
+	CachedInputPerM float64 `json:"cached_input_per_m,omitempty"` // 美元 / 1M 缓存命中输入 token；缺省 0（扣除语义）
 }
 
 // PricingFile 是 pricing.json 的文件形态。
@@ -67,7 +71,8 @@ type CostBucket struct {
 	Calls        int     `json:"calls"`
 	InputTokens  int64   `json:"input_tokens"`
 	OutputTokens int64   `json:"output_tokens"`
-	Cost         float64 `json:"cost"` // 美元
+	CachedTokens int64   `json:"cached_tokens,omitempty"` // 缓存命中的输入 token（含于 InputTokens）
+	Cost         float64 `json:"cost"`                    // 美元
 }
 
 // CostReport 是一个时间窗的成本聚合。
@@ -97,11 +102,12 @@ func ComputeCost(traces []Trace, prices []PriceEntry, days int, now time.Time) *
 		ByAccount: map[string]CostBucket{},
 		ByModel:   map[string]CostBucket{},
 	}
-	add := func(m map[string]CostBucket, key string, calls int, in, out int64, cost float64) {
+	add := func(m map[string]CostBucket, key string, calls int, in, out, cached int64, cost float64) {
 		b := m[key]
 		b.Calls += calls
 		b.InputTokens += in
 		b.OutputTokens += out
+		b.CachedTokens += cached
 		b.Cost += cost
 		m[key] = b
 	}
@@ -122,10 +128,16 @@ func ComputeCost(traces []Trace, prices []PriceEntry, days int, now time.Time) *
 			rep.Unpriced++
 			continue
 		}
-		cost := float64(tr.Usage.Prompt)/1e6*pe.InputPerM +
+		// 缓存命中扣除：命中按 cached 单价（缺省 0），未命中按全价。
+		cached := tr.Usage.Cached
+		if cached > tr.Usage.Prompt { // 防御：异常上游（命中>总数）钳制
+			cached = tr.Usage.Prompt
+		}
+		cost := float64(tr.Usage.Prompt-cached)/1e6*pe.InputPerM +
+			float64(cached)/1e6*pe.CachedInputPerM +
 			float64(tr.Usage.Completion)/1e6*pe.OutputPerM
-		add(rep.ByAccount, tr.Served, 1, tr.Usage.Prompt, tr.Usage.Completion, cost)
-		add(rep.ByModel, tr.ServedModel, 1, tr.Usage.Prompt, tr.Usage.Completion, cost)
+		add(rep.ByAccount, tr.Served, 1, tr.Usage.Prompt, tr.Usage.Completion, cached, cost)
+		add(rep.ByModel, tr.ServedModel, 1, tr.Usage.Prompt, tr.Usage.Completion, cached, cost)
 	}
 	return rep
 }
@@ -151,7 +163,7 @@ func ValidatePricing(f PricingFile) error {
 			return fmt.Errorf("单价条目 model 重复: %s", p.Model)
 		}
 		seen[p.Model] = true
-		if p.InputPerM < 0 || p.OutputPerM < 0 {
+		if p.InputPerM < 0 || p.OutputPerM < 0 || p.CachedInputPerM < 0 {
 			return fmt.Errorf("单价 %s 不能为负数", p.Model)
 		}
 	}

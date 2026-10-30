@@ -56,9 +56,15 @@ type TraceCandidate struct {
 }
 
 // TraceUsage 是本次请求的 token 用量（上游响应可得时）。
+// Cached 为缓存命中的输入 token 数（M5-W2）：
+//   - openai（prompt_tokens_details/input_tokens_details.cached_tokens）
+//     与 gemini（cachedContentTokenCount）的命中数已含在 Prompt 内；
+//   - anthropic（cache_read_input_tokens）不含在 input_tokens 内，
+//     扫描时折叠为「Prompt 含命中」的统一语义。
 type TraceUsage struct {
 	Prompt     int64 `json:"prompt,omitempty"`
 	Completion int64 `json:"completion,omitempty"`
+	Cached     int64 `json:"cached,omitempty"` // 缓存命中输入数（含于 Prompt）
 }
 
 // Trace 是一次路由决策的完整记录（不含对话内容）。
@@ -334,9 +340,13 @@ func LoadTraceFiles(dir string, maxLines int) ([]Trace, error) {
 
 // usageRe 匹配上游流/非流响应体中的 token 用量字段（chat/messages/
 // responses 三协议同形字段 + gemini 的 camelCase；流式多个 chunk 时取
-// 最后一次出现）。
+// 最后一次出现）。M5-W2 补缓存命中细分：cached_tokens（openai chat/
+// responses，含于 prompt 总数）、cachedContentTokenCount（gemini，含于
+// prompt）、cache_read_input_tokens（anthropic，不含于 input_tokens，
+// 扫描时折叠进 prompt——见 TraceUsage.Cached）。cache 写入类字段
+// （cache_creation_input_tokens 等）不捕获（W2 范围外）。
 var usageRe = regexp.MustCompile(
-	`"(?:prompt_tokens|input_tokens|promptTokenCount)"\s*:\s*(\d+)|"(?:completion_tokens|output_tokens|candidatesTokenCount)"\s*:\s*(\d+)`)
+	`"(?:prompt_tokens|input_tokens|promptTokenCount)"\s*:\s*(\d+)|"(?:completion_tokens|output_tokens|candidatesTokenCount)"\s*:\s*(\d+)|"(?:cached_tokens|cachedContentTokenCount|cache_read_input_tokens)"\s*:\s*(\d+)`)
 
 // usageScanner 从上游字节流中尽力提取 token 用量。只保留尾部小窗口
 // 匹配（usage JSON 很短），对流式逐块增量扫描。
@@ -344,6 +354,7 @@ type usageScanner struct {
 	window []byte
 	prompt int64
 	compl  int64
+	cached int64
 }
 
 const usageWindowSize = 8 << 10
@@ -358,6 +369,11 @@ func (s *usageScanner) Write(p []byte) (int, error) {
 			s.prompt = parseDigits(m[1])
 		} else if m[2] != nil {
 			s.compl = parseDigits(m[2])
+		} else if m[3] != nil {
+			s.cached = parseDigits(m[3])
+			if strings.HasPrefix(string(m[0]), `"cache_read_input_tokens"`) {
+				s.prompt += s.cached // anthropic 折叠为「Prompt 含命中」
+			}
 		}
 	}
 	return len(p), nil
@@ -379,7 +395,7 @@ func (s *usageScanner) usageOf() *TraceUsage {
 	if s.prompt == 0 && s.compl == 0 {
 		return nil
 	}
-	return &TraceUsage{Prompt: s.prompt, Completion: s.compl}
+	return &TraceUsage{Prompt: s.prompt, Completion: s.compl, Cached: s.cached}
 }
 
 // traceID 生成一条 trace 的 ID。

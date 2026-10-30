@@ -10,7 +10,7 @@
 
 普通 JSON 是 JSONC 的子集，同一实现覆盖两者。TOML/YAML/env 的键级编辑器在 M1-W4 按需补充（Codex 的 TOML、OpenCode 的 JSONC、Gemini 的 JSON 优先）。
 
-## 实现模型
+## 实现模型 [2026-10-29-区间拼接保注释]
 
 解析不建立完整 AST 持久层，而是记录每个成员在源文中的**原始区间**：
 `[keyStart, commaEnd)`；编辑即区间拼接（splice）：

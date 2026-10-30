@@ -10,7 +10,7 @@
 | JSONC 编辑 | 区间拼接 + `Get`（漂移比对） | [`edit/jsonc.go`](../../internal/edit/jsonc.go) |
 | CLI | `yardmaster agents list/preview/wire/unwind/drift`；wire 缺省只打印预览（F4 强制预览+确认） | [`app/agents_cmd.go`](../../internal/app/agents_cmd.go) |
 
-## 运行路径
+## 运行路径 [2026-10-29-声明式接线备份栈]
 
 1. **接入**：`agents wire <id> -model <模型> -yes` → 打印 diff → 备份原文件到
    `stash/<agent>/0`（**已有备份不覆盖**：二次接线时首次原始值优先）→ 按

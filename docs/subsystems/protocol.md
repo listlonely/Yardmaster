@@ -5,7 +5,7 @@
 > [2026-10-30-事件化中间流] M5-W1 起流式中间表示由 chat chunk 字节流
 > 改为内存事件 `gwEvent`（见下文「流式事件层」），非流路径不变。
 
-## 枢纽选型决策（W1 决策点）
+## 枢纽选型决策（W1 决策点）[2026-10-30-Chat枢纽选型]
 
 **主案（采纳）**：以 **Chat Completions 为内部枢纽协议**。
 
@@ -91,3 +91,20 @@ Gemini(W3)     枢纽翻译  枢纽翻译    枢纽翻译         透传
 - 透传 = 原始字节 + 模型名改写（`rewriteModel`，W3 冒烟教训）。
 - 直连翻译 = M1 的 Chat↔Messages 双向（translate.go，保留不动）。
 - 枢纽翻译 = 经 Chat schema 中转，W2（Responses）/W3（Gemini）实现。
+
+## sealed reasoning 透传边界（M5-W2 决策）[2026-10-30-sealed-reasoning边界]
+
+**选 (b)：仅标注透传边界，不做翻译透传。**
+
+- Responses 的 reasoning 项（含 `encrypted_content`、`summary`）与
+  Anthropic 的 `redacted_thinking` 属未建模形态：双向翻译路径按可砍项
+  纪律**忽略**（不猜测字段形状）；同协议透传路径（Responses↔Responses、
+  Messages↔Messages）原样到达，不受影响。
+- 依据：原计划以 Codex OAuth 真实凭证冒烟核实 reasoning item 形状后
+  二选一（M5 排期 §9.6 W2）；本机无已登录 Codex 订阅凭证，「读不懂=
+  未知」纪律下不做形状猜测，降级为标注。真实凭证冒烟列入 W6 未实测
+  项如实标注。
+- 升级路径（(a) 翻译透传 `encrypted_content`）：事件层预留
+  evToolDone 同级的扩展位（gwEvent 七类之外新增需过矩阵回归），触发
+  条件为真实凭证核实 reasoning item 形状且用户反馈跨轮 reasoning
+  上下文丢失造成质量回归。

@@ -16,7 +16,7 @@
 | 刷新触发 | 主动：`StartOAuthRefresher`（serve 起每分钟扫描，提前 `oauthRefreshAhead`=10min）；被动：上游 401/403 → `triggerRefresh`（single-flight）；api_key 账号 401 直接 `MarkBadCredByKey`（规则页：不自动重试） |
 | 失败冷却 | 连续 `oauthMaxFails`=3 次刷新失败 → `bad-credential`；元数据 `LastError`（200 字符脱敏摘要，不含 token）；成功即 `ClearByKey` 解除休眠并清零计数 |
 
-## 安全约束（不可协商）
+## 安全约束（不可协商）[2026-10-30-ToS边界只读已登录会话]
 
 1. **秘密隔离**：access/refresh token 永不进入 `providers.json` 及其
    `backup/` 快照（测试 `TestProviderAddOAuthPipeline` 断言泄漏）。

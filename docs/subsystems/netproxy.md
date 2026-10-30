@@ -11,7 +11,7 @@
 | 连通性预检 | `TestConnectivity`：经代理对目标 GET 一次，任何状态码都算连通；一次性 Transport，不占缓存 | [`health.go`](../../internal/netproxy/health.go) |
 | 响应摘要 | `Snippet`：错误信息中上游响应体截断为 ≤200 字节单行 | [`health.go`](../../internal/netproxy/health.go) |
 
-## 继承链（F3）
+## 继承链（F3）[2026-10-29-代理继承链direct阻断]
 
 解析在 `gateway.ResolveProxyRef`：**账号 → Provider → 全局**（`settings.json` 的
 `global_proxy`），任一层 `direct` 阻断向上继承；全部为空时跟随系统代理直连。
