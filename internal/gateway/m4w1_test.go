@@ -66,23 +66,45 @@ func TestResponsesBadJSONIs400(t *testing.T) {
 	}
 }
 
-// W1 fail-closed 边界：Responses 客户端 × Chat 上游 → 跨协议翻译 W2
-// 交付，全候选失败返回 502 且消息明确（不静默走错路径、不丢字段翻译）。
-func TestResponsesToChatUpstreamFailsClosedUntilW2(t *testing.T) {
+// W2 起：Responses 客户端 × Chat 上游 → 请求翻译为 chat 形态，响应
+// 翻译回 Responses 形态（M4-W2 交付，原 W1 fail-closed 断言退役）。
+func TestResponsesToChatUpstreamTranslates(t *testing.T) {
 	up := newFakeUpstream(t, func(rec recordedReq, _ int) (int, string, string) {
-		t.Errorf("W1 不应触达 Chat 上游")
-		return 500, "application/json", `{}`
+		if rec.path != "/chat/completions" {
+			t.Errorf("上游路径 = %q, want /chat/completions", rec.path)
+		}
+		// 请求应为 chat 形态：instructions→system、input→messages、模型名已改写
+		if !strings.Contains(rec.body, `"role":"system"`) || !strings.Contains(rec.body, `"model":"up-m"`) {
+			t.Errorf("chat 请求翻译异常: %s", rec.body)
+		}
+		return http.StatusOK, "application/json",
+			`{"id":"c1","object":"chat.completion","model":"up-m","choices":[{"index":0,"message":{"role":"assistant","content":"yo"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2}}`
 	})
 	gw := newGateway(t, chatProvider(up.srv.URL))
 
-	resp := post(t, gw.URL, "/v1/responses", `{"model":"prov/up-m","input":"hi"}`)
-	if resp.StatusCode != http.StatusBadGateway {
-		t.Fatalf("status = %d, want 502", resp.StatusCode)
+	resp := post(t, gw.URL, "/v1/responses", `{"model":"prov/up-m","instructions":"be brief","input":"hi"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
 	}
-	body := readBody(t, resp)
-	if !strings.Contains(body, "M4-W2") {
-		t.Fatalf("错误消息应标注 W2 里程碑: %s", body)
+	var rr ResponsesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&rr); err != nil {
+		t.Fatalf("解析 responses 响应: %v", err)
 	}
+	if rr.Object != "response" || rr.Status != "completed" || rr.Usage == nil || rr.Usage.InputTokens != 3 {
+		t.Fatalf("responses 响应翻译异常: %+v", rr)
+	}
+	if got := responsesOutputText(&rr); got != "yo" {
+		t.Fatalf("output 文本 = %q", got)
+	}
+}
+
+func responsesOutputText(rr *ResponsesResponse) string {
+	for _, item := range rr.Output {
+		if item.Type == "message" {
+			return respContentText(item.Content)
+		}
+	}
+	return ""
 }
 
 // W1 fail-closed 边界：gemini 协议候选明确报 W3（可配置、不参与路由）。

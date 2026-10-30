@@ -518,14 +518,11 @@ func (s *Server) finishTrace(tr *Trace, outcome string, status int, start time.T
 func (s *Server) attempt(ctx context.Context, client ClientProto, clientReq any,
 	rawBody []byte, stream bool, cand Candidate) attemptResult {
 	upstreamProto := clientProtoOf(cand.Provider.Protocol)
-	// M4-W1 边界（fail-closed，不静默走错路径）：gemini 上游链路 W3
-	// 交付（路径含模型名、认证形态不同）；Responses 跨协议翻译 W2
-	// 交付。W1 命中即按候选失败处理（切下一候选），消息明确标注里程碑。
+	// M4-W3 边界（fail-closed，不静默走错路径）：gemini 上游链路 W3
+	// 交付（路径含模型名、认证形态不同）。W1 命中即按候选失败处理
+	// （切下一候选），消息明确标注里程碑。
 	if cand.Provider.Protocol == provider.ProtocolGemini {
 		return attemptResult{err: fmt.Errorf("provider %s 协议 gemini 的上游链路 M4-W3 支持（W1 仅可配置）", cand.Provider.ID)}
-	}
-	if upstreamProto != client && (client == ProtoResponses || upstreamProto == ProtoResponses) {
-		return attemptResult{err: fmt.Errorf("responses 跨协议翻译 M4-W2 支持（client=%s upstream=%s）", client, upstreamProto)}
 	}
 	var upBody []byte
 	if upstreamProto == client {
@@ -540,6 +537,8 @@ func (s *Server) attempt(ctx context.Context, client ClientProto, clientReq any,
 		case *ChatRequest:
 			cq.Model = cand.UpstreamModel
 		case *MessagesRequest:
+			cq.Model = cand.UpstreamModel
+		case *ResponsesRequest:
 			cq.Model = cand.UpstreamModel
 		}
 		upBody = translateRequest(client, clientReq, upstreamProto, stream)
@@ -753,47 +752,57 @@ func (s *Server) relayLastError(w http.ResponseWriter, client ClientProto, last 
 }
 
 // translateStream 逐事件把上游 SSE 翻译为客户端协议的 SSE。
+// M4-W2：Responses 组合经「chat chunk 中间流」串联——非 Chat 上游先
+// 解码为 chat chunk（msgsToChat/respToChat），非 Chat 客户端再从
+// chat chunk 编码（chatToMsgs/chatToResp）。收尾顺序必须「先上游解码
+// 器 Done（其终止 chunk 进入编码链）→ 再客户端编码器 Done」。
 func (s *Server) translateStream(w http.ResponseWriter, fw *flushWriter,
 	client, upstream ClientProto, body io.Reader) {
 	br := bufio.NewReaderSize(body, 64<<10)
-	switch {
-	case upstream == ProtoChat && client == ProtoMessages:
-		t := newChatToMsgsStream()
-		for {
-			ev, err := scanSSE(br)
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				slog.Warn("上游 SSE 读取失败", "err", err)
-				break
-			}
-			if err := t.Feed(ev.Data); err != nil {
-				slog.Warn("流式翻译失败", "err", err)
-				break
-			}
-			if t.out != nil {
-				_, _ = w.Write(t.out)
-				t.out = nil
-				fw.flush()
-			}
-		}
-		_, _ = w.Write(t.Done())
-		fw.flush()
-	case upstream == ProtoMessages && client == ProtoChat:
+	// 上游解码适配器：把上游事件变为 chat chunk data 列表（nil 表示
+	// 上游本就是 chat，data 直接透传）。
+	var feed func(ev sseEvent) [][]byte
+	var decDone func() [][]byte
+	switch upstream {
+	case ProtoMessages:
 		t := newMsgsToChatStream()
-		for {
-			ev, err := scanSSE(br)
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				slog.Warn("上游 SSE 读取失败", "err", err)
-				break
-			}
+		feed = func(ev sseEvent) [][]byte {
 			if err := t.Feed(ev); err != nil {
 				slog.Warn("流式翻译失败", "err", err)
-				break
+			}
+			out := t.out
+			t.out = nil
+			return splitSSEData(out)
+		}
+		decDone = func() [][]byte { return splitSSEData(t.Done()) }
+	case ProtoResponses:
+		t := newRespToChatStream()
+		feed = func(ev sseEvent) [][]byte {
+			if err := t.Feed(ev); err != nil {
+				slog.Warn("流式翻译失败", "err", err)
+			}
+			out := t.out
+			t.out = nil
+			return splitSSEData(out)
+		}
+		decDone = func() [][]byte { return splitSSEData(t.Done()) }
+	default: // 上游是 chat：data 即 chat chunk
+		feed = func(ev sseEvent) [][]byte {
+			if string(ev.Data) == "[DONE]" {
+				return nil
+			}
+			return [][]byte{ev.Data}
+		}
+	}
+	// 客户端编码器：从 chat chunk data 产出客户端协议 SSE。
+	var encode func(chunkData []byte)
+	var finish func()
+	switch client {
+	case ProtoMessages:
+		t := newChatToMsgsStream()
+		encode = func(chunkData []byte) {
+			if err := t.Feed(chunkData); err != nil {
+				slog.Warn("流式翻译失败", "err", err)
 			}
 			if t.out != nil {
 				_, _ = w.Write(t.out)
@@ -801,13 +810,65 @@ func (s *Server) translateStream(w http.ResponseWriter, fw *flushWriter,
 				fw.flush()
 			}
 		}
-		_, _ = w.Write(t.Done())
-		fw.flush()
-	default:
-		// 理论不可达：同协议在 relay 已分流
-		_, _ = io.Copy(fw, body)
-		fw.flush()
+		finish = func() { _, _ = w.Write(t.Done()); fw.flush() }
+	case ProtoResponses:
+		t := newChatToRespStream()
+		encode = func(chunkData []byte) {
+			if err := t.Feed(chunkData); err != nil {
+				slog.Warn("流式翻译失败", "err", err)
+			}
+			if t.out != nil {
+				_, _ = w.Write(t.out)
+				t.out = nil
+				fw.flush()
+			}
+		}
+		finish = func() { _, _ = w.Write(t.Done()); fw.flush() }
+	default: // Chat 客户端：chat chunk 原样透传
+		encode = func(chunkData []byte) {
+			_, _ = w.Write(appendSSE(nil, "", chunkData))
+			fw.flush()
+		}
+		finish = func() {
+			_, _ = w.Write([]byte("data: [DONE]\n\n"))
+			fw.flush()
+		}
 	}
+	for {
+		ev, err := scanSSE(br)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			slog.Warn("上游 SSE 读取失败", "err", err)
+			break
+		}
+		for _, chunk := range feed(ev) {
+			encode(chunk)
+		}
+	}
+	// 收尾：上游解码器先 done（终止 chunk 进入编码链），再 finish。
+	if decDone != nil {
+		for _, chunk := range decDone() {
+			encode(chunk)
+		}
+	}
+	finish()
+}
+
+// splitSSEData 从一段完整 SSE 字节流中拆出各 data 体（不含 [DONE]）。
+func splitSSEData(b []byte) [][]byte {
+	var out [][]byte
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimRight(line, "\r")
+		if after, ok := strings.CutPrefix(line, "data: "); ok {
+			if after == "[DONE]" {
+				continue
+			}
+			out = append(out, []byte(after))
+		}
+	}
+	return out
 }
 
 // ---------- 小工具 ----------
@@ -866,6 +927,30 @@ func translateRequest(client ClientProto, clientReq any, upstream ClientProto, s
 		cr.Stream = stream
 		b, _ := json.Marshal(chatToMessagesRequest(cr))
 		return b
+	// M4-W2：Responses 双向（Messages 侧经 Chat 枢纽中转）
+	case client == ProtoResponses && upstream == ProtoChat:
+		rr := clientReq.(*ResponsesRequest)
+		cr := responsesToChatRequest(rr)
+		cr.Stream = stream
+		b, _ := json.Marshal(cr)
+		return b
+	case client == ProtoChat && upstream == ProtoResponses:
+		cr := clientReq.(*ChatRequest)
+		cr.Stream = stream
+		b, _ := json.Marshal(chatToResponsesRequest(cr))
+		return b
+	case client == ProtoMessages && upstream == ProtoResponses:
+		mr := clientReq.(*MessagesRequest)
+		cr := messagesToChatRequest(mr)
+		cr.Stream = stream
+		b, _ := json.Marshal(chatToResponsesRequest(cr))
+		return b
+	case client == ProtoResponses && upstream == ProtoMessages:
+		rr := clientReq.(*ResponsesRequest)
+		cr := responsesToChatRequest(rr)
+		cr.Stream = stream
+		b, _ := json.Marshal(chatToMessagesRequest(cr))
+		return b
 	default:
 		b, _ := json.Marshal(clientReq)
 		return b
@@ -887,6 +972,37 @@ func translateResponse(client, upstream ClientProto, clientReq any, upstreamBody
 		}
 		mr := clientReq.(*MessagesRequest)
 		return json.Marshal(chatResponseToMessages(mr, &cc))
+	// M4-W2：涉及 Responses 的非流翻译（Messages 侧经 Chat 中转）
+	case upstream == ProtoResponses:
+		var rsp ResponsesResponse
+		if err := json.Unmarshal(upstreamBody, &rsp); err != nil {
+			return nil, fmt.Errorf("解析上游 responses 响应: %w", err)
+		}
+		switch client {
+		case ProtoResponses: // 理论不可达（同协议走透传），保形直通
+			return upstreamBody, nil
+		case ProtoChat:
+			return json.Marshal(responsesResponseToChat(&rsp))
+		default: // Messages 客户端：Responses → Chat → Messages
+			mr := clientReq.(*MessagesRequest)
+			return json.Marshal(chatResponseToMessages(mr, responsesResponseToChat(&rsp)))
+		}
+	case client == ProtoResponses:
+		var cc ChatChunk
+		if upstream == ProtoMessages {
+			var ms MessagesResponse
+			if err := json.Unmarshal(upstreamBody, &ms); err != nil {
+				return nil, fmt.Errorf("解析上游 messages 响应: %w", err)
+			}
+			cc = *messagesResponseToChat(ms)
+		} else if err := json.Unmarshal(upstreamBody, &cc); err != nil {
+			return nil, fmt.Errorf("解析上游 chat 响应: %w", err)
+		}
+		model := cc.Model
+		if rr, ok := clientReq.(*ResponsesRequest); ok && rr.Model != "" {
+			model = rr.Model
+		}
+		return json.Marshal(chatResponseToResponses(model, &cc))
 	default:
 		return upstreamBody, nil
 	}
