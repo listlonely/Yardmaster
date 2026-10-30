@@ -11,9 +11,8 @@ import (
 	"time"
 )
 
-// appHelperEnv 标记假 Agent 行为（经 dispatch.Spec.Env 注入）。
-const appHelperEnv = "YM_RUN_HELPER"
-
+// helperRunSpec 以测试二进制自身扮演假 Agent（行为经环境变量注入，
+// 子进程继承父环境）。
 func helperRunSpec(t *testing.T, behavior string) []string {
 	t.Helper()
 	exe, err := os.Executable()
