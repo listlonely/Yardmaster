@@ -451,7 +451,10 @@ func (p *Planner) NoteUsage(c Candidate, tokens int64) {
 
 // Exhausted 返回当日额度耗尽的账号 key 列表（/api/state 与控制台展示；
 // 与休眠表独立——耗尽是读侧按额度计算，不占休眠表条目）。
+// 账号字段被 NoteUsage 并发写入，必须持锁读（CI -race 实测）。
 func (p *Planner) Exhausted() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	today := p.now().Format("2006-01-02")
 	var out []string
 	for _, prov := range p.providers {
@@ -572,7 +575,10 @@ func (p *Planner) Resting() map[string]time.Time {
 
 // AllModels 列出模型目录（/v1/models 用）：有模型清单的 provider
 // 展开为 provider/model；未预检的以 provider 自身占位。
+// Reload 会整体替换快照，读取必须持锁。
 func (p *Planner) AllModels() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	var out []string
 	for _, prov := range p.providers {
 		if prov.Disabled {
@@ -588,6 +594,52 @@ func (p *Planner) AllModels() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// StateAccount 是 /api/state 用的账号状态投影（锁内复制的值）。
+type StateAccount struct {
+	Key         string `json:"key"`
+	Provider    string `json:"provider"`
+	Name        string `json:"name"`
+	Status      string `json:"status"`
+	UsedTokens  int64  `json:"used_tokens"`
+	QuotaTokens int64  `json:"quota_tokens_day"`
+	UsageDay    string `json:"usage_day"`
+}
+
+// StateGroup 是 /api/state 用的路由组投影。
+type StateGroup struct {
+	ID       string   `json:"id"`
+	Strategy string   `json:"strategy"`
+	Members  []string `json:"members"`
+}
+
+// StateSnapshot 一次性锁内复制 /api/state 所需的全部快照（providers
+// 概要、账号实时状态、组）——避免 handleState 对内部切片的无锁遍历
+// 与 NoteUsage/Reload 的并发写入竞争（CI -race 实测）。
+func (p *Planner) StateSnapshot() (providers []map[string]any, accounts []StateAccount, groups []StateGroup) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, prov := range p.providers {
+		providers = append(providers, map[string]any{
+			"id": prov.ID, "name": prov.Name, "protocol": prov.Protocol, "accounts": len(prov.Accounts),
+		})
+		for _, acc := range prov.Accounts {
+			accounts = append(accounts, StateAccount{
+				Key:         prov.ID + "/" + acc.Name,
+				Provider:    prov.ID,
+				Name:        acc.Name,
+				Status:      string(acc.Status),
+				UsedTokens:  acc.UsedTokens,
+				QuotaTokens: acc.QuotaTokensDay,
+				UsageDay:    acc.UsageDay,
+			})
+		}
+	}
+	for _, g := range p.groups {
+		groups = append(groups, StateGroup{ID: g.ID, Strategy: string(g.Strategy), Members: append([]string(nil), g.Members...)})
+	}
+	return providers, accounts, groups
 }
 
 // ---------- 查找助手（调用方已持有 p.mu 的锁内使用） ----------

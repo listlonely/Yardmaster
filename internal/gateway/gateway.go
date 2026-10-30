@@ -165,31 +165,17 @@ func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
 		"uptime":  time.Since(s.started).Round(time.Second).String(),
 	}
 	if s.Planner != nil {
-		var provs []map[string]any
-		for _, p := range s.Planner.Providers() {
-			provs = append(provs, map[string]any{
-				"id": p.ID, "name": p.Name, "protocol": p.Protocol, "accounts": len(p.Accounts),
-			})
-		}
-		state["providers"] = provs
-		// 账号实时状态（M2-W2 控制台 join 用）：当日用量/额度直接读
-		// Planner 内存快照，避免控制台显示滞后于落盘节流（最长 60s）。
-		var accs []map[string]any
-		for _, p := range s.Planner.Providers() {
-			for _, a := range p.Accounts {
-				accs = append(accs, map[string]any{
-					"key":              p.ID + "/" + a.Name,
-					"provider":         p.ID,
-					"name":             a.Name,
-					"status":           a.Status,
-					"used_tokens":      a.UsedTokens,
-					"quota_tokens_day": a.QuotaTokensDay,
-					"usage_day":        a.UsageDay,
-				})
-			}
+		// 全部快照一次性锁内复制（StateSnapshot），消除对 Planner 内部
+		// 切片与账号字段的无锁遍历（CI -race 实测数据竞争）。
+		provs, accs, groups := s.Planner.StateSnapshot()
+		if provs != nil {
+			state["providers"] = provs
 		}
 		if accs != nil {
 			state["accounts"] = accs
+		}
+		if groups != nil {
+			state["groups"] = groups
 		}
 		resting := map[string]string{}
 		for k, until := range s.Planner.Resting() {
@@ -199,13 +185,6 @@ func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
 		// 额度耗尽账号（M2-W4）：读侧计算，与休眠表独立展示。
 		if ex := s.Planner.Exhausted(); len(ex) > 0 {
 			state["exhausted"] = ex
-		}
-		var groups []map[string]any
-		for _, g := range s.Planner.Groups() {
-			groups = append(groups, map[string]any{"id": g.ID, "strategy": g.Strategy, "members": g.Members})
-		}
-		if groups != nil {
-			state["groups"] = groups
 		}
 	}
 	if s.Rules != nil {
