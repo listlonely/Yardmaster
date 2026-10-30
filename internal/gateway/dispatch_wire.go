@@ -106,9 +106,12 @@ func (s *Server) handleDispatchRun(w http.ResponseWriter, r *http.Request) {
 		writeAPIErr(w, err)
 		return
 	}
+	// 视图取锁内快照（直接读 *Session 字段会与运行 goroutine 竞态，
+	// CI linux -race 实测）。
+	sv, _ := s.Dispatch.Snapshot(sess.ID)
 	writeJSON(w, map[string]any{
 		"ok": true, "effect": effectImmediate,
-		"intent": intent, "session": dispatchSessionView(sess),
+		"intent": intent, "session": dispatchSessionView(sv),
 	})
 }
 
@@ -136,12 +139,12 @@ func (s *Server) handleDispatchSession(w http.ResponseWriter, id string) {
 		dispatchDisabled(w)
 		return
 	}
-	sess, ok := s.Dispatch.SessionByID(id)
+	sv, ok := s.Dispatch.Snapshot(id)
 	if !ok {
 		writeAPIErr(w, errNotFound("会话 "+id))
 		return
 	}
-	writeJSON(w, dispatchSessionDetail(sess))
+	writeJSON(w, dispatchSessionDetail(sv))
 }
 
 // handleDispatchCancel 取消一个运行中会话。
@@ -157,8 +160,8 @@ func (s *Server) handleDispatchCancel(w http.ResponseWriter, id string) {
 	writeJSON(w, map[string]any{"ok": true, "effect": effectImmediate, "cancelled": id})
 }
 
-// dispatchSessionView 是会话的 JSON 视图（列表用）。
-func dispatchSessionView(s *dispatch.Session) map[string]any {
+// dispatchSessionView 是会话的 JSON 视图（入参为锁内字段拷贝）。
+func dispatchSessionView(s dispatch.Session) map[string]any {
 	return map[string]any{
 		"id": s.ID, "agent": s.Agent, "task": s.Task, "model": s.Model,
 		"status": s.Status, "started_at": s.StartedAt, "ended_at": s.EndedAt,
@@ -166,8 +169,8 @@ func dispatchSessionView(s *dispatch.Session) map[string]any {
 	}
 }
 
-// dispatchSessionDetail 是会话详情视图（含输出尾部）。
-func dispatchSessionDetail(s *dispatch.Session) map[string]any {
+// dispatchSessionDetail 是会话详情视图（含实时输出尾部——live 缓冲自带锁）。
+func dispatchSessionDetail(s dispatch.Session) map[string]any {
 	v := dispatchSessionView(s)
 	v["ok"] = true
 	v["output"] = s.Output()

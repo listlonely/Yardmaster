@@ -330,16 +330,27 @@ func (e *Engine) Cancel(id string) bool {
 	return false
 }
 
-// SessionByID 返回会话指针（详情/实时输出用）；调用方只读。
-func (e *Engine) SessionByID(id string) (*Session, bool) {
+// Snapshot 按 ID 返回会话的字段拷贝（锁内读取——与运行 goroutine 的
+// Status/Result 写入互斥；CI linux -race 实测指针直读会报 DATA RACE）。
+// live 缓冲指针一并拷贝（其内部自带锁，Output() 实时读安全）。
+func (e *Engine) Snapshot(id string) (Session, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	for _, s := range e.sessions {
 		if s.ID == id {
-			return s, true
+			return s.snapshot(), true
 		}
 	}
-	return nil, false
+	return Session{}, false
+}
+
+// snapshot 在持锁前提下拷贝会话字段（Result 指针写入后不再变更）。
+func (s *Session) snapshot() Session {
+	return Session{
+		ID: s.ID, Agent: s.Agent, Task: s.Task, Model: s.Model,
+		Status: s.Status, StartedAt: s.StartedAt, EndedAt: s.EndedAt,
+		Result: s.Result, live: s.live,
+	}
 }
 
 // Reload 热替换 agent 表（PUT /api/config/dispatch 写后路径）：运行中
@@ -355,15 +366,13 @@ func (e *Engine) Reload(f DispatchFile) error {
 	return nil
 }
 
-// Sessions 返回会话快照（新→旧）。
+// Sessions 返回会话快照（新→旧，锁内拷贝）。
 func (e *Engine) Sessions() []Session {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	out := make([]Session, 0, len(e.sessions))
 	for i := len(e.sessions) - 1; i >= 0; i-- {
-		s := e.sessions[i]
-		out = append(out, Session{ID: s.ID, Agent: s.Agent, Task: s.Task, Model: s.Model,
-			Status: s.Status, StartedAt: s.StartedAt, EndedAt: s.EndedAt, Result: s.Result})
+		out = append(out, e.sessions[i].snapshot())
 	}
 	return out
 }
