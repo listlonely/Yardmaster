@@ -129,7 +129,15 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, name st
 		// 热生效：重载成功才回应成功；重载失败（理论不可达，刚写完的
 		// 文件刚读过）如实报错。
 		s.Planner.Reload(f.Providers, f.Groups)
-		writeOK(w, effectImmediate)
+		// 写响应包（api.md）：config 视图经值拷贝后脱敏——Planner 持有
+		// f 的切片，原地 mask 会穿透运行态（密钥泄漏进 /api/state）。
+		view := store.ProvidersFile{Providers: make([]provider.Provider, len(f.Providers)), Groups: f.Groups}
+		for i, p := range f.Providers {
+			view.Providers[i] = p
+			view.Providers[i].Accounts = append([]provider.Account(nil), p.Accounts...)
+		}
+		maskProviders(&view)
+		s.writeResult(w, effectImmediate, view)
 	case cfgSettings:
 		var f store.Settings
 		if err := strictDecode(dec, &f); err != nil {
@@ -168,7 +176,10 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, name st
 			writeAPIErr(w, err)
 			return
 		}
-		writeOK(w, effectRestart)
+		// 写响应包：Token 脱敏（f 为本请求局部值，Settings 不入运行态）。
+		view := f
+		view.Token = maskAPIKey(f.Token)
+		s.writeResult(w, effectRestart, view)
 	case cfgRules:
 		var f RulesFile
 		if err := strictDecode(dec, &f); err != nil {
@@ -183,7 +194,7 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, name st
 			writeAPIErr(w, err)
 			return
 		}
-		writeOK(w, effectImmediate)
+		s.writeResult(w, effectImmediate, f)
 	case cfgKeys:
 		var f KeysFile
 		if err := strictDecode(dec, &f); err != nil {
@@ -198,7 +209,7 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, name st
 			writeAPIErr(w, err)
 			return
 		}
-		writeOK(w, effectImmediate)
+		s.writeResult(w, effectImmediate, f)
 	case cfgIntents:
 		var f classify.UserStrategy
 		if err := strictDecode(dec, &f); err != nil {
@@ -213,7 +224,7 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, name st
 			writeAPIErr(w, err)
 			return
 		}
-		writeOK(w, effectImmediate)
+		s.writeResult(w, effectImmediate, f)
 	case cfgPricing:
 		var f PricingFile
 		if err := strictDecode(dec, &f); err != nil {
@@ -228,20 +239,21 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, name st
 			writeAPIErr(w, err)
 			return
 		}
-		writeOK(w, effectImmediate)
+		s.writeResult(w, effectImmediate, f)
 	default:
 		writeAPIErr(w, errUnknownConfig{name})
 	}
 }
 
 // handleReload 重读 providers.json 并热替换 Planner（providers.json
-// 解析失败时拒绝重载，保留旧快照——读不懂=未知）。
+// 解析失败时拒绝重载，保留旧快照——读不懂=未知）。响应为写响应包
+// （api.md）：携带写后全量 state；providers 计数字段增量保留。
 func (s *Server) handleReload(w http.ResponseWriter, _ *http.Request) {
 	f, err := store.LoadProvidersFile(s.ProvidersPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			s.Planner.Reload(nil, nil)
-			writeJSON(w, map[string]any{"ok": true, "effect": effectImmediate, "providers": 0})
+			s.writeResultExtra(w, effectImmediate, map[string]any{"providers": 0})
 			return
 		}
 		writeAPIErr(w, &apiError{status: http.StatusConflict,
@@ -250,7 +262,21 @@ func (s *Server) handleReload(w http.ResponseWriter, _ *http.Request) {
 	}
 	s.Planner.Reload(f.Providers, f.Groups)
 	slog.Info("providers.json 已重载", "providers", len(f.Providers), "groups", len(f.Groups))
-	writeJSON(w, map[string]any{"ok": true, "effect": effectImmediate, "providers": len(f.Providers)})
+	s.writeResultExtra(w, effectImmediate, map[string]any{"providers": len(f.Providers)})
+}
+
+// writeResultExtra 是 writeResult 的扩展形态：在写响应包上附加
+// legacy 字段（reload 的 providers 计数），保持既有调用方不破坏。
+func (s *Server) writeResultExtra(w http.ResponseWriter, effect string, extra map[string]any) {
+	resp := map[string]any{
+		"ok":     true,
+		"effect": effect,
+		"state":  s.stateView(),
+	}
+	for k, v := range extra {
+		resp[k] = v
+	}
+	writeJSON(w, resp)
 }
 
 // ---------- 文件定位与读写 ----------
@@ -391,9 +417,10 @@ func validateProviders(f store.ProvidersFile) error {
 		}
 		seenProv[p.ID] = true
 		switch p.Protocol {
-		case provider.ProtocolChat, provider.ProtocolMessages:
+		case provider.ProtocolChat, provider.ProtocolMessages,
+			provider.ProtocolResponses, provider.ProtocolGemini:
 		default:
-			return fmt.Errorf("provider %s 协议非法: %q（openai-chat | anthropic-messages）", p.ID, p.Protocol)
+			return fmt.Errorf("provider %s 协议非法: %q（openai-chat | anthropic-messages | openai-responses | gemini）", p.ID, p.Protocol)
 		}
 		if strings.TrimSpace(p.BaseURL) == "" && !p.Disabled {
 			return fmt.Errorf("provider %s 缺少 base_url", p.ID)
@@ -573,8 +600,20 @@ func writeAPIErr(w http.ResponseWriter, err error) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 }
 
-func writeOK(w http.ResponseWriter, effect string) {
-	writeJSON(w, map[string]any{"ok": true, "effect": effect})
+// writeResult 输出写响应包（docs/subsystems/api.md：写响应即状态）：
+// {ok, effect, config?, state}。configView 为该配置写后的脱敏视图，
+// 与 GET /api/config/{name} 同构；state 与 GET /api/state 同构同源
+// （stateView），前端单请求闭环、不再写后回读。
+func (s *Server) writeResult(w http.ResponseWriter, effect string, configView any) {
+	resp := map[string]any{
+		"ok":     true,
+		"effect": effect,
+		"state":  s.stateView(),
+	}
+	if configView != nil {
+		resp["config"] = configView
+	}
+	writeJSON(w, resp)
 }
 
 // strictDecode 严格解码单个 JSON 文档：未知字段拒绝（写边界宁严勿宽），

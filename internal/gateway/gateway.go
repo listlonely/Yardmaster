@@ -41,8 +41,9 @@ const DefaultAddr = "127.0.0.1:8317"
 
 // 上游路径拼接规则：base_url 为完整前缀（如 https://api.deepseek.com）。
 const (
-	chatUpstreamPath     = "/chat/completions"
-	messagesUpstreamPath = "/v1/messages"
+	chatUpstreamPath      = "/chat/completions"
+	messagesUpstreamPath  = "/v1/messages"
+	responsesUpstreamPath = "/responses" // M4：openai-responses 上游
 )
 
 // restDurations 对应规则页失败分类表：无上游重置时间时的默认休眠。
@@ -57,14 +58,14 @@ type Server struct {
 	Addr          string
 	Planner       *Planner
 	Version       string
-	GlobalProxy   string       // 全局代理（F3 继承链末端）；空=系统代理
-	Rules         *RuleEngine  // 任务规则（F7）；nil=不启用
-	Keys          *KeyStore    // 调用方默认模型绑定；nil=不启用
-	Intents       *IntentChain // 意图判定链（F8）；nil=不分类
-	Traces        *TraceLog    // 决策追溯（F9）；nil=不记录
-	AppDir        string       // 数据目录（管理 API 备份/写配置用）；空=禁用写接口
-	ProvidersPath string       // providers.json 路径（/api/reload 热重载用）
-	Token         string       // 访问令牌（M2-W5）：非空时 /v1 与 /api 要求匹配；空=本机信任态
+	GlobalProxy   string            // 全局代理（F3 继承链末端）；空=系统代理
+	Rules         *RuleEngine       // 任务规则（F7）；nil=不启用
+	Keys          *KeyStore         // 调用方默认模型绑定；nil=不启用
+	Intents       *IntentChain      // 意图判定链（F8）；nil=不分类
+	Traces        *TraceLog         // 决策追溯（F9）；nil=不记录
+	AppDir        string            // 数据目录（管理 API 备份/写配置用）；空=禁用写接口
+	ProvidersPath string            // providers.json 路径（/api/reload 热重载用）
+	Token         string            // 访问令牌（M2-W5）：非空时 /v1 与 /api 要求匹配；空=本机信任态
 	Creds         *credential.Store // OAuth 凭证库（M3-W3）；nil=无 OAuth 能力
 	oauth         oauthRuntime      // OAuth 运行态（token 缓存/single-flight）
 	started       time.Time
@@ -85,6 +86,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /v1/models", s.handleModels)
 	mux.HandleFunc("POST /v1/chat/completions", s.handleInference(ProtoChat))
 	mux.HandleFunc("POST /v1/messages", s.handleInference(ProtoMessages))
+	mux.HandleFunc("POST /v1/responses", s.handleInference(ProtoResponses)) // M4-W1
 	mux.HandleFunc("GET /api/state", s.handleState)
 	mux.HandleFunc("GET /api/trace", s.handleTrace)
 	mux.HandleFunc("GET /api/config/{name}", func(w http.ResponseWriter, r *http.Request) {
@@ -163,6 +165,12 @@ func (s *Server) handleModels(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, s.stateView())
+}
+
+// stateView 构建全量 live 状态视图（GET /api/state 与写响应包共用，
+// docs/subsystems/api.md：写响应即状态——两端口同一形状、同一时刻语义）。
+func (s *Server) stateView() map[string]any {
 	state := map[string]any{
 		"version": s.Version,
 		"uptime":  time.Since(s.started).Round(time.Second).String(),
@@ -193,7 +201,7 @@ func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
 	if s.Rules != nil {
 		state["rules"] = s.Rules.Snapshot()
 	}
-	writeJSON(w, state)
+	return state
 }
 
 // handleTrace 返回最近的决策记录（F9 观测数据源，管理页后续接入）。
@@ -239,6 +247,13 @@ func (s *Server) handleInference(client ClientProto) http.HandlerFunc {
 				return
 			}
 			model, stream, clientReq = mr.Model, mr.Stream, &mr
+		case ProtoResponses:
+			var rr ResponsesRequest
+			if err := json.Unmarshal(body, &rr); err != nil {
+				writeClientErr(client, w, http.StatusBadRequest, "解析 Responses 请求失败: "+err.Error())
+				return
+			}
+			model, stream, clientReq = rr.Model, rr.Stream, &rr
 		default:
 			var cr ChatRequest
 			if err := json.Unmarshal(body, &cr); err != nil {
@@ -503,6 +518,15 @@ func (s *Server) finishTrace(tr *Trace, outcome string, status int, start time.T
 func (s *Server) attempt(ctx context.Context, client ClientProto, clientReq any,
 	rawBody []byte, stream bool, cand Candidate) attemptResult {
 	upstreamProto := clientProtoOf(cand.Provider.Protocol)
+	// M4-W1 边界（fail-closed，不静默走错路径）：gemini 上游链路 W3
+	// 交付（路径含模型名、认证形态不同）；Responses 跨协议翻译 W2
+	// 交付。W1 命中即按候选失败处理（切下一候选），消息明确标注里程碑。
+	if cand.Provider.Protocol == provider.ProtocolGemini {
+		return attemptResult{err: fmt.Errorf("provider %s 协议 gemini 的上游链路 M4-W3 支持（W1 仅可配置）", cand.Provider.ID)}
+	}
+	if upstreamProto != client && (client == ProtoResponses || upstreamProto == ProtoResponses) {
+		return attemptResult{err: fmt.Errorf("responses 跨协议翻译 M4-W2 支持（client=%s upstream=%s）", client, upstreamProto)}
+	}
 	var upBody []byte
 	if upstreamProto == client {
 		b, merr := rewriteModel(rawBody, cand.UpstreamModel)
@@ -521,9 +545,12 @@ func (s *Server) attempt(ctx context.Context, client ClientProto, clientReq any,
 		upBody = translateRequest(client, clientReq, upstreamProto, stream)
 	}
 	var path string
-	if upstreamProto == ProtoMessages {
+	switch upstreamProto {
+	case ProtoMessages:
 		path = messagesUpstreamPath
-	} else {
+	case ProtoResponses:
+		path = responsesUpstreamPath
+	default:
 		path = chatUpstreamPath
 	}
 	url := strings.TrimRight(cand.Provider.BaseURL, "/") + path
@@ -804,11 +831,16 @@ func (f *flushWriter) flush() {
 }
 
 // clientProtoOf 把 provider.Protocol 转为网关内部协议标识。
+// gemini 无对应入站协议（W3 交付），调用方须在其之前拦截（attempt 已拦）。
 func clientProtoOf(p provider.Protocol) ClientProto {
-	if string(p) == string(ProtoMessages) {
+	switch p {
+	case provider.ProtocolMessages:
 		return ProtoMessages
+	case provider.ProtocolResponses:
+		return ProtoResponses
+	default:
+		return ProtoChat
 	}
-	return ProtoChat
 }
 
 func sseContentType(client ClientProto) string {

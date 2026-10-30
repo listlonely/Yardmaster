@@ -128,7 +128,7 @@ func providerAdd(paths store.Paths, args []string, stdout, stderr io.Writer) err
 	fs := flag.NewFlagSet("provider add", flag.ContinueOnError)
 	id := fs.String("id", "", "provider ID（如 deepseek；-preset 给出时默认同预设 ID）")
 	name := fs.String("name", "", "显示名（默认同 ID）")
-	protocol := fs.String("protocol", "openai-chat", "openai-chat | anthropic-messages（-preset 未给时必填其一）")
+	protocol := fs.String("protocol", "openai-chat", "openai-chat | anthropic-messages | openai-responses | gemini（-preset 未给时必填其一；gemini 上游链路 M4-W3，W1 仅可配置）")
 	baseURL := fs.String("base-url", "", "上游完整前缀（如 https://api.deepseek.com）")
 	key := fs.String("key", "", "API key（必填，仅存本机）")
 	account := fs.String("account", "main", "账号名")
@@ -167,8 +167,9 @@ func providerAdd(paths store.Paths, args []string, stdout, stderr io.Writer) err
 		fmt.Fprintln(stderr, "缺少必填参数：-key 与 -id/-base-url（或用 -preset 提供厂商预设）")
 		return ErrUsage
 	}
-	if p := provider.Protocol(*protocol); p != provider.ProtocolChat && p != provider.ProtocolMessages {
-		fmt.Fprintf(stderr, "-protocol 仅支持 openai-chat | anthropic-messages\n")
+	if p := provider.Protocol(*protocol); p != provider.ProtocolChat && p != provider.ProtocolMessages &&
+		p != provider.ProtocolResponses && p != provider.ProtocolGemini {
+		fmt.Fprintf(stderr, "-protocol 仅支持 openai-chat | anthropic-messages | openai-responses | gemini\n")
 		return ErrUsage
 	}
 	if _, err := netproxy.Parse(netproxy.Ref(*proxy)); err != nil {

@@ -15,8 +15,9 @@ import (
 type ClientProto string
 
 const (
-	ProtoChat     ClientProto = "openai-chat"
-	ProtoMessages ClientProto = "anthropic-messages"
+	ProtoChat      ClientProto = "openai-chat"
+	ProtoMessages  ClientProto = "anthropic-messages"
+	ProtoResponses ClientProto = "openai-responses" // M4-W1 骨架：透传可跑，翻译 W2
 )
 
 // ---------- OpenAI Chat ----------

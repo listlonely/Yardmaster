@@ -102,6 +102,38 @@ func TestProviderAddListRemoveLifecycle(t *testing.T) {
 	}
 }
 
+// M4-W1：新协议枚举可经 CLI 配置（gemini 上游链路 W3 交付）。
+func TestProviderAddNewProtocols(t *testing.T) {
+	home := testenv.New(t)
+
+	runOK(t, "provider", "add",
+		"-id", "codex-sub", "-name", "Codex 订阅",
+		"-protocol", "openai-responses",
+		"-base-url", "https://chatgpt.com/backend-api/codex",
+		"-key", "sk-rx", "-account", "main")
+	runOK(t, "provider", "add",
+		"-id", "gemini-sub", "-name", "Gemini 订阅",
+		"-protocol", "gemini",
+		"-base-url", "https://generativelanguage.googleapis.com",
+		"-key", "sk-gm", "-account", "main")
+
+	raw, err := os.ReadFile(filepath.Join(home, ".yardmaster", "providers.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	if !strings.Contains(s, "openai-responses") || !strings.Contains(s, "gemini") {
+		t.Fatalf("新协议未落盘: %s", s)
+	}
+
+	// 未知协议仍拒绝
+	var errBuf bytes.Buffer
+	if err := Run([]string{"provider", "add", "-id", "bad", "-protocol", "nope",
+		"-base-url", "https://x", "-key", "k"}, &bytes.Buffer{}, &errBuf); err == nil {
+		t.Fatal("未知协议应报错")
+	}
+}
+
 func TestProviderProbePersistsModels(t *testing.T) {
 	home := testenv.New(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

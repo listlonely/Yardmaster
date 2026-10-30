@@ -211,6 +211,12 @@ func inputStats(clientReq any) (lastUser string, estTokens int) {
 				lastUser = t
 			}
 		}
+	case *ResponsesRequest: // M4-W1：instructions 计入长度估计
+		runes += len([]rune(cr.Instructions))
+		runes += len([]rune(responsesInputText(cr.Input)))
+		if t := responsesLastUser(cr.Input); strings.TrimSpace(t) != "" {
+			lastUser = t
+		}
 	}
 	return lastUser, runes / 2
 }

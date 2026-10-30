@@ -10,12 +10,15 @@ import (
 	"yardmaster/internal/netproxy"
 )
 
-// Protocol 是网关与上游通信的 API 协议。M1 仅 Chat 与 Messages（设计文档 §6.2）。
+// Protocol 是网关与上游通信的 API 协议。M1 仅 Chat 与 Messages（设计文档 §6.2）；
+// M4 扩展 Responses 与 Gemini（开发文档 §9.5：W1 枚举与校验，W2/W3 上游链路）。
 type Protocol string
 
 const (
-	ProtocolChat     Protocol = "openai-chat"        // OpenAI Chat Completions
-	ProtocolMessages Protocol = "anthropic-messages" // Anthropic Messages
+	ProtocolChat      Protocol = "openai-chat"        // OpenAI Chat Completions
+	ProtocolMessages  Protocol = "anthropic-messages" // Anthropic Messages
+	ProtocolResponses Protocol = "openai-responses"   // OpenAI Responses（M4）
+	ProtocolGemini    Protocol = "gemini"             // Google Gemini（M4）
 )
 
 // ProviderStatus 对应 PRD 规则页「Provider 状态」。

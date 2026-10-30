@@ -10,7 +10,7 @@ func TestPresetsWellFormed(t *testing.T) {
 		}
 		seen[p.ID] = true
 		switch p.Protocol {
-		case ProtocolChat, ProtocolMessages:
+		case ProtocolChat, ProtocolMessages, ProtocolResponses, ProtocolGemini:
 		default:
 			t.Fatalf("预设 %s 协议非法: %q", p.ID, p.Protocol)
 		}
