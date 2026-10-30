@@ -7,8 +7,8 @@ package app
 import (
 	"bytes"
 	"image"
-	"image/draw"
 	"image/color"
+	"image/draw"
 	"image/png"
 	"os/exec"
 	"runtime"
@@ -52,20 +52,22 @@ func openBrowser(url string) error {
 }
 
 // runTray 启动托盘（阻塞 systray.Run 内部循环，调用方以 goroutine 包装）。
-// onExit 在用户点击退出时回调（调用方负责停止网关并退出进程）。
-func runTray(url string, onExit func()) {
+// onOpen 在用户点击「打开窗口/控制台」时回调（app 模式重开应用窗口，
+// serve -tray 打开浏览器）；onExit 在用户点击退出时回调（调用方负责
+// 停止网关并退出进程）。
+func runTray(onOpen, onExit func()) {
 	systray.Run(func() {
 		systray.SetIcon(trayIcon())
 		systray.SetTitle("Yardmaster")
-		systray.SetTooltip("Yardmaster 网关运行中 · " + url)
-		mOpen := systray.AddMenuItem("打开控制台", "在浏览器打开管理控制台")
+		systray.SetTooltip("Yardmaster 网关运行中")
+		mOpen := systray.AddMenuItem("打开窗口", "打开 Yardmaster 应用窗口/控制台")
 		systray.AddSeparator()
 		mQuit := systray.AddMenuItem("退出", "停止网关并退出")
 		go func() {
 			for {
 				select {
 				case <-mOpen.ClickedCh:
-					_ = openBrowser(url)
+					onOpen()
 				case <-mQuit.ClickedCh:
 					onExit()
 					return

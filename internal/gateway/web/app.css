@@ -73,3 +73,26 @@ a.quota-btn { cursor:pointer; font-size:.82rem; color:var(--accent) }
 .disp-output { background:#0f172a; color:#dbeafe; border-radius:8px; padding:10px 12px; max-height:16rem; overflow:auto; font-size:.8rem; white-space:pre-wrap; word-break:break-all; margin-top:8px }
 #tbl-dispatch tr.sel { background:#eef4ff }
 textarea, input, select { font-family:inherit }
+
+/* ---------- 应用窗口态（?app=1，M5.5 桌面壳）----------
+   调度台工业风：深色顶栏 + 双轨分隔线 + 紧凑桌面密度；用满窗口宽度。
+   仅覆盖观感与密度，信息架构与浏览器态完全一致。 */
+body.app { font-size:13px; background:#f2f4f7; -webkit-font-smoothing:antialiased }
+body.app header {
+  background:#141a24; padding:8px 16px; gap:1rem;
+  border-bottom:3px double #2c3648; /* 双轨意象（呼应托盘图标） */
+  background-image:linear-gradient(90deg, rgba(59,130,246,.16), transparent 44%);
+}
+body.app h1 { color:#e8edf6; font-size:1rem; letter-spacing:.02em }
+body.app nav#tabs a { color:#9aa7bc; padding:3px 9px; font-size:.82rem; margin-right:.35rem }
+body.app nav#tabs a.active { color:#fff; background:#233046; box-shadow:inset 0 -2px 0 var(--accent) }
+body.app header button { background:#1d2736; color:#dbe4f2; border-color:#31405a; font-size:.82rem; padding:4px 12px }
+body.app header button:hover { border-color:#5b8cf5 }
+body.app main { max-width:none; margin:0; padding:10px 14px 26px }
+body.app .card { padding:10px 12px; margin:8px 0; border-radius:8px }
+body.app table { font-size:.82rem }
+body.app td, body.app th { padding:4px 7px }
+body.app .stat-v { font-family:ui-monospace,"Cascadia Mono",Consolas,monospace; font-size:1.2rem }
+body.app .muted { font-size:.78rem }
+body.app .disp-output { font-size:.75rem }
+body.app header, body.app nav, body.app th, body.app .stat-l { user-select:none } /* 应用感：界面壳不可选中，输出区仍可选中复制 */

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -33,14 +34,19 @@ var Version = "dev"
 // ErrUsage 表示命令行用法错误（区别于运行时故障）。
 var ErrUsage = errors.New("usage")
 
-// Run 解析并执行一条子命令。骨架阶段仅 serve 与 version。
+// Run 解析并执行一条子命令。无参数缺省 app（桌面应用模式：网关 +
+// 托盘 + 应用窗口——「二进制直接运行即有界面」）；无头场景显式 serve。
 func Run(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		args = []string{"serve"}
+		args = []string{"app"}
 	}
 	switch args[0] {
 	case "serve":
 		return runServe(args[1:], stdout)
+	case "app": // 桌面应用模式（M5.5：零 cgo 应用窗口 + 托盘 + 进程内网关）
+		return runApp(args[1:], stdout)
+	case "console": // 显式打开网页控制台（serve/app 不再自动开网页）
+		return runConsole(args[1:], stdout)
 	case "version":
 		fmt.Fprintln(stdout, "yardmaster "+Version)
 		return nil
@@ -73,31 +79,30 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	case "dispatch": // M5-W5：任务→Agent 派发（agents/init/run）
 		return runDispatch(args[1:], stdout, stderr)
 	default:
-		fmt.Fprintf(stderr, "未知子命令 %q；可用：serve、version、provider、group、rules、keys、intents、trace、settings、agents、price、cost、update、tui、run、dispatch\n", args[0])
+		fmt.Fprintf(stderr, "未知子命令 %q；可用：app（缺省，桌面应用）、serve、console、version、provider、group、rules、keys、intents、trace、settings、agents、price、cost、update、tui、run、dispatch\n", args[0])
 		return ErrUsage
 	}
 }
 
-// runServe 启动网关（M3-W6：-no-open 关闭自动开控制台，-tray 启用
-// 系统托盘常驻——桌面壳两步走第一步）。
-func runServe(args []string, stdout io.Writer) error {
-	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-	noOpen := fs.Bool("no-open", false, "启动后不自动打开控制台")
-	tray := fs.Bool("tray", false, "启用系统托盘常驻（打开控制台/退出）")
-	if err := fs.Parse(args); err != nil {
-		return ErrUsage
-	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+// serveSetup 是网关装配产物（serve 与 app 模式共用）。
+type serveSetup struct {
+	srv      *gateway.Server
+	planner  *gateway.Planner
+	paths    store.Paths
+	settings store.Settings
+	listen   string
+}
 
+// setupGateway 完成网关装配（配置读取、安全基线、Server 构造、派发挂载）。
+func setupGateway() (*serveSetup, error) {
 	paths, err := store.DefaultPaths()
 	if err != nil {
-		return fmt.Errorf("定位数据目录: %w", err)
+		return nil, fmt.Errorf("定位数据目录: %w", err)
 	}
 	planner := loadPlanner(paths)
 	settings, serr := store.LoadSettings(paths)
 	if serr != nil && !errors.Is(serr, os.ErrNotExist) {
-		return fmt.Errorf("读取设置: %w", serr)
+		return nil, fmt.Errorf("读取设置: %w", serr)
 	}
 
 	// 监听地址归一化 + 安全基线把关（F10）：非回环监听必须配置令牌，
@@ -107,7 +112,7 @@ func runServe(args []string, stdout io.Writer) error {
 		listen = gateway.DefaultAddr
 	}
 	if err := gateway.ValidateSecurity(listen, settings.Token); err != nil {
-		return err
+		return nil, err
 	}
 
 	srv := &gateway.Server{
@@ -125,7 +130,6 @@ func runServe(args []string, stdout io.Writer) error {
 		Intents: gateway.NewIntentChain(paths.IntentsPath(), settings.L1Classifier,
 			l1TimeoutOrDefault(settings), newL1Caller(listen, settings.Token, settings.L1Classifier)),
 	}
-	defer srv.Traces.Close()
 
 	// 派发引擎（M5-W4）：dispatch.json 损坏 → fail-closed 禁用派发并
 	// 指引修复（网关其余功能不受影响）；不存在 → 无 agent 空引擎。
@@ -139,38 +143,40 @@ func runServe(args []string, stdout io.Writer) error {
 	if derr == nil {
 		srv.AttachDispatch(dispEngine)
 	}
+	return &serveSetup{srv: srv, planner: planner, paths: paths, settings: settings, listen: listen}, nil
+}
 
-	// OTLP traces 导出（M4-W5）：默认关；开启后经观察者异步推送，导出
-	// 失败只降级（丢弃本批），绝不阻断推理主流程。
-	if settings.OTel.Enabled && settings.OTel.Endpoint != "" {
-		exp := otlp.NewExporter(settings.OTel.Endpoint, settings.OTel.Headers)
-		defer exp.Close()
-		srv.Traces.OnTrace = exp.Export
-		slog.Info("otlp traces 导出已开启", "endpoint", settings.OTel.Endpoint)
+// startHelpers 启动后台辅助（OTLP 导出、OAuth 刷新、余额轮询、用量落盘
+// 节流）；返回收尾函数（OTLP 关闭）。ctx 结束时各自退出。
+func (st *serveSetup) startHelpers(ctx context.Context) func() {
+	var stops []func()
+	if st.settings.OTel.Enabled && st.settings.OTel.Endpoint != "" {
+		exp := otlp.NewExporter(st.settings.OTel.Endpoint, st.settings.OTel.Headers)
+		stops = append(stops, exp.Close)
+		st.srv.Traces.OnTrace = exp.Export
+		slog.Info("otlp traces 导出已开启", "endpoint", st.settings.OTel.Endpoint)
 	}
 
 	// OAuth 到期前主动刷新（M3-W3）：每分钟扫描，提前 10 分钟续期。
 	// gemini-cli 的 client secret 经 settings 注入（公开常量但不入仓库，
 	// GitHub secret scanning 拦截字面量）。
-	if settings.GeminiClientSecret != "" {
-		srv.SetRefreshSpec("gemini-cli", credential.RefreshSpec{
+	if st.settings.GeminiClientSecret != "" {
+		st.srv.SetRefreshSpec("gemini-cli", credential.RefreshSpec{
 			TokenURL:     "https://oauth2.googleapis.com/token",
 			ClientID:     "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com",
-			ClientSecret: settings.GeminiClientSecret,
+			ClientSecret: st.settings.GeminiClientSecret,
 		})
 	}
-	srv.StartOAuthRefresher(ctx)
-	// 余额轮询（M3-W5）：每 30 分钟（或 QuotaProbe.Interval），失败只降级。
-	srv.StartQuotaPoller(ctx)
+	st.srv.StartOAuthRefresher(ctx)
+	st.srv.StartQuotaPoller(ctx)
 
-	// 当日用量节流落盘（W6）：每分钟一次 + 退出前一次。
 	go func() {
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
-				if err := planner.FlushUsage(paths.ProvidersPath()); err != nil {
+				if err := st.planner.FlushUsage(st.paths.ProvidersPath()); err != nil {
 					slog.Warn("用量落盘失败（下次重试）", "err", err)
 				}
 			case <-ctx.Done():
@@ -178,36 +184,139 @@ func runServe(args []string, stdout io.Writer) error {
 			}
 		}
 	}()
+	return func() {
+		for _, f := range stops {
+			f()
+		}
+	}
+}
 
-	consoleURL := "http://" + listen + "/"
-	fmt.Fprintf(stdout, "yardmaster %s · 网关监听 http://%s · 数据目录 %s\n", Version, srv.Addr, paths.AppDir)
-	if settings.GlobalProxy != "" {
-		fmt.Fprintf(stdout, "  全局代理: %s\n", netproxy.Redact(settings.GlobalProxy))
+// banner 打印启动摘要。
+func (st *serveSetup) banner(stdout io.Writer) {
+	consoleURL := "http://" + st.listen + "/"
+	fmt.Fprintf(stdout, "yardmaster %s · 网关监听 http://%s · 数据目录 %s\n", Version, st.srv.Addr, st.paths.AppDir)
+	if st.settings.GlobalProxy != "" {
+		fmt.Fprintf(stdout, "  全局代理: %s\n", netproxy.Redact(st.settings.GlobalProxy))
 	}
 	fmt.Fprintf(stdout, "  端点: /v1/chat/completions · /v1/messages · /healthz · /api/state · /api/trace\n")
 	fmt.Fprintf(stdout, "  控制台: %s（总览/Provider/路由/观测/派发；管理 API /api/config/* · /api/reload）\n", consoleURL)
-	if settings.L1Classifier != "" {
-		fmt.Fprintf(stdout, "  L1 分类: %s（超时 %s）\n", settings.L1Classifier, l1TimeoutOrDefault(settings))
+	if st.settings.L1Classifier != "" {
+		fmt.Fprintf(stdout, "  L1 分类: %s（超时 %s）\n", st.settings.L1Classifier, l1TimeoutOrDefault(st.settings))
 	}
-	// 桌面壳（M3-W6）：托盘常驻 + 自动打开控制台（-no-open 可关）
+}
+
+// runServe 无头启动网关（不打开任何界面——网页控制台经 `yardmaster
+// console` 或 app 模式窗口显式打开）。-tray 启用托盘常驻。
+func runServe(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	tray := fs.Bool("tray", false, "启用系统托盘常驻（打开控制台/退出）")
+	if err := fs.Parse(args); err != nil {
+		return ErrUsage
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	st, err := setupGateway()
+	if err != nil {
+		return err
+	}
+	defer st.srv.Traces.Close()
+	defer st.startHelpers(ctx)()
+	st.banner(stdout)
 	if *tray {
-		go runTray(consoleURL, func() {
+		go runTray(func() { _ = openBrowser("http://" + st.listen + "/") }, func() {
 			slog.Info("托盘请求退出")
 			stop()
 			systray.Quit()
 		})
 		fmt.Fprintln(stdout, "  托盘: 已启用（系统托盘区图标）")
 	}
-	if !*noOpen {
-		if oerr := openBrowser(consoleURL); oerr == nil {
-			fmt.Fprintln(stdout, "  已在浏览器打开控制台（-no-open 关闭此行为）")
-		}
+	if err := st.srv.Serve(ctx); err != nil {
+		return err
 	}
-	err = srv.Serve(ctx)
-	if ferr := planner.FlushUsage(paths.ProvidersPath()); ferr != nil {
+	if ferr := st.planner.FlushUsage(st.paths.ProvidersPath()); ferr != nil {
 		slog.Warn("退出前用量落盘失败", "err", ferr)
 	}
-	return err
+	return nil
+}
+
+// runApp 桌面应用模式（无参数缺省）：进程内网关 + 托盘常驻 + 应用窗口
+// （浏览器 --app 模式：无地址栏/标签页的独立窗口，FLClash 式观感；
+// exec 纯 Go 零 cgo，不动交叉编译矩阵）。窗口关闭不影响网关（托盘
+// 菜单可重开）；退出走托盘。
+func runApp(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("app", flag.ContinueOnError)
+	noTray := fs.Bool("no-tray", false, "不启动系统托盘（窗口关闭后 Ctrl-C 退出）")
+	noWindow := fs.Bool("no-window", false, "不打开应用窗口（等同 serve -tray）")
+	if err := fs.Parse(args); err != nil {
+		return ErrUsage
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	st, err := setupGateway()
+	if err != nil {
+		return err
+	}
+	defer st.srv.Traces.Close()
+	defer st.startHelpers(ctx)()
+	st.banner(stdout)
+	consoleURL := "http://" + st.listen + "/?app=1"
+	if !*noTray {
+		go runTray(func() { _ = openAppWindow(consoleURL) }, func() {
+			slog.Info("托盘请求退出")
+			stop()
+			systray.Quit()
+		})
+		fmt.Fprintln(stdout, "  托盘: 已启用（系统托盘区图标；退出请走托盘菜单）")
+	}
+	if !*noWindow {
+		if werr := openAppWindow(consoleURL); werr == nil {
+			fmt.Fprintln(stdout, "  应用窗口: 已打开（关闭窗口后台仍运行；重开走托盘菜单）")
+		} else {
+			fmt.Fprintln(stdout, "  应用窗口: 打开失败（"+werr.Error()+"），可用 yardmaster console 在浏览器打开")
+		}
+	}
+	if err := st.srv.Serve(ctx); err != nil {
+		return err
+	}
+	if ferr := st.planner.FlushUsage(st.paths.ProvidersPath()); ferr != nil {
+		slog.Warn("退出前用量落盘失败", "err", ferr)
+	}
+	return nil
+}
+
+// runConsole 显式在浏览器打开控制台（用户指令；serve/app 不再自动开网页）。
+// -addr 指向已运行的网关（本机或远程，远程需带令牌场景由控制台 401 引导）。
+func runConsole(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("console", flag.ContinueOnError)
+	addr := fs.String("addr", "", "网关地址（空=本机 127.0.0.1:8317，或 settings.listen）")
+	if err := fs.Parse(args); err != nil {
+		return ErrUsage
+	}
+	target := consoleTarget(*addr)
+	fmt.Fprintf(stdout, "打开控制台: %s\n", target)
+	return openBrowser(target)
+}
+
+// consoleTarget 归一控制台地址：显式 addr > settings.listen > 缺省回环；
+// 无协议前缀时补 http:// 与尾斜杠。
+func consoleTarget(addr string) string {
+	target := addr
+	if target == "" {
+		if paths, err := store.DefaultPaths(); err == nil {
+			if settings, serr := store.LoadSettings(paths); serr == nil && settings.Listen != "" {
+				target = settings.Listen
+			}
+		}
+	}
+	if target == "" {
+		target = gateway.DefaultAddr
+	}
+	if !strings.Contains(target, "://") {
+		target = "http://" + target + "/"
+	}
+	return target
 }
 
 // newL1Caller 构造 L1 分类回调：经网关自身推断端点调用分类模型

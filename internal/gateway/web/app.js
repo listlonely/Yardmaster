@@ -13,6 +13,14 @@ const q = (sel) => document.querySelector(sel);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+// ---------- 应用窗口态（M5.5 桌面壳） ----------
+// ?app=1（`yardmaster app` 的 --app 独立窗口）：紧凑桌面密度 + 应用标题；
+// 浏览器常态不受影响。
+if (new URLSearchParams(location.search).get('app') === '1') {
+  document.body.classList.add('app');
+  document.title = 'Yardmaster';
+}
+
 // ---------- 访问令牌（M2-W5） ----------
 
 // 会话内令牌（sessionStorage）：网关开启 token 校验后，API 401 驱动

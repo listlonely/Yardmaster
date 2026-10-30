@@ -23,7 +23,7 @@ Agent ──▶ 127.0.0.1:8317 ──▶ Yardmaster ──▶ 按任务/额度/�
 - **决策追溯**：每次路由决策记录完整候选尝试链（谁调用、命中什么、试过谁、为何切换），落盘 30 天/200MB，`/api/trace`、控制台与 CLI 可查
 - **代理挂载**：全局 → Provider → 账号三级继承（http/https/socks5/socks5h/direct），HTTP/2 半死连接健康检查
 - **局域网共享**：`listen` + 强制令牌（token）；控制台/API/推断端点统一过闸，默认仅本机
-- **桌面托盘**：`serve -tray` 系统托盘常驻（打开控制台/退出，纯 Go 无 cgo）；启动自动打开控制台（`-no-open` 可关）
+- **桌面应用（app 模式）**：`yardmaster` 直接运行即有应用界面——进程内网关 + 系统托盘 + 独立应用窗口（浏览器 `--app` 模式：无地址栏/标签页，FLClash 式观感；exec 纯 Go 零 cgo，交叉编译矩阵不变）；窗口关闭后台仍运行，重开/退出走托盘菜单；无头场景用 `serve`（不再自动开网页），网页控制台按指令打开：`yardmaster console`（浏览器）或 app 窗口
 - **OTLP traces 导出（v0.4.0，默认关）**：settings.json `otel{enabled,endpoint,headers}` 开启后，决策 trace 映射 OTel span（gen_ai.* 语义约定）推送 OTLP-HTTP 兼容后端（Jaeger/Tempo/Langfuse），手写 JSON 零 SDK 依赖，失败只降级不阻断推理
 
 ## 安装
@@ -53,8 +53,11 @@ yardmaster provider add-oauth anthropic -from claude-code   # 或 codex / gemini
 yardmaster agents preview claude-code -model yardmaster-main claude-code
 yardmaster agents wire claude-code -model yardmaster-main
 
-# 4. 启动网关（默认仅监听 127.0.0.1:8317；自动打开控制台；-tray 启用托盘常驻）
-yardmaster serve
+# 4. 启动：直接运行 `yardmaster`（无参数）即桌面应用——应用窗口 + 托盘 + 进程内网关；
+#    无头场景用 serve（不打开任何界面）；网页控制台按指令打开（yardmaster console）
+yardmaster                # 应用模式：窗口 + 托盘（退出走托盘菜单）
+yardmaster serve          # 无头模式（Agent 接线/服务器场景）
+yardmaster console        # 在浏览器打开控制台（也可 -addr 指向远程网关）
 
 # 5. 观测与经营
 yardmaster trace list                 # 路由决策追溯

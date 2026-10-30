@@ -61,6 +61,7 @@
 - 局域网共享与分发（W5）：settings 新增 `listen`（空=127.0.0.1:8317）与 `token`；令牌脱敏往返语义与 api_key 同规（空/脱敏形保留现存）；控制台 401 驱动单飞令牌输入（sessionStorage 会话内有效，并发 401 共享同一 Promise 防叠层——实测缺陷修复）；升级提示 `yardmaster update check`（GitHub releases 比较，dev 态跳过）；安装脚本 `scripts/install.ps1`（-File 离线/-NoPath 供测试；**UTF-8 BOM 必需**——PowerShell 5.1 无 BOM 按 ANSI 解析中文注释即语法错误）与 `scripts/install.sh`（--user/--file），随 release 产物分发。
 - 账号实时状态：`/api/state` 附 `accounts` 数组（key/status/used_tokens/quota_tokens_day/usage_day，Planner 内存快照），控制台 join 该数据展示实时用量——配置文件里的 used_tokens 经 60s 节流落盘，直接读会滞后。
 - 派发管理面（M5-W5，[2026-10-30-派发管理面]）：`POST /api/dispatch/run`（意图链尽力分类 → match/default 选择 → 后台 ctx 提交，会话生命周期独立于请求）、`GET /api/dispatch/agents|sessions|sessions/{id}`（详情含实时输出尾部）、`POST /api/dispatch/sessions/{id}/cancel`；配置读写 `GET/PUT /api/config/dispatch`（校验+备份+审计，写后引擎热替换）；控制台「派发」页（提交表单/会话表/实时输出/取消，5s 自动刷新）；会话终态记 trace（RoutePath=dispatch，Served=agent/&lt;id&gt;，见 dispatch.md）。
+- 桌面应用模式（M5.5，[2026-10-30-零依赖桌面壳]）：`yardmaster`（无参数）缺省 `app`——进程内网关 + 托盘常驻 + 应用窗口（Edge/Chrome `--app` 模式独立窗口，exec 纯 Go 零 cgo，交叉编译矩阵不变；回退系统默认浏览器）；serve 不再自动开网页，网页控制台按指令打开（`yardmaster console [-addr]` 浏览器 / app 窗口）；控制台 `?app=1` 走紧凑桌面密度（深色顶栏/双轨分隔线/全宽，信息架构不变）；窗口关闭后台仍运行（托盘菜单重开/退出）。真原生内嵌窗口（Wails v3）仍为后续独立构建变体，网关核心不引入 webview 依赖。
 
 ## 约束与失效行为
 
