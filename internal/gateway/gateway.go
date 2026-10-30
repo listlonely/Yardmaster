@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"yardmaster/internal/credential"
+	"yardmaster/internal/dispatch"
 	"yardmaster/internal/netproxy"
 	"yardmaster/internal/provider"
 )
@@ -67,6 +68,7 @@ type Server struct {
 	ProvidersPath string            // providers.json 路径（/api/reload 热重载用）
 	Token         string            // 访问令牌（M2-W5）：非空时 /v1 与 /api 要求匹配；空=本机信任态
 	Creds         *credential.Store // OAuth 凭证库（M3-W3）；nil=无 OAuth 能力
+	Dispatch      *dispatch.Engine  // 任务→Agent 派发引擎（M5-W4）；nil=未挂载
 	oauth         oauthRuntime      // OAuth 运行态（token 缓存/single-flight）
 	started       time.Time
 }

@@ -19,6 +19,7 @@ import (
 	"fyne.io/systray"
 
 	"yardmaster/internal/credential"
+	"yardmaster/internal/dispatch"
 	"yardmaster/internal/gateway"
 	"yardmaster/internal/netproxy"
 	"yardmaster/internal/otlp"
@@ -123,6 +124,19 @@ func runServe(args []string, stdout io.Writer) error {
 			l1TimeoutOrDefault(settings), newL1Caller(listen, settings.Token, settings.L1Classifier)),
 	}
 	defer srv.Traces.Close()
+
+	// 派发引擎（M5-W4）：dispatch.json 损坏 → fail-closed 禁用派发并
+	// 指引修复（网关其余功能不受影响）；不存在 → 无 agent 空引擎。
+	dispEngine, derr := dispatch.LoadEngine(paths.DispatchPath())
+	switch {
+	case derr != nil:
+		slog.Error("dispatch.json 不可用，派发功能已禁用", "err", derr)
+	case len(dispEngine.Agents()) > 0:
+		slog.Info("已加载派发配置", "agents", len(dispEngine.Agents()))
+	}
+	if derr == nil {
+		srv.AttachDispatch(dispEngine)
+	}
 
 	// OTLP traces 导出（M4-W5）：默认关；开启后经观察者异步推送，导出
 	// 失败只降级（丢弃本批），绝不阻断推理主流程。

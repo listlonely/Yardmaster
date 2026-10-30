@@ -46,6 +46,9 @@ func (p Paths) KeysPath() string { return filepath.Join(p.AppDir, "keys.json") }
 // PricingPath 返回 pricing.json 路径（模型单价表，M2-W4）。
 func (p Paths) PricingPath() string { return filepath.Join(p.AppDir, "pricing.json") }
 
+// DispatchPath 返回 dispatch.json 路径（任务→Agent 派发配置，M5-W4）。
+func (p Paths) DispatchPath() string { return filepath.Join(p.AppDir, "dispatch.json") }
+
 // BackupDir 返回配置写前快照目录（备份栈，M2-W1）。
 func (p Paths) BackupDir() string { return filepath.Join(p.AppDir, "backup") }
 

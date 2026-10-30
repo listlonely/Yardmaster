@@ -100,6 +100,13 @@ func Run(ctx context.Context, spec Spec, task, model string, out io.Writer) Resu
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 
 	if err := cmd.Start(); err != nil {
+		if ctx.Err() != nil { // 取消/超时先于启动到达：归为对应结局，非启动失败
+			res.Outcome, res.DurationMS = outcomeOfCtx(ctx.Err()), msSince(started)
+			if res.Outcome == OutcomeTimeout {
+				res.ExitCode = ExitTimeout
+			}
+			return res
+		}
 		res.Outcome, res.ErrText, res.DurationMS = OutcomeLaunch, launchErrText(err), msSince(started)
 		return res
 	}
@@ -115,17 +122,26 @@ func Run(ctx context.Context, spec Spec, task, model string, out io.Writer) Resu
 	res.DurationMS = msSince(started)
 
 	switch {
-	case ctx.Err() == nil && waitErr == nil:
+	case waitErr == nil: // 正常完成（完成后才到期的取消不改变结局）
 		res.Outcome, res.ExitCode = OutcomeOK, 0
-	case ctx.Err() == nil: // 非 0 退出
+	case ctx.Err() != nil: // 被杀：区分取消与超时
+		res.Outcome = outcomeOfCtx(ctx.Err())
+		if res.Outcome == OutcomeTimeout {
+			res.ExitCode = ExitTimeout
+		}
+	default: // 非 0 退出
 		res.Outcome, res.ExitCode = OutcomeExit, exitCodeOf(waitErr)
 		res.ErrText = orDefault(res.ErrText, waitErr.Error())
-	case errors.Is(ctx.Err(), context.Canceled):
-		res.Outcome = OutcomeCancelled
-	default: // DeadlineExceeded
-		res.Outcome, res.ExitCode = OutcomeTimeout, ExitTimeout
 	}
 	return res
+}
+
+// outcomeOfCtx 把 ctx 错误映射为结局。
+func outcomeOfCtx(err error) Outcome {
+	if errors.Is(err, context.Canceled) {
+		return OutcomeCancelled
+	}
+	return OutcomeTimeout
 }
 
 // ExitCodeOf 返回 CLI 透传约定的退出码（dispatch run 用）。
