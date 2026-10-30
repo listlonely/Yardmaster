@@ -3,7 +3,11 @@
 // 其他包另立状态定义。
 package provider
 
-import "yardmaster/internal/netproxy"
+import (
+	"fmt"
+
+	"yardmaster/internal/netproxy"
+)
 
 // Protocol 是网关与上游通信的 API 协议。M1 仅 Chat 与 Messages（设计文档 §6.2）。
 type Protocol string
@@ -45,6 +49,32 @@ type Provider struct {
 	Accounts []Account    `json:"accounts"`
 }
 
+// AuthKind 是账号的认证形态（M3-W1）。零值为 api_key，兼容既有配置。
+type AuthKind string
+
+const (
+	AuthAPIKey AuthKind = ""      // 静态 API key（存 providers.json，现状行为）
+	AuthOAuth  AuthKind = "oauth" // OAuth 订阅凭证：密文存凭证库（internal/credential），
+	// providers.json 只存非密钥元数据；与 api_key 互斥。
+)
+
+// OAuth 账号状态字典（M3-W1；W3 刷新机制扩展写路径）。
+const (
+	OAuthStateOK      = "ok"      // 凭证有效（含未到期的导入态）
+	OAuthStateStale   = "stale"   // access token 已过期，等待刷新（W3 处理）
+	OAuthStateUnknown = "unknown" // 上游未提供过期时间
+)
+
+// OAuthMeta 是 OAuth 账号在 providers.json 中的非密钥元数据。
+// access/refresh token 等秘密只存 internal/credential 管理的凭证库
+// （Windows DPAPI / 其余 0600），永不进入 providers.json 及其快照。
+type OAuthMeta struct {
+	ExpiresAt   int64  `json:"expires_at,omitempty"`   // access token 过期（Unix 秒；0=未知）
+	RefreshedAt int64  `json:"refreshed_at,omitempty"` // 最近一次导入/刷新（Unix 秒）
+	State       string `json:"state,omitempty"`        // ok | stale | unknown
+	LastError   string `json:"last_error,omitempty"`   // 脱敏摘要（不含 token）
+}
+
 // Account 是 Provider 下的一个 key/账号，可配独立代理（F3）。
 // APIKey 仅存本机（F10）；任何日志/界面输出必须经 netproxy.Redact（§4.4）。
 type Account struct {
@@ -53,6 +83,8 @@ type Account struct {
 	Proxy        netproxy.Ref  `json:"proxy,omitempty"` // 空=继承 Provider
 	Status       AccountStatus `json:"status"`
 	RestingUntil int64         `json:"resting_until,omitempty"` // Unix 秒；休眠至 T
+	Auth         AuthKind      `json:"auth,omitempty"`          // 空=api_key；oauth=订阅凭证（M3-W1）
+	OAuth        *OAuthMeta    `json:"oauth,omitempty"`         // auth=oauth 时的非密钥元数据
 
 	// 当日用量（W6 由响应 usage 填充）：smart 策略按剩余比例排序。
 	// QuotaTokensDay<=0 视为无数据（smart 回落 rotate）。
@@ -60,6 +92,25 @@ type Account struct {
 	UsedTokens     int64  `json:"used_tokens,omitempty"`
 	QuotaTokensDay int64  `json:"quota_tokens_day,omitempty"`
 	UsageDay       string `json:"usage_day,omitempty"`
+}
+
+// Validate 校验账号认证形态一致性（配置矛盾即拒绝，fail-closed）：
+// auth=oauth 与 api_key 互斥；auth 为空时不得携带 oauth 元数据；
+// 未知 auth 形态拒绝（读不懂=未知，不放行）。
+func (a Account) Validate() error {
+	switch a.Auth {
+	case AuthAPIKey:
+		if a.OAuth != nil {
+			return fmt.Errorf("账号 %q: auth=api_key 时不应有 oauth 元数据", a.Name)
+		}
+	case AuthOAuth:
+		if a.APIKey != "" {
+			return fmt.Errorf("账号 %q: oauth 与 api_key 互斥（OAuth token 不存 providers.json）", a.Name)
+		}
+	default:
+		return fmt.Errorf("账号 %q: 未知 auth 形态 %q（空=api_key | oauth）", a.Name, a.Auth)
+	}
+	return nil
 }
 
 // Strategy 是路由组策略名（PRD F6）。策略实现在 internal/routes。
@@ -78,6 +129,6 @@ const (
 type Group struct {
 	ID       string         `json:"id"`
 	Strategy Strategy       `json:"strategy"`
-	Members  []string       `json:"members"`          // 形如 "provider/model"
+	Members  []string       `json:"members"`           // 形如 "provider/model"
 	Weights  map[string]int `json:"weights,omitempty"` // weight 策略：成员引用 → 权重（缺省 1）
 }

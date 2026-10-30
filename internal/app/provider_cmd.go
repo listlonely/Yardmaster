@@ -8,10 +8,14 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
+	"yardmaster/internal/credential"
 	"yardmaster/internal/gateway"
 	"yardmaster/internal/netproxy"
 	"yardmaster/internal/provider"
@@ -36,7 +40,7 @@ func saveProvidersFile(paths store.Paths, cfg store.ProvidersFile) error {
 
 func runProvider(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "用法: yardmaster provider <add|list|probe|quota|remove> [参数]")
+		fmt.Fprintln(stderr, "用法: yardmaster provider <add|add-oauth|list|probe|quota|remove> [参数]")
 		return ErrUsage
 	}
 	paths, err := store.DefaultPaths()
@@ -46,6 +50,8 @@ func runProvider(args []string, stdout, stderr io.Writer) error {
 	switch args[0] {
 	case "add":
 		return providerAdd(paths, args[1:], stdout, stderr)
+	case "add-oauth":
+		return providerAddOAuth(paths, args[1:], stdout, stderr)
 	case "list":
 		return providerList(paths, stdout)
 	case "probe":
@@ -55,7 +61,7 @@ func runProvider(args []string, stdout, stderr io.Writer) error {
 	case "remove":
 		return providerRemove(paths, args[1:], stdout, stderr)
 	default:
-		fmt.Fprintf(stderr, "未知子命令 %q；可用：add、list、probe、quota、remove\n", args[0])
+		fmt.Fprintf(stderr, "未知子命令 %q；可用：add、add-oauth、list、probe、quota、remove\n", args[0])
 		return ErrUsage
 	}
 }
@@ -187,6 +193,193 @@ func providerAdd(paths store.Paths, args []string, stdout, stderr io.Writer) err
 	return nil
 }
 
+// expandHome 把路径前缀 ~ 展开为用户目录（-from 显式路径用）。
+func expandHome(p string) (string, error) {
+	if p == "~" || strings.HasPrefix(p, "~/") || strings.HasPrefix(p, `~\`) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve home: %w", err)
+		}
+		return filepath.Join(home, strings.TrimPrefix(strings.TrimPrefix(p, "~"), string(filepath.Separator))), nil
+	}
+	return p, nil
+}
+
+// oauthStateFor 依据过期时间归出账号元数据状态（M3-W1：导入时判定；
+// W3 刷新机制扩展写路径）。
+func oauthStateFor(expiresAt int64) string {
+	switch {
+	case expiresAt <= 0:
+		return provider.OAuthStateUnknown
+	case expiresAt <= time.Now().Unix():
+		return provider.OAuthStateStale
+	default:
+		return provider.OAuthStateOK
+	}
+}
+
+// providerAddOAuth 从 Agent 凭证文件导入 OAuth 订阅账号（M3-W1 骨架）：
+// 读源文件 → 注册表解析 → 凭证入加密库 → providers.json 写入
+// auth=oauth 元数据（api_key 互斥，秘密永不进 providers.json 及其备份）。
+// 任一步「读不懂」即整体失败，不落半份凭证。
+func providerAddOAuth(paths store.Paths, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("provider add-oauth", flag.ContinueOnError)
+	id := fs.String("id", "", "provider ID（不存在时须同时给 -base-url）")
+	name := fs.String("name", "", "显示名（默认同 ID）")
+	protocol := fs.String("protocol", "openai-chat", "openai-chat | anthropic-messages")
+	baseURL := fs.String("base-url", "", "上游完整前缀")
+	account := fs.String("account", "main", "账号名")
+	from := fs.String("from", "", "导入源 <格式>:<凭证文件路径>（格式见提示；文件支持 ~ 前缀）")
+	proxy := fs.String("proxy", "", "账号级代理（http/https/socks5/socks5h/direct）")
+	providerProxy := fs.String("provider-proxy", "", "Provider 级代理（账号未配置时继承）")
+	replace := fs.Bool("replace", false, "账号已存在时转换为 OAuth（api_key 账号转换将清除其 key）")
+	if err := fs.Parse(args); err != nil {
+		return ErrUsage
+	}
+	if *id == "" || *from == "" {
+		fmt.Fprintln(stderr, "缺少必填参数：-id、-from <格式>:<文件路径>")
+		return ErrUsage
+	}
+	format, srcPath, ok := strings.Cut(*from, ":")
+	if !ok || strings.TrimSpace(format) == "" || strings.TrimSpace(srcPath) == "" {
+		fmt.Fprintln(stderr, "-from 须为 <格式>:<文件路径>（如 claude-code:~/.claude/.credentials.json）")
+		return ErrUsage
+	}
+	parse, ok := credential.Lookup(format)
+	if !ok {
+		fmt.Fprintf(stderr, "未支持的导入格式 %q；可用：%s（内置解析器随 M3-W2 扩充）\n",
+			format, strings.Join(credential.Names(), ", "))
+		return ErrUsage
+	}
+	if p := provider.Protocol(*protocol); p != provider.ProtocolChat && p != provider.ProtocolMessages {
+		fmt.Fprintln(stderr, "-protocol 仅支持 openai-chat | anthropic-messages")
+		return ErrUsage
+	}
+	if _, err := netproxy.Parse(netproxy.Ref(*proxy)); err != nil {
+		fmt.Fprintln(stderr, err)
+		return ErrUsage
+	}
+	src, err := expandHome(srcPath)
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		// 读不懂 = 未知：源文件读不到/读不了绝不落库
+		fmt.Fprintf(stderr, "读取凭证文件失败（读不懂=未知，未做任何写入）: %v\n", err)
+		return ErrUsage
+	}
+	oauth, err := parse(data)
+	if err != nil {
+		fmt.Fprintf(stderr, "解析 %s 凭证失败（读不懂=未知，未做任何写入）: %v\n", format, err)
+		return ErrUsage
+	}
+	if err := oauth.Validate(); err != nil {
+		fmt.Fprintf(stderr, "凭证校验失败（未做任何写入）: %v\n", err)
+		return ErrUsage
+	}
+
+	cfg, err := loadProvidersFile(paths)
+	if err != nil {
+		return err
+	}
+	var target *provider.Provider
+	for i := range cfg.Providers {
+		if cfg.Providers[i].ID == *id {
+			target = &cfg.Providers[i]
+			break
+		}
+	}
+	if target == nil {
+		if *baseURL == "" {
+			fmt.Fprintf(stderr, "provider %q 不存在；首次创建须给 -base-url\n", *id)
+			return ErrUsage
+		}
+		cfg.Providers = append(cfg.Providers, provider.Provider{
+			ID: *id, Name: *name, Protocol: provider.Protocol(*protocol), BaseURL: *baseURL,
+			Proxy: netproxy.Ref(*providerProxy),
+		})
+		target = &cfg.Providers[len(cfg.Providers)-1]
+	}
+	if target.Name == "" {
+		target.Name = *name
+	}
+	if *providerProxy != "" {
+		target.Proxy = netproxy.Ref(*providerProxy)
+	}
+	if *baseURL != "" && *baseURL != target.BaseURL {
+		target.BaseURL = *baseURL
+	}
+
+	now := time.Now().Unix()
+	meta := &provider.OAuthMeta{ExpiresAt: oauth.ExpiresAt, RefreshedAt: now, State: oauthStateFor(oauth.ExpiresAt)}
+	converted := false
+	idx := -1
+	for i := range target.Accounts {
+		if target.Accounts[i].Name == *account {
+			idx = i
+			break
+		}
+	}
+	if idx >= 0 {
+		if !*replace {
+			fmt.Fprintf(stderr, "账号 %q 已存在于 %s（加 -replace 转换为 OAuth，或换名）\n", *account, *id)
+			return ErrUsage
+		}
+		if target.Accounts[idx].APIKey != "" {
+			converted = true // 用户显式 -replace：api_key 账号转 OAuth，清除旧 key
+		}
+	}
+
+	ref, err := credential.NewRef(*id, *account)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return ErrUsage
+	}
+	credStore := credential.Store{Path: paths.CredentialsPath(), BackupDir: paths.BackupDir()}
+	// 顺序：凭证库先落（失败即中止，不动配置）；providers.json 随后
+	// 走备份栈+原子写。反序会出现「配置指向 oauth 但库里无凭证」。
+	if err := credStore.Save(ref, oauth); err != nil {
+		return fmt.Errorf("凭证库写入失败（未改 providers.json）: %w", err)
+	}
+	if idx >= 0 {
+		target.Accounts[idx].APIKey = ""
+		target.Accounts[idx].Auth = provider.AuthOAuth
+		target.Accounts[idx].OAuth = meta
+	} else {
+		target.Accounts = append(target.Accounts, provider.Account{
+			Name: *account, Proxy: netproxy.Ref(*proxy),
+			Status: provider.AccountAvailable,
+			Auth:   provider.AuthOAuth, OAuth: meta,
+		})
+	}
+	if err := store.BackupConfig(paths.ProvidersPath(), paths.BackupDir(), store.BaseName(paths.ProvidersPath()), 10); err != nil {
+		return fmt.Errorf("写前备份失败，已中止: %w", err)
+	}
+	if err := saveProvidersFile(paths, cfg); err != nil {
+		return err
+	}
+	slog.Info("OAuth 账号已导入", "provider", *id, "account", *account, "format", format)
+	switch {
+	case converted:
+		fmt.Fprintf(stdout, "已转换 %s / 账号 %q 为 OAuth（原 api_key 已清除）。过期时间: %s\n",
+			*id, *account, oauthExpiryText(meta))
+	case idx >= 0:
+		fmt.Fprintf(stdout, "已更新 %s / 账号 %q 为 OAuth。过期时间: %s\n", *id, *account, oauthExpiryText(meta))
+	default:
+		fmt.Fprintf(stdout, "已添加 %s / OAuth 账号 %q。过期时间: %s\n", *id, *account, oauthExpiryText(meta))
+	}
+	fmt.Fprintln(stdout, "内置解析器随 M3-W2 扩充后，无需手工改配置即可接入订阅账号。")
+	return nil
+}
+
+func oauthExpiryText(m *provider.OAuthMeta) string {
+	if m == nil || m.ExpiresAt <= 0 {
+		return "未知"
+	}
+	return time.Unix(m.ExpiresAt, 0).Format("2006-01-02 15:04")
+}
+
 func providerList(paths store.Paths, stdout io.Writer) error {
 	cfg, err := loadProvidersFile(paths)
 	if err != nil {
@@ -200,7 +393,11 @@ func providerList(paths store.Paths, stdout io.Writer) error {
 		accInfo := make([]string, 0, len(p.Accounts))
 		for _, a := range p.Accounts {
 			px, _ := gateway.ResolveProxyRef(string(a.Proxy), string(p.Proxy), "")
-			accInfo = append(accInfo, fmt.Sprintf("%s[%s|代理:%s]", a.Name, a.Status, netproxy.Redact(px)))
+			info := fmt.Sprintf("%s[%s|代理:%s]", a.Name, a.Status, netproxy.Redact(px))
+			if a.Auth == provider.AuthOAuth {
+				info = fmt.Sprintf("%s[%s|oauth|过期:%s|代理:%s]", a.Name, a.Status, oauthExpiryText(a.OAuth), netproxy.Redact(px))
+			}
+			accInfo = append(accInfo, info)
 		}
 		fmt.Fprintf(stdout, "%s  %-18s %-18s 模型 %2d  账号: %s\n",
 			p.ID, p.Name, p.Protocol, len(p.Models), strings.Join(accInfo, " "))

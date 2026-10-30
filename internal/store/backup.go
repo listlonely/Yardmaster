@@ -36,16 +36,18 @@ func BackupConfig(path, backupDir, base string, keep int) error {
 		return fmt.Errorf("ensure backup dir: %w", err)
 	}
 	// 纳秒精度：同秒连续编辑不互相覆盖；定宽格式保证字典序=时间序。
-	name := fmt.Sprintf("%s-%s.json", base, time.Now().Format("20060102-150405.000000000"))
+	// 扩展名随源文件（credentials.bin 等非 JSON 库同样走此备份栈）。
+	ext := filepath.Ext(path)
+	name := fmt.Sprintf("%s-%s%s", base, time.Now().Format("20060102-150405.000000000"), ext)
 	if err := edit.WriteAtomic(filepath.Join(backupDir, name), data); err != nil {
 		return fmt.Errorf("write backup snapshot: %w", err)
 	}
-	return trimBackups(backupDir, base, keep)
+	return trimBackups(backupDir, base, keep, ext)
 }
 
 // trimBackups 删除同 base 的最旧快照，只留最近 keep 份（调用方已建目录）。
-func trimBackups(backupDir, base string, keep int) error {
-	matches, err := filepath.Glob(filepath.Join(backupDir, base+"-*.json"))
+func trimBackups(backupDir, base string, keep int, ext string) error {
+	matches, err := filepath.Glob(filepath.Join(backupDir, base+"-*"+ext))
 	if err != nil {
 		return fmt.Errorf("glob backups: %w", err)
 	}

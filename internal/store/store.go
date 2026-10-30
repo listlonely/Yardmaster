@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"yardmaster/internal/edit"
 )
@@ -44,6 +45,19 @@ func (p Paths) KeysPath() string { return filepath.Join(p.AppDir, "keys.json") }
 
 // PricingPath 返回 pricing.json 路径（模型单价表，M2-W4）。
 func (p Paths) PricingPath() string { return filepath.Join(p.AppDir, "pricing.json") }
+
+// BackupDir 返回配置写前快照目录（备份栈，M2-W1）。
+func (p Paths) BackupDir() string { return filepath.Join(p.AppDir, "backup") }
+
+// CredentialsPath 返回 OAuth 凭证库路径（M3-W1）。Windows 为 DPAPI
+// 密文 credentials.bin，其余平台为 0600 JSON credentials.json——文件
+// 形态由 internal/credential 决定，此处与其保持一致。
+func (p Paths) CredentialsPath() string {
+	if runtime.GOOS == "windows" {
+		return filepath.Join(p.AppDir, "credentials.bin")
+	}
+	return filepath.Join(p.AppDir, "credentials.json")
+}
 
 // AppliedPath 返回 applied.json 路径（接线审计记录，F4/F5/F10）。
 func (p Paths) AppliedPath() string { return filepath.Join(p.AppDir, "applied.json") }

@@ -403,6 +403,9 @@ func validateProviders(f store.ProvidersFile) error {
 			if strings.TrimSpace(a.Name) == "" {
 				return fmt.Errorf("provider %s 存在未命名账号", p.ID)
 			}
+			if err := a.Validate(); err != nil {
+				return fmt.Errorf("provider %s: %w", p.ID, err)
+			}
 			if seenAcc[a.Name] {
 				return fmt.Errorf("provider %s 账号名重复: %s", p.ID, a.Name)
 			}
