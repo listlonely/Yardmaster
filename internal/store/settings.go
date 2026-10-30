@@ -18,6 +18,11 @@ type Settings struct {
 	// Bearer、x-api-key 或 X-Gw-Token 均可）；仅本机使用可留空。
 	// 任何输出必须脱敏（§4.4，与 api_key 同规）。
 	Token string `json:"token,omitempty"`
+
+	// Gemini CLI OAuth client secret（M3-W3）：Google installed-app 客户端
+	// 的公开常量，但 GitHub secret scanning 拦截仓库内字面量，故经设置
+	// 注入（取值见 Gemini CLI 自身源码）；空=gemini-cli 凭证无法刷新。
+	GeminiClientSecret string `json:"gemini_client_secret,omitempty"`
 }
 
 // LoadSettings 读取设置；文件不存在返回 os.ErrNotExist（调用方按零值

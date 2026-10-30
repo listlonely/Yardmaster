@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"yardmaster/internal/credential"
 	"yardmaster/internal/gateway"
 	"yardmaster/internal/netproxy"
 	"yardmaster/internal/store"
@@ -103,10 +104,23 @@ func runServe(stdout io.Writer) error {
 		AppDir:        paths.AppDir,
 		ProvidersPath: paths.ProvidersPath(),
 		Token:         settings.Token,
+		Creds:         &credential.Store{Path: paths.CredentialsPath(), BackupDir: paths.BackupDir()},
 		Intents: gateway.NewIntentChain(paths.IntentsPath(), settings.L1Classifier,
 			l1TimeoutOrDefault(settings), newL1Caller(listen, settings.Token, settings.L1Classifier)),
 	}
 	defer srv.Traces.Close()
+
+	// OAuth 到期前主动刷新（M3-W3）：每分钟扫描，提前 10 分钟续期。
+	// gemini-cli 的 client secret 经 settings 注入（公开常量但不入仓库，
+	// GitHub secret scanning 拦截字面量）。
+	if settings.GeminiClientSecret != "" {
+		srv.SetRefreshSpec("gemini-cli", credential.RefreshSpec{
+			TokenURL:     "https://oauth2.googleapis.com/token",
+			ClientID:     "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com",
+			ClientSecret: settings.GeminiClientSecret,
+		})
+	}
+	srv.StartOAuthRefresher(ctx)
 
 	// 当日用量节流落盘（W6）：每分钟一次 + 退出前一次。
 	go func() {

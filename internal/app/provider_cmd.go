@@ -205,18 +205,8 @@ func expandHome(p string) (string, error) {
 	return p, nil
 }
 
-// oauthStateFor 依据过期时间归出账号元数据状态（M3-W1：导入时判定；
-// W3 刷新机制扩展写路径）。
-func oauthStateFor(expiresAt int64) string {
-	switch {
-	case expiresAt <= 0:
-		return provider.OAuthStateUnknown
-	case expiresAt <= time.Now().Unix():
-		return provider.OAuthStateStale
-	default:
-		return provider.OAuthStateOK
-	}
-}
+// oauthStateFor 依据过期时间归出账号元数据状态（W3 起复用 provider 共用实现）。
+func oauthStateFor(expiresAt int64) string { return provider.OAuthStateFor(expiresAt) }
 
 // providerAddOAuth 从 Agent 凭证文件导入 OAuth 订阅账号（M3-W1 骨架）：
 // 读源文件 → 注册表解析 → 凭证入加密库 → providers.json 写入
@@ -322,7 +312,7 @@ func providerAddOAuth(paths store.Paths, args []string, stdout, stderr io.Writer
 	}
 
 	now := time.Now().Unix()
-	meta := &provider.OAuthMeta{ExpiresAt: oauth.ExpiresAt, RefreshedAt: now, State: oauthStateFor(oauth.ExpiresAt)}
+	meta := &provider.OAuthMeta{Format: format, ExpiresAt: oauth.ExpiresAt, RefreshedAt: now, State: oauthStateFor(oauth.ExpiresAt)}
 	converted := false
 	idx := -1
 	for i := range target.Accounts {

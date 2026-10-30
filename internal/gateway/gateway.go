@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"yardmaster/internal/credential"
 	"yardmaster/internal/netproxy"
 	"yardmaster/internal/provider"
 )
@@ -64,6 +65,8 @@ type Server struct {
 	AppDir        string       // 数据目录（管理 API 备份/写配置用）；空=禁用写接口
 	ProvidersPath string       // providers.json 路径（/api/reload 热重载用）
 	Token         string       // 访问令牌（M2-W5）：非空时 /v1 与 /api 要求匹配；空=本机信任态
+	Creds         *credential.Store // OAuth 凭证库（M3-W3）；nil=无 OAuth 能力
+	oauth         oauthRuntime      // OAuth 运行态（token 缓存/single-flight）
 	started       time.Time
 }
 
@@ -393,7 +396,14 @@ func (s *Server) serveWithFailover(w http.ResponseWriter, r *http.Request,
 			last = res
 			continue
 		case res.status == http.StatusUnauthorized || res.status == http.StatusForbidden:
-			// 凭证失败：切走；W3 标记 AccountBadCred（规则页：不自动重试）
+			// 凭证失败（W3 分流）：api_key 账号标记 bad-credential（规则页：
+			// 切走、需人工处理、不自动重试）；OAuth 账号触发被动刷新
+			// （single-flight，异步），短休眠后刷新成功即自动回归。
+			if cand.Account.Auth == provider.AuthOAuth {
+				s.triggerRefresh(cand)
+			} else {
+				s.Planner.MarkBadCredByKey(cand.Key())
+			}
 			s.Planner.Rest(cand, restCred)
 			last = res
 			continue
@@ -512,11 +522,23 @@ func (s *Server) attempt(ctx context.Context, client ClientProto, clientReq any,
 	if stream {
 		req.Header.Set("Accept", "text/event-stream")
 	}
+	// 凭证注入（M3-W3）：oauth 账号经凭证库/缓存取 access token；
+	// api_key 账号沿用配置值。读不懂=未知：凭证取不到按失败休眠切换。
+	tok, terr := s.upstreamToken(cand)
+	if terr != nil {
+		return attemptResult{err: terr}
+	}
 	if upstreamProto == ProtoMessages {
-		req.Header.Set("x-api-key", cand.Account.APIKey)
+		if cand.Account.Auth == provider.AuthOAuth {
+			// Claude OAuth 订阅走 Bearer（非 x-api-key），带 oauth beta 头
+			req.Header.Set("Authorization", "Bearer "+tok)
+			req.Header.Set("anthropic-beta", "oauth-2025-04-20")
+		} else {
+			req.Header.Set("x-api-key", tok)
+		}
 		req.Header.Set("anthropic-version", "2023-06-01")
 	} else {
-		req.Header.Set("Authorization", "Bearer "+cand.Account.APIKey)
+		req.Header.Set("Authorization", "Bearer "+tok)
 	}
 
 	resp, err := (&http.Client{Transport: trIf}).Do(req)

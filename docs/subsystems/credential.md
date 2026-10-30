@@ -12,6 +12,9 @@
 | 键 | `Ref = "<provider-id>/<account>"`，两段禁止路径分隔符（防注入） |
 | 导入解析器 | `RegisterParser/Lookup/Names` 注册表；内置：`claude-code`（`~/.claude/.credentials.json`，`claudeAiOauth` 嵌套、毫秒时间戳）、`codex`（`~/.codex/auth.json`，`tokens` 嵌套、API key 登录拒绝导入）、`gemini-cli`（`~/.gemini/oauth_creds.json`，平铺、`expiry_date` 毫秒）。形状样例见 `testdata/credentials/`（README 含 W2 真实凭证复核要求） |
 | CLI | `provider add-oauth <id> <account> -from <格式>[:<路径>] [-replace]`（省略路径用 `DefaultPath`）；`provider list` 展示 oauth/过期标记；控制台 Provider 页 OAuth 徽标 + 过期时间 + stale 提示 |
+| token 刷新（W3） | `credential.Refresh`（RFC6749 refresh_token grant）+ 每格式内置 `RefreshSpec`（端点/客户端 ID 取自各 Agent 公开配置，`SetRefreshSpec` 可覆盖）；网关 `upstreamToken` 缓存注入 + Claude OAuth 走 `Authorization: Bearer` + `anthropic-beta: oauth-2025-04-20` |
+| 刷新触发 | 主动：`StartOAuthRefresher`（serve 起每分钟扫描，提前 `oauthRefreshAhead`=10min）；被动：上游 401/403 → `triggerRefresh`（single-flight）；api_key 账号 401 直接 `MarkBadCredByKey`（规则页：不自动重试） |
+| 失败冷却 | 连续 `oauthMaxFails`=3 次刷新失败 → `bad-credential`；元数据 `LastError`（200 字符脱敏摘要，不含 token）；成功即 `ClearByKey` 解除休眠并清零计数 |
 
 ## 安全约束（不可协商）
 
@@ -78,3 +81,11 @@ go test -race -run 'TestProviderAddOAuth|TestCredential|TestAccountValidate' ./.
 | 省略路径走默认路径（缺失即败） | `TestProviderAddOAuthDefaultPathHint` |
 | 未知格式/缺格式/源缺失/形状不对 → 不落盘 | `TestProviderAddOAuthFailsClosed` |
 | api_key 账号显式转换清除旧 key | `TestProviderAddOAuthReplaceConvertsAPIKey` |
+| 刷新成功（端点表单/合并/落库/元数据/缓存/休眠解除） | `TestRefreshSuccess`、`TestRefreshAccountSuccess` |
+| 不轮换保留旧 refresh_token | `TestRefreshKeepsRefreshTokenWhenNotRotated` |
+| 刷新失败（拒绝/非 JSON/缺 token）错误脱敏 | `TestRefreshFailures` |
+| 连续失败超限 → bad-credential | `TestRefreshAccountFailsThenBadCred` |
+| 并发 401 single-flight | `TestTriggerRefreshSingleFlight` |
+| 到期前主动扫描 | `TestRefreshDueAccounts` |
+| 401 集成：触发刷新且请求照常切换 | `TestOAuthCandidate401TriggersRefresh` |
+| 凭证库损坏 → token 注入失败 | `TestUpstreamTokenOAuthMissingIsError` |

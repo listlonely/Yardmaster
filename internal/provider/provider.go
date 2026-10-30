@@ -5,6 +5,7 @@ package provider
 
 import (
 	"fmt"
+	"time"
 
 	"yardmaster/internal/netproxy"
 )
@@ -65,10 +66,23 @@ const (
 	OAuthStateUnknown = "unknown" // 上游未提供过期时间
 )
 
+// OAuthStateFor 依据过期时间归出账号元数据状态（app 导入与网关刷新共用）。
+func OAuthStateFor(expiresAt int64) string {
+	switch {
+	case expiresAt <= 0:
+		return OAuthStateUnknown
+	case expiresAt <= time.Now().Unix():
+		return OAuthStateStale
+	default:
+		return OAuthStateOK
+	}
+}
+
 // OAuthMeta 是 OAuth 账号在 providers.json 中的非密钥元数据。
 // access/refresh token 等秘密只存 internal/credential 管理的凭证库
 // （Windows DPAPI / 其余 0600），永不进入 providers.json 及其快照。
 type OAuthMeta struct {
+	Format      string `json:"format,omitempty"`       // 导入格式（claude-code/codex/gemini-cli），决定刷新端点
 	ExpiresAt   int64  `json:"expires_at,omitempty"`   // access token 过期（Unix 秒；0=未知）
 	RefreshedAt int64  `json:"refreshed_at,omitempty"` // 最近一次导入/刷新（Unix 秒）
 	State       string `json:"state,omitempty"`        // ok | stale | unknown

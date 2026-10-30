@@ -562,6 +562,37 @@ func (p *Planner) Clear(c Candidate) {
 	delete(p.resting, c.Key())
 }
 
+// ClearByKey 按 "provider/account" 键解除休眠（OAuth 刷新成功后调用）。
+func (p *Planner) ClearByKey(key string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.resting, key)
+}
+
+// MarkBadCredByKey 把账号标记为凭证失败（规则页：切走、需人工处理、
+// 不自动重试——candidates 跳过该状态账号），同时清除其休眠条目。
+// 账号切片与 Candidate.Provider 共享，锁内原位修改（NoteUsage 同规）。
+func (p *Planner) MarkBadCredByKey(key string) {
+	provID, accName, ok := strings.Cut(key, "/")
+	if !ok {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i := range p.providers {
+		if p.providers[i].ID != provID {
+			continue
+		}
+		for j := range p.providers[i].Accounts {
+			if p.providers[i].Accounts[j].Name == accName {
+				p.providers[i].Accounts[j].Status = provider.AccountBadCred
+				delete(p.resting, key)
+				return
+			}
+		}
+	}
+}
+
 // Resting 返回当前休眠中的账号 key 与截止时刻（/api/state 用）。
 func (p *Planner) Resting() map[string]time.Time {
 	p.mu.Lock()

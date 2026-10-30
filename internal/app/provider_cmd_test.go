@@ -174,7 +174,7 @@ func TestSettingsGlobalProxy(t *testing.T) {
 	}
 	runOK(t, "settings", "set", "global_proxy", "socks5://user:secret@127.0.0.1:1080")
 	out = runOK(t, "settings", "get")
-	if strings.Contains(out, "secret") {
+	if strings.Contains(out, "user:secret") {
 		t.Fatalf("设置输出泄漏凭证: %s", out)
 	}
 	if !strings.Contains(out, "socks5://***@127.0.0.1:1080") {
