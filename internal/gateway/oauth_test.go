@@ -245,6 +245,7 @@ func TestOAuthCandidate401TriggersRefresh(t *testing.T) {
 	}
 	// 被动刷新已异步触发并完成
 	waitOAuthRefreshed(t, srv)
+	waitOAuthFlights(t, srv)
 	if hit.Load() != 1 {
 		t.Fatalf("401 应触发刷新: %d", hit.Load())
 	}
@@ -252,6 +253,32 @@ func TestOAuthCandidate401TriggersRefresh(t *testing.T) {
 	o, err := credential.Store{Path: paths.CredentialsPath()}.Load("anthropic/main")
 	if err != nil || o.AccessToken != "at-new" {
 		t.Fatalf("刷新应落库: %+v, %v", o, err)
+	}
+}
+
+// waitOAuthFlights 等待全部被动刷新 flight 收尾（done 在 refreshAccount
+// 返回、flight 出表之后关闭——覆盖备份与落库的尾部写入）。确定性清理：
+// CI Windows 的慢文件系统上，t.TempDir 的 RemoveAll 曾与异步刷新的
+// 尾写竞态（unlinkat: The directory is not empty，测试断言本身已通过）。
+func waitOAuthFlights(t *testing.T, s *Server) {
+	t.Helper()
+	for i := 0; i < 100; i++ {
+		s.oauth.mu.Lock()
+		var pending []*refreshFlight
+		for _, f := range s.oauth.flight {
+			pending = append(pending, f)
+		}
+		s.oauth.mu.Unlock()
+		if len(pending) == 0 {
+			return
+		}
+		for _, f := range pending {
+			select {
+			case <-f.done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("被动刷新 flight 未在限时内收尾")
+			}
+		}
 	}
 }
 
