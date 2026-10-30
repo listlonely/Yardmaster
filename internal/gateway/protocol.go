@@ -17,7 +17,8 @@ type ClientProto string
 const (
 	ProtoChat      ClientProto = "openai-chat"
 	ProtoMessages  ClientProto = "anthropic-messages"
-	ProtoResponses ClientProto = "openai-responses" // M4-W1 骨架：透传可跑，翻译 W2
+	ProtoResponses ClientProto = "openai-responses" // M4-W2：双向翻译就绪
+	ProtoGemini    ClientProto = "gemini"           // M4-W3：入站+上游+翻译
 )
 
 // ---------- OpenAI Chat ----------
@@ -332,15 +333,20 @@ func appendSSE(out []byte, name string, data []byte) []byte {
 	return append(out, []byte("\n\n")...)
 }
 
-// writeErr 按调用方协议的错误格式输出（W2：结构对齐，字段最小集）。
+// writeErr 按调用方协议的错误格式输出（字段最小集）。
 func writeErr(p ClientProto, status int, msg string) (int, []byte) {
 	var body []byte
-	if p == ProtoMessages {
+	switch p {
+	case ProtoMessages:
 		body, _ = json.Marshal(map[string]any{
 			"type":  "error",
 			"error": map[string]any{"type": "api_error", "message": msg},
 		})
-	} else {
+	case ProtoGemini: // Google 错误形状：{error:{code,message,status}}
+		body, _ = json.Marshal(map[string]any{
+			"error": map[string]any{"code": status, "message": msg, "status": "INVALID_ARGUMENT"},
+		})
+	default: // Chat / Responses 同形
 		body, _ = json.Marshal(map[string]any{
 			"error": map[string]any{"message": msg, "type": "yardmaster_error"},
 		})

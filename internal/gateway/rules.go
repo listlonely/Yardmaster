@@ -217,6 +217,17 @@ func inputStats(clientReq any) (lastUser string, estTokens int) {
 		if t := responsesLastUser(cr.Input); strings.TrimSpace(t) != "" {
 			lastUser = t
 		}
+	case *GeminiRequest: // M4-W3：systemInstruction 计入长度估计
+		if cr.SystemInstruction != nil {
+			runes += len([]rune(geminiPartsText(cr.SystemInstruction.Parts)))
+		}
+		for _, c := range cr.Contents {
+			t := geminiPartsText(c.Parts)
+			runes += len([]rune(t))
+			if c.Role != "model" && strings.TrimSpace(t) != "" {
+				lastUser = t
+			}
+		}
 	}
 	return lastUser, runes / 2
 }

@@ -22,6 +22,7 @@ type recordedReq struct {
 	path    string
 	body    string
 	xAPIKey string
+	googKey string
 }
 
 type fakeUpstream struct {
@@ -41,6 +42,7 @@ func newFakeUpstream(t *testing.T, respond func(rec recordedReq, n int) (int, st
 		rec := recordedReq{
 			auth:    r.Header.Get("Authorization"),
 			xAPIKey: r.Header.Get("X-Api-Key"),
+			googKey: r.Header.Get("X-Goog-Api-Key"),
 			path:    r.URL.Path,
 			body:    string(b),
 		}

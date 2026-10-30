@@ -107,24 +107,8 @@ func responsesOutputText(rr *ResponsesResponse) string {
 	return ""
 }
 
-// W1 fail-closed 边界：gemini 协议候选明确报 W3（可配置、不参与路由）。
-func TestGeminiUpstreamFailsClosedUntilW3(t *testing.T) {
-	up := newFakeUpstream(t, func(rec recordedReq, _ int) (int, string, string) {
-		t.Errorf("W1 不应触达 gemini 上游")
-		return 500, "application/json", `{}`
-	})
-	p := chatProvider(up.srv.URL)
-	p.Protocol = provider.ProtocolGemini
-	gw := newGateway(t, p)
-
-	resp := post(t, gw.URL, "/v1/chat/completions", chatReqBody("prov/up-m", false))
-	if resp.StatusCode != http.StatusBadGateway {
-		t.Fatalf("status = %d, want 502", resp.StatusCode)
-	}
-	if body := readBody(t, resp); !strings.Contains(body, "M4-W3") {
-		t.Fatalf("错误消息应标注 W3 里程碑: %s", body)
-	}
-}
+// （W1 的 gemini fail-closed 测试随 W3 上游链路交付退役，
+// 由 m4w3_test.go 的 TestChatClientToGeminiUpstream 等正向用例覆盖。）
 
 // ---------- input 统计（规则引擎数据源） ----------
 
@@ -288,9 +272,4 @@ func TestPutProvidersAcceptsNewProtocols(t *testing.T) {
 	}
 }
 
-func readBody(t *testing.T, resp *http.Response) string {
-	t.Helper()
-	buf := make([]byte, 8192)
-	n, _ := resp.Body.Read(buf)
-	return string(buf[:n])
-}
+// readBody 已由 m4w2_test.go 的 readAll 取代（Gemini fail-closed 用例退役）。

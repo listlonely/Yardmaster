@@ -87,6 +87,9 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /v1/chat/completions", s.handleInference(ProtoChat))
 	mux.HandleFunc("POST /v1/messages", s.handleInference(ProtoMessages))
 	mux.HandleFunc("POST /v1/responses", s.handleInference(ProtoResponses)) // M4-W1
+	// M4-W3：Gemini 入站（/v1beta/models/{model}:generateContent —— 通配
+	// 段后随方法后缀，ServeMux 模式不支持，见 handleGeminiInbound 解析）
+	mux.HandleFunc("POST /v1beta/", s.handleGeminiInbound)
 	mux.HandleFunc("GET /api/state", s.handleState)
 	mux.HandleFunc("GET /api/trace", s.handleTrace)
 	mux.HandleFunc("GET /api/config/{name}", func(w http.ResponseWriter, r *http.Request) {
@@ -254,6 +257,21 @@ func (s *Server) handleInference(client ClientProto) http.HandlerFunc {
 				return
 			}
 			model, stream, clientReq = rr.Model, rr.Stream, &rr
+		case ProtoGemini:
+			// Gemini：model/stream 在 URL（:generateContent / :streamGenerateContent），
+			// body 无这两个字段；由 handleGeminiInbound 解析后经 context 注入。
+			gi, ok := r.Context().Value(geminiInboundKey{}).(geminiInbound)
+			if !ok {
+				writeClientErr(client, w, http.StatusBadRequest, "Gemini 请求须经 /v1beta/models/{model}:generateContent 路径")
+				return
+			}
+			var gr GeminiRequest
+			if err := json.Unmarshal(body, &gr); err != nil {
+				writeClientErr(client, w, http.StatusBadRequest, "解析 Gemini 请求失败: "+err.Error())
+				return
+			}
+			gr.Model = gi.model
+			model, stream, clientReq = gi.model, gi.stream, &gr
 		default:
 			var cr ChatRequest
 			if err := json.Unmarshal(body, &cr); err != nil {
@@ -518,20 +536,20 @@ func (s *Server) finishTrace(tr *Trace, outcome string, status int, start time.T
 func (s *Server) attempt(ctx context.Context, client ClientProto, clientReq any,
 	rawBody []byte, stream bool, cand Candidate) attemptResult {
 	upstreamProto := clientProtoOf(cand.Provider.Protocol)
-	// M4-W3 边界（fail-closed，不静默走错路径）：gemini 上游链路 W3
-	// 交付（路径含模型名、认证形态不同）。W1 命中即按候选失败处理
-	// （切下一候选），消息明确标注里程碑。
-	if cand.Provider.Protocol == provider.ProtocolGemini {
-		return attemptResult{err: fmt.Errorf("provider %s 协议 gemini 的上游链路 M4-W3 支持（W1 仅可配置）", cand.Provider.ID)}
-	}
 	var upBody []byte
 	if upstreamProto == client {
-		b, merr := rewriteModel(rawBody, cand.UpstreamModel)
-		if merr != nil {
-			st, body := writeErr(client, http.StatusBadRequest, "改写模型名失败: "+merr.Error())
-			return attemptResult{clientFault: true, status: st, body: body}
+		if upstreamProto == ProtoGemini {
+			// Gemini 同协议透传：model 在 URL 不在 body，改写靠 URL 拼接
+			// （geminiUpstreamPath 用上游模型名），body 原样。
+			upBody = rawBody
+		} else {
+			b, merr := rewriteModel(rawBody, cand.UpstreamModel)
+			if merr != nil {
+				st, body := writeErr(client, http.StatusBadRequest, "改写模型名失败: "+merr.Error())
+				return attemptResult{clientFault: true, status: st, body: body}
+			}
+			upBody = b
 		}
-		upBody = b
 	} else {
 		switch cq := clientReq.(type) {
 		case *ChatRequest:
@@ -540,6 +558,8 @@ func (s *Server) attempt(ctx context.Context, client ClientProto, clientReq any,
 			cq.Model = cand.UpstreamModel
 		case *ResponsesRequest:
 			cq.Model = cand.UpstreamModel
+		case *GeminiRequest:
+			cq.Model = cand.UpstreamModel // 供翻译到其他协议（同协议透传走 URL）
 		}
 		upBody = translateRequest(client, clientReq, upstreamProto, stream)
 	}
@@ -549,6 +569,9 @@ func (s *Server) attempt(ctx context.Context, client ClientProto, clientReq any,
 		path = messagesUpstreamPath
 	case ProtoResponses:
 		path = responsesUpstreamPath
+	case ProtoGemini:
+		// 上游 URL 含真实模型名（Magpie GeminiPath 同形）
+		path = geminiUpstreamPath(cand.UpstreamModel, stream)
 	default:
 		path = chatUpstreamPath
 	}
@@ -576,7 +599,11 @@ func (s *Server) attempt(ctx context.Context, client ClientProto, clientReq any,
 		return attemptResult{err: terr}
 	}
 	setAuth := func(req *http.Request) {
-		if upstreamProto == ProtoMessages {
+		switch upstreamProto {
+		case ProtoGemini:
+			// Google 拒绝 Bearer key：Gemini 一律 x-goog-api-key（Magpie 同款）
+			req.Header.Set("x-goog-api-key", tok)
+		case ProtoMessages:
 			switch {
 			case cand.Account.Auth == provider.AuthOAuth:
 				// Claude OAuth 订阅走 Bearer（非 x-api-key），带 oauth beta 头
@@ -589,7 +616,7 @@ func (s *Server) attempt(ctx context.Context, client ClientProto, clientReq any,
 				req.Header.Set("x-api-key", tok)
 			}
 			req.Header.Set("anthropic-version", "2023-06-01")
-		} else {
+		default: // Chat / Responses 上游：Bearer
 			req.Header.Set("Authorization", "Bearer "+tok)
 		}
 	}
@@ -786,6 +813,17 @@ func (s *Server) translateStream(w http.ResponseWriter, fw *flushWriter,
 			return splitSSEData(out)
 		}
 		decDone = func() [][]byte { return splitSSEData(t.Done()) }
+	case ProtoGemini:
+		t := newGeminiToChatStream()
+		feed = func(ev sseEvent) [][]byte {
+			if err := t.Feed(ev); err != nil {
+				slog.Warn("流式翻译失败", "err", err)
+			}
+			out := t.out
+			t.out = nil
+			return splitSSEData(out)
+		}
+		decDone = func() [][]byte { return splitSSEData(t.Done()) }
 	default: // 上游是 chat：data 即 chat chunk
 		feed = func(ev sseEvent) [][]byte {
 			if string(ev.Data) == "[DONE]" {
@@ -813,6 +851,19 @@ func (s *Server) translateStream(w http.ResponseWriter, fw *flushWriter,
 		finish = func() { _, _ = w.Write(t.Done()); fw.flush() }
 	case ProtoResponses:
 		t := newChatToRespStream()
+		encode = func(chunkData []byte) {
+			if err := t.Feed(chunkData); err != nil {
+				slog.Warn("流式翻译失败", "err", err)
+			}
+			if t.out != nil {
+				_, _ = w.Write(t.out)
+				t.out = nil
+				fw.flush()
+			}
+		}
+		finish = func() { _, _ = w.Write(t.Done()); fw.flush() }
+	case ProtoGemini: // M4-W3：chat chunk → gemini 事件（无 [DONE]）
+		t := newChatToGeminiStream()
 		encode = func(chunkData []byte) {
 			if err := t.Feed(chunkData); err != nil {
 				slog.Warn("流式翻译失败", "err", err)
@@ -892,13 +943,14 @@ func (f *flushWriter) flush() {
 }
 
 // clientProtoOf 把 provider.Protocol 转为网关内部协议标识。
-// gemini 无对应入站协议（W3 交付），调用方须在其之前拦截（attempt 已拦）。
 func clientProtoOf(p provider.Protocol) ClientProto {
 	switch p {
 	case provider.ProtocolMessages:
 		return ProtoMessages
 	case provider.ProtocolResponses:
 		return ProtoResponses
+	case provider.ProtocolGemini:
+		return ProtoGemini
 	default:
 		return ProtoChat
 	}
@@ -950,6 +1002,37 @@ func translateRequest(client ClientProto, clientReq any, upstream ClientProto, s
 		cr := responsesToChatRequest(rr)
 		cr.Stream = stream
 		b, _ := json.Marshal(chatToMessagesRequest(cr))
+		return b
+	// M4-W3：Gemini 组合（model 由 attempt 注入 gr.Model；经 Chat 枢纽中转）
+	case client == ProtoGemini && upstream == ProtoChat:
+		gr := clientReq.(*GeminiRequest)
+		b, _ := json.Marshal(geminiToChatRequest(gr, gr.Model, stream))
+		return b
+	case client == ProtoChat && upstream == ProtoGemini:
+		cr := clientReq.(*ChatRequest)
+		b, _ := json.Marshal(chatToGeminiRequest(cr))
+		return b
+	case client == ProtoGemini && upstream != ProtoChat:
+		gr := clientReq.(*GeminiRequest)
+		cr := geminiToChatRequest(gr, gr.Model, stream)
+		cr.Stream = stream
+		if upstream == ProtoMessages {
+			b, _ := json.Marshal(chatToMessagesRequest(cr))
+			return b
+		}
+		b, _ := json.Marshal(chatToResponsesRequest(cr))
+		return b
+	case upstream == ProtoGemini && client != ProtoChat:
+		var cr *ChatRequest
+		switch cq := clientReq.(type) {
+		case *MessagesRequest:
+			cr = messagesToChatRequest(cq)
+		case *ResponsesRequest:
+			cr = responsesToChatRequest(cq)
+		default:
+			cr = clientReq.(*ChatRequest)
+		}
+		b, _ := json.Marshal(chatToGeminiRequest(cr))
 		return b
 	default:
 		b, _ := json.Marshal(clientReq)
@@ -1003,6 +1086,37 @@ func translateResponse(client, upstream ClientProto, clientReq any, upstreamBody
 			model = rr.Model
 		}
 		return json.Marshal(chatResponseToResponses(model, &cc))
+	// M4-W3：Gemini 组合（经 Chat 枢纽中转）
+	case upstream == ProtoGemini:
+		var gr GeminiResponse
+		if err := json.Unmarshal(upstreamBody, &gr); err != nil {
+			return nil, fmt.Errorf("解析上游 gemini 响应: %w", err)
+		}
+		cc := geminiResponseToChat(&gr)
+		switch client {
+		case ProtoGemini: // 理论不可达（同协议走透传），保形直通
+			return upstreamBody, nil
+		case ProtoChat:
+			return json.Marshal(cc)
+		case ProtoMessages:
+			mr := clientReq.(*MessagesRequest)
+			return json.Marshal(chatResponseToMessages(mr, cc))
+		default: // Responses
+			rr := clientReq.(*ResponsesRequest)
+			return json.Marshal(chatResponseToResponses(rr.Model, cc))
+		}
+	case client == ProtoGemini:
+		var cc ChatChunk
+		if upstream == ProtoMessages {
+			var ms MessagesResponse
+			if err := json.Unmarshal(upstreamBody, &ms); err != nil {
+				return nil, fmt.Errorf("解析上游 messages 响应: %w", err)
+			}
+			cc = *messagesResponseToChat(ms)
+		} else if err := json.Unmarshal(upstreamBody, &cc); err != nil {
+			return nil, fmt.Errorf("解析上游 chat 响应: %w", err)
+		}
+		return json.Marshal(chatResponseToGemini(&cc))
 	default:
 		return upstreamBody, nil
 	}
