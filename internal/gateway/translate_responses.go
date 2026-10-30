@@ -82,7 +82,7 @@ func responsesToChatRequest(rr *ResponsesRequest) *ChatRequest {
 					},
 				})
 				cr.Messages = append(cr.Messages, cm)
-			case tp == "function_call_output":
+			case "function_call_output":
 				cr.Messages = append(cr.Messages, ChatMessage{
 					Role:       "tool",
 					ToolCallID: respCallID(m),
