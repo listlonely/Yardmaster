@@ -26,7 +26,7 @@ func TestProbeAccountChat(t *testing.T) {
 
 	prov := &provider.Provider{ID: "p", Protocol: provider.ProtocolChat, BaseURL: srv.URL}
 	models, err := ProbeAccount(context.Background(), prov,
-		provider.Account{Name: "a", APIKey: "sk-ok"}, "", nil)
+		provider.Account{Name: "a", APIKey: "sk-ok"}, "", nil, "")
 	if err != nil {
 		t.Fatalf("ProbeAccount: %v", err)
 	}
@@ -35,7 +35,7 @@ func TestProbeAccountChat(t *testing.T) {
 	}
 
 	_, err = ProbeAccount(context.Background(), prov,
-		provider.Account{Name: "a", APIKey: "sk-bad"}, "", nil)
+		provider.Account{Name: "a", APIKey: "sk-bad"}, "", nil, "")
 	if err == nil || !strings.Contains(err.Error(), "401") {
 		t.Fatalf("want 401 error, got %v", err)
 	}
@@ -55,12 +55,30 @@ func TestProbeAccountMessagesPath(t *testing.T) {
 
 	prov := &provider.Provider{ID: "p", Protocol: provider.ProtocolMessages, BaseURL: srv.URL}
 	models, err := ProbeAccount(context.Background(), prov,
-		provider.Account{Name: "a", APIKey: "sk"}, "", nil)
+		provider.Account{Name: "a", APIKey: "sk"}, "", nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(models) != 1 || models[0].ID != "claude-x" {
 		t.Fatalf("models = %+v", models)
+	}
+}
+
+// W4 认证头自动学习：authStyle=bearer 时 Anthropic 协议用 Bearer 而非
+// x-api-key。
+func TestProbeAccountAuthStyleBearer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer sk" || r.Header.Get("X-Api-Key") != "" {
+			t.Errorf("bearer 形态错误: auth=%q xapi=%q", r.Header.Get("Authorization"), r.Header.Get("X-Api-Key"))
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"claude-x"}]}`))
+	}))
+	defer srv.Close()
+
+	prov := &provider.Provider{ID: "p", Protocol: provider.ProtocolMessages, BaseURL: srv.URL}
+	if _, err := ProbeAccount(context.Background(), prov,
+		provider.Account{Name: "a", APIKey: "sk"}, "", nil, "bearer"); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -77,7 +95,7 @@ func TestProbeWithCustomRoundTripper(t *testing.T) {
 	})
 	prov := &provider.Provider{ID: "p", Protocol: provider.ProtocolChat, BaseURL: "http://upstream.invalid"}
 	models, err := ProbeAccount(context.Background(), prov,
-		provider.Account{Name: "a", APIKey: "k"}, "", custom)
+		provider.Account{Name: "a", APIKey: "k"}, "", custom, "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -40,7 +40,7 @@ func saveProvidersFile(paths store.Paths, cfg store.ProvidersFile) error {
 
 func runProvider(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "用法: yardmaster provider <add|add-oauth|list|probe|quota|remove> [参数]")
+		fmt.Fprintln(stderr, "用法: yardmaster provider <add|add-oauth|presets|list|probe|quota|remove> [参数]")
 		return ErrUsage
 	}
 	paths, err := store.DefaultPaths()
@@ -52,6 +52,8 @@ func runProvider(args []string, stdout, stderr io.Writer) error {
 		return providerAdd(paths, args[1:], stdout, stderr)
 	case "add-oauth":
 		return providerAddOAuth(paths, args[1:], stdout, stderr)
+	case "presets":
+		return providerPresets(stdout)
 	case "list":
 		return providerList(paths, stdout)
 	case "probe":
@@ -61,9 +63,19 @@ func runProvider(args []string, stdout, stderr io.Writer) error {
 	case "remove":
 		return providerRemove(paths, args[1:], stdout, stderr)
 	default:
-		fmt.Fprintf(stderr, "未知子命令 %q；可用：add、add-oauth、list、probe、quota、remove\n", args[0])
+		fmt.Fprintf(stderr, "未知子命令 %q；可用：add、add-oauth、presets、list、probe、quota、remove\n", args[0])
 		return ErrUsage
 	}
+}
+
+// providerPresets 列出厂商预设（M3-W4）。
+func providerPresets(stdout io.Writer) error {
+	fmt.Fprintln(stdout, "可用厂商预设（provider add -preset <id>）：")
+	for _, p := range provider.Presets {
+		fmt.Fprintf(stdout, "  %-22s %-34s %-19s %s\n", p.ID, p.Name, p.Protocol, p.Note)
+		fmt.Fprintf(stdout, "  %s   base_url: %s\n", "", p.BaseURL)
+	}
+	return nil
 }
 
 // providerQuota 设置账号当日额度（smart 策略的排序数据源；0=清除）。
@@ -114,20 +126,44 @@ func providerQuota(paths store.Paths, args []string, stdout, stderr io.Writer) e
 
 func providerAdd(paths store.Paths, args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("provider add", flag.ContinueOnError)
-	id := fs.String("id", "", "provider ID（如 deepseek）")
+	id := fs.String("id", "", "provider ID（如 deepseek；-preset 给出时默认同预设 ID）")
 	name := fs.String("name", "", "显示名（默认同 ID）")
-	protocol := fs.String("protocol", "openai-chat", "openai-chat | anthropic-messages")
+	protocol := fs.String("protocol", "openai-chat", "openai-chat | anthropic-messages（-preset 未给时必填其一）")
 	baseURL := fs.String("base-url", "", "上游完整前缀（如 https://api.deepseek.com）")
 	key := fs.String("key", "", "API key（必填，仅存本机）")
 	account := fs.String("account", "main", "账号名")
+	presetID := fs.String("preset", "", "厂商预设 ID（yardmaster provider presets 查看；自动填 id/name/protocol/base_url）")
 	proxy := fs.String("proxy", "", "账号级代理（http/https/socks5/socks5h/direct）")
 	providerProxy := fs.String("provider-proxy", "", "Provider 级代理（账号未配置时继承）")
 	replace := fs.Bool("replace", false, "账号已存在时更新其凭证与代理")
 	if err := fs.Parse(args); err != nil {
 		return ErrUsage
 	}
+	explicit := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
+	var preset provider.Preset
+	if *presetID != "" {
+		p, ok := provider.PresetByID(*presetID)
+		if !ok {
+			fmt.Fprintf(stderr, "未知预设 %q；可用见 `yardmaster provider presets`\n", *presetID)
+			return ErrUsage
+		}
+		preset = p
+		if *id == "" {
+			*id = preset.ID
+		}
+		if *name == "" {
+			*name = preset.Name
+		}
+		if *baseURL == "" {
+			*baseURL = preset.BaseURL
+		}
+		if !explicit["protocol"] && preset.Protocol != "" {
+			*protocol = string(preset.Protocol)
+		}
+	}
 	if *id == "" || *baseURL == "" || *key == "" {
-		fmt.Fprintln(stderr, "缺少必填参数：-id、-base-url、-key")
+		fmt.Fprintln(stderr, "缺少必填参数：-key 与 -id/-base-url（或用 -preset 提供厂商预设）")
 		return ErrUsage
 	}
 	if p := provider.Protocol(*protocol); p != provider.ProtocolChat && p != provider.ProtocolMessages {
@@ -440,9 +476,16 @@ func providerProbe(paths store.Paths, args []string, stdout, stderr io.Writer) e
 
 	var allModels []provider.Model
 	failed := 0
+	probeCtx, cancelProbe := context.WithCancel(context.Background())
+	defer cancelProbe()
 	for i := range target.Accounts {
 		acc := &target.Accounts[i]
 		if *account != "" && acc.Name != *account {
+			continue
+		}
+		if acc.Auth == provider.AuthOAuth {
+			// OAuth 账号凭证经网关注入（M3-W3），不走 API key 预检
+			fmt.Fprintf(stdout, "△ %s/%s: OAuth 账号不参与预检（凭证经网关注入）\n", id, acc.Name)
 			continue
 		}
 		ref, _ := gateway.ResolveProxyRef(string(acc.Proxy), string(target.Proxy), settings.GlobalProxy)
@@ -450,7 +493,20 @@ func providerProbe(paths store.Paths, args []string, stdout, stderr io.Writer) e
 		if err != nil {
 			return err
 		}
-		models, perr := gateway.ProbeAccount(context.Background(), target, *acc, settings.GlobalProxy, rt)
+		models, perr := gateway.ProbeAccount(probeCtx, target, *acc, settings.GlobalProxy, rt, target.AuthStyle)
+		if perr != nil && strings.Contains(perr.Error(), "HTTP 401") {
+			// 认证头自动学习（M3-W4）：当前形态被 401 拒绝时尝试另一形态，
+			// 成功即记住（落盘到 providers.json 的 auth_style）
+			alt := "bearer"
+			if target.AuthStyle == "bearer" {
+				alt = "x-api-key"
+			}
+			if m2, e2 := gateway.ProbeAccount(probeCtx, target, *acc, settings.GlobalProxy, rt, alt); e2 == nil {
+				target.AuthStyle = alt
+				models, perr = m2, nil
+				fmt.Fprintf(stdout, "✓ %s/%s: 认证头已学习为 %s\n", id, acc.Name, alt)
+			}
+		}
 		if perr != nil {
 			acc.Status = provider.AccountPrefail // 预检失败仍可参与路由（F3 规则）
 			failed++

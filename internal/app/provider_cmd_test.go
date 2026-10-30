@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"yardmaster/internal/credential"
@@ -258,6 +259,67 @@ func TestProviderAddOAuthDefaultPathHint(t *testing.T) {
 	}
 	if !strings.Contains(errBuf.String(), "读不懂=未知") {
 		t.Fatalf("stderr: %s", errBuf.String())
+	}
+}
+
+func TestProviderPresetsAndAddByPreset(t *testing.T) {
+	home := testenv.New(t)
+
+	// presets 列表
+	out := runOK(t, "provider", "presets")
+	for _, want := range []string{"glm-coding", "deepseek", "siliconflow", "api/coding/paas/v4"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("presets 应含 %q: %s", want, out)
+		}
+	}
+	// 未知预设拒绝
+	if err := Run([]string{"provider", "add", "-preset", "nope", "-key", "k"}, &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
+		t.Fatal("未知预设应拒绝")
+	}
+	// 按预设添加：id/name/protocol/base_url 全部来自预设
+	out = runOK(t, "provider", "add", "-preset", "glm-coding", "-key", "sk-glm")
+	if !strings.Contains(out, "已添加") {
+		t.Fatalf("add 输出: %s", out)
+	}
+	raw, _ := os.ReadFile(filepath.Join(home, ".yardmaster", "providers.json"))
+	var f store.ProvidersFile
+	if err := json.Unmarshal(raw, &f); err != nil {
+		t.Fatal(err)
+	}
+	p := f.Providers[0]
+	if p.ID != "glm-coding" || p.Name != "智谱 GLM Coding Plan" ||
+		p.Protocol != provider.ProtocolChat || p.BaseURL != "https://open.bigmodel.cn/api/coding/paas/v4" {
+		t.Fatalf("预设未正确填充: %+v", p)
+	}
+}
+
+// W4 认证头自动学习：x-api-key 被 401 拒 → 试 Bearer 成功 → auth_style
+// 落盘。
+func TestProviderProbeLearnsAuthStyle(t *testing.T) {
+	home := testenv.New(t)
+	var gotAuth atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth.Store(r.Header.Get("Authorization"))
+		if r.Header.Get("X-Api-Key") != "" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"x-api-key rejected"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"claude-x"}]}`))
+	}))
+	defer srv.Close()
+
+	runOK(t, "provider", "add",
+		"-id", "gw", "-protocol", "anthropic-messages",
+		"-base-url", srv.URL, "-key", "sk-x")
+	runOK(t, "provider", "probe", "gw")
+
+	raw, _ := os.ReadFile(filepath.Join(home, ".yardmaster", "providers.json"))
+	if !strings.Contains(string(raw), `"auth_style": "bearer"`) {
+		t.Fatalf("auth_style 应学习为 bearer: %s", raw)
+	}
+	if got, _ := gotAuth.Load().(string); got != "Bearer sk-x" {
+		t.Fatalf("第二次探测应用 Bearer: %q", got)
 	}
 }
 

@@ -46,8 +46,12 @@ type Provider struct {
 	BaseURL  string       `json:"base_url"`
 	Proxy    netproxy.Ref `json:"proxy,omitempty"` // 空=继承全局；direct=显式直连（F3）
 	Disabled bool         `json:"disabled,omitempty"`
-	Models   []Model      `json:"models,omitempty"` // 预检拉取的模型清单（F2）
-	Accounts []Account    `json:"accounts"`
+	// AuthStyle 是 Anthropic 协议的认证头形态（M3-W4 自动学习）：
+	// 空=按默认 x-api-key；"bearer"=Authorization Bearer（预检 401 时
+	// 自动学习并落盘）。OpenAI 协议恒为 Bearer，不受此字段影响。
+	AuthStyle string   `json:"auth_style,omitempty"`
+	Models    []Model  `json:"models,omitempty"` // 预检拉取的模型清单（F2）
+	Accounts  []Account `json:"accounts"`
 }
 
 // AuthKind 是账号的认证形态（M3-W1）。零值为 api_key，兼容既有配置。

@@ -19,9 +19,11 @@ import (
 const probeTimeout = 20 * time.Second
 
 // ProbeAccount 验证账号凭证并拉取模型清单。非 2xx 返回带状态码与
-// 响应片段的错误；成功返回发现的模型列表。
+// 响应片段的错误；成功返回发现的模型列表。authStyle 覆盖 Anthropic
+// 协议的认证头（""=默认 x-api-key；"bearer"=Authorization Bearer，
+// W4 自动学习数据源；OpenAI 协议恒为 Bearer）。
 func ProbeAccount(ctx context.Context, prov *provider.Provider, acc provider.Account,
-	globalProxy string, rt http.RoundTripper) ([]provider.Model, error) {
+	globalProxy string, rt http.RoundTripper, authStyle string) ([]provider.Model, error) {
 	var path string
 	if clientProtoOf(prov.Protocol) == ProtoMessages {
 		path = "/v1/models"
@@ -37,7 +39,11 @@ func ProbeAccount(ctx context.Context, prov *provider.Provider, acc provider.Acc
 		return nil, fmt.Errorf("构造预检请求: %w", err)
 	}
 	if clientProtoOf(prov.Protocol) == ProtoMessages {
-		req.Header.Set("x-api-key", acc.APIKey)
+		if authStyle == "bearer" {
+			req.Header.Set("Authorization", "Bearer "+acc.APIKey)
+		} else {
+			req.Header.Set("x-api-key", acc.APIKey)
+		}
 		req.Header.Set("anthropic-version", "2023-06-01")
 	} else {
 		req.Header.Set("Authorization", "Bearer "+acc.APIKey)

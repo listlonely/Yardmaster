@@ -391,6 +391,12 @@ func (s *Server) serveWithFailover(w http.ResponseWriter, r *http.Request,
 			s.Planner.Rest(cand, restQuota)
 			last = res
 			continue
+		case res.status == http.StatusPaymentRequired:
+			// 余额/额度（含 200 伪装拒绝识别映射，M3-W4）：与额度耗尽
+			// 同等休眠，切下一候选
+			s.Planner.Rest(cand, restQuota)
+			last = res
+			continue
 		case res.status >= 500:
 			s.Planner.Rest(cand, restNetwork)
 			last = res
@@ -528,23 +534,72 @@ func (s *Server) attempt(ctx context.Context, client ClientProto, clientReq any,
 	if terr != nil {
 		return attemptResult{err: terr}
 	}
-	if upstreamProto == ProtoMessages {
-		if cand.Account.Auth == provider.AuthOAuth {
-			// Claude OAuth 订阅走 Bearer（非 x-api-key），带 oauth beta 头
-			req.Header.Set("Authorization", "Bearer "+tok)
-			req.Header.Set("anthropic-beta", "oauth-2025-04-20")
+	setAuth := func(req *http.Request) {
+		if upstreamProto == ProtoMessages {
+			switch {
+			case cand.Account.Auth == provider.AuthOAuth:
+				// Claude OAuth 订阅走 Bearer（非 x-api-key），带 oauth beta 头
+				req.Header.Set("Authorization", "Bearer "+tok)
+				req.Header.Set("anthropic-beta", "oauth-2025-04-20")
+			case cand.Provider.AuthStyle == "bearer":
+				// W4 认证头自动学习结果：部分网关/中转只认 Bearer
+				req.Header.Set("Authorization", "Bearer "+tok)
+			default:
+				req.Header.Set("x-api-key", tok)
+			}
+			req.Header.Set("anthropic-version", "2023-06-01")
 		} else {
-			req.Header.Set("x-api-key", tok)
+			req.Header.Set("Authorization", "Bearer "+tok)
 		}
-		req.Header.Set("anthropic-version", "2023-06-01")
-	} else {
-		req.Header.Set("Authorization", "Bearer "+tok)
 	}
-
-	resp, err := (&http.Client{Transport: trIf}).Do(req)
+	doSend := func() (*http.Response, error) {
+		u := strings.TrimRight(cand.Provider.BaseURL, "/") + path
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(upBody))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if stream {
+			req.Header.Set("Accept", "text/event-stream")
+		}
+		setAuth(req)
+		return (&http.Client{Transport: trIf}).Do(req)
+	}
+	resp, err := doSend()
 	if err != nil {
 		return attemptResult{err: err}
 	}
+	// 200 伪装拒绝嗅探（M3-W4）：Zhipu 等以 200 返回错误体；GLM 1113
+	// 就地纠偏端点重试一次（纠偏后不再匹配纠偏条件，重试深度有界）。
+	if resp.StatusCode == http.StatusOK {
+		mapped, peek, ok := peekBody(resp, stream)
+		if ok { // 未命中：响应体已接回，正常中继
+			return attemptResult{resp: resp, status: resp.StatusCode}
+		}
+		_ = resp.Body.Close()
+		if newBase, corr := glmCorrectedBase(cand.Provider.BaseURL, peek); corr {
+			if cerr := s.Planner.CorrectBaseURL(cand.Provider.ID, newBase, s.ProvidersPath); cerr == nil {
+				slog.Warn("GLM 端点纠偏：按量端点拒绝 Coding Plan key（1113），改写 base_url 并重试",
+					"provider", cand.Provider.ID, "base_url", newBase)
+				cand.Provider.BaseURL = newBase
+				resp, err = doSend()
+				if err != nil {
+					return attemptResult{err: err}
+				}
+				if resp.StatusCode == http.StatusOK {
+					mapped2, peek2, ok2 := peekBody(resp, stream)
+					if ok2 { // 未命中：正常中继
+						return attemptResult{resp: resp, status: resp.StatusCode}
+					}
+					_ = resp.Body.Close()
+					return attemptResult{status: mapped2, body: peek2}
+				}
+				return attemptResult{resp: resp, status: resp.StatusCode}
+			}
+		}
+		return attemptResult{status: mapped, body: peek}
+	}
+	// >=400：排干响应体供失败链回传（原 W2 行为）
 	if resp.StatusCode >= 400 {
 		defer resp.Body.Close()
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
