@@ -164,7 +164,7 @@ func (c *tuiClient) drawStatus(w io.Writer, st *stateResp) {
 	}
 	fmt.Fprintln(tw, "  ACCOUNT\tKEY\t状态\t用量/额度")
 	for _, a := range st.Accounts {
-		quota := "-"
+		var quota string
 		if a.QuotaTokens > 0 {
 			quota = strconv.FormatInt(a.UsedTokens, 10) + "/" + strconv.FormatInt(a.QuotaTokens, 10)
 		} else {
@@ -176,7 +176,7 @@ func (c *tuiClient) drawStatus(w io.Writer, st *stateResp) {
 	for _, g := range st.Groups {
 		fmt.Fprintf(tw, "  %s\t%s\t%s\n", g.ID, g.Strategy, strings.Join(g.Members, " "))
 	}
-	tw.Flush()
+	_ = tw.Flush()
 	if len(st.Resting) > 0 {
 		fmt.Fprintf(w, "  休眠中: %s\n", st.RestingKeys())
 	}
@@ -204,7 +204,7 @@ func (c *tuiClient) drawTrace(w io.Writer, n int) {
 			tm, tuiDash(t.Caller), tuiDash(t.RequestModel), tuiDash(t.RoutePath),
 			tuiDash(t.Target), t.Outcome, t.HTTPStatus, len(t.Candidates), t.TotalMS)
 	}
-	tw.Flush()
+	_ = tw.Flush()
 }
 
 func (c *tuiClient) drawKeys(w io.Writer) {
@@ -219,7 +219,7 @@ func (c *tuiClient) drawKeys(w io.Writer) {
 	for i, b := range kb.Bindings {
 		fmt.Fprintf(tw, "  %d\t%s\t%s\n", i+1, b.Key, b.DefaultModel)
 	}
-	tw.Flush()
+	_ = tw.Flush()
 	if len(kb.Bindings) == 0 {
 		fmt.Fprintln(w, "  （无绑定；网关对未指定 model 的请求将回 404）")
 	}
