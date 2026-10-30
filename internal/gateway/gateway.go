@@ -459,6 +459,8 @@ func (s *Server) serveWithFailover(w http.ResponseWriter, r *http.Request,
 		if tr != nil {
 			tr.Served, tr.ServedModel = cand.Key(), cand.UpstreamModel
 			tr.TTFBMS = time.Since(start).Milliseconds() // 首字节=上游 2xx 响应头到达
+			// 互转路径（M4-W4）：入站协议 × 上游协议，供观测与成本对账
+			tr.ClientProto, tr.UpstreamProto = string(client), string(clientProtoOf(cand.Provider.Protocol))
 		}
 		usage := s.relay(w, client, clientReq, cand, res, stream)
 		switched := tr != nil && len(tr.Candidates) > 1
@@ -967,158 +969,86 @@ func orDefault(v, def string) string {
 	return v
 }
 
-func translateRequest(client ClientProto, clientReq any, upstream ClientProto, stream bool) []byte {
-	switch {
-	case client == ProtoMessages && upstream == ProtoChat:
-		mr := clientReq.(*MessagesRequest)
-		mr.Stream = stream
-		b, _ := json.Marshal(messagesToChatRequest(mr))
-		return b
-	case client == ProtoChat && upstream == ProtoMessages:
-		cr := clientReq.(*ChatRequest)
-		cr.Stream = stream
-		b, _ := json.Marshal(chatToMessagesRequest(cr))
-		return b
-	// M4-W2：Responses 双向（Messages 侧经 Chat 枢纽中转）
-	case client == ProtoResponses && upstream == ProtoChat:
-		rr := clientReq.(*ResponsesRequest)
-		cr := responsesToChatRequest(rr)
-		cr.Stream = stream
-		b, _ := json.Marshal(cr)
-		return b
-	case client == ProtoChat && upstream == ProtoResponses:
-		cr := clientReq.(*ChatRequest)
-		cr.Stream = stream
-		b, _ := json.Marshal(chatToResponsesRequest(cr))
-		return b
-	case client == ProtoMessages && upstream == ProtoResponses:
-		mr := clientReq.(*MessagesRequest)
-		cr := messagesToChatRequest(mr)
-		cr.Stream = stream
-		b, _ := json.Marshal(chatToResponsesRequest(cr))
-		return b
-	case client == ProtoResponses && upstream == ProtoMessages:
-		rr := clientReq.(*ResponsesRequest)
-		cr := responsesToChatRequest(rr)
-		cr.Stream = stream
-		b, _ := json.Marshal(chatToMessagesRequest(cr))
-		return b
-	// M4-W3：Gemini 组合（model 由 attempt 注入 gr.Model；经 Chat 枢纽中转）
-	case client == ProtoGemini && upstream == ProtoChat:
-		gr := clientReq.(*GeminiRequest)
-		b, _ := json.Marshal(geminiToChatRequest(gr, gr.Model, stream))
-		return b
-	case client == ProtoChat && upstream == ProtoGemini:
-		cr := clientReq.(*ChatRequest)
-		b, _ := json.Marshal(chatToGeminiRequest(cr))
-		return b
-	case client == ProtoGemini && upstream != ProtoChat:
-		gr := clientReq.(*GeminiRequest)
-		cr := geminiToChatRequest(gr, gr.Model, stream)
-		cr.Stream = stream
-		if upstream == ProtoMessages {
-			b, _ := json.Marshal(chatToMessagesRequest(cr))
-			return b
-		}
-		b, _ := json.Marshal(chatToResponsesRequest(cr))
-		return b
-	case upstream == ProtoGemini && client != ProtoChat:
-		var cr *ChatRequest
-		switch cq := clientReq.(type) {
-		case *MessagesRequest:
-			cr = messagesToChatRequest(cq)
-		case *ResponsesRequest:
-			cr = responsesToChatRequest(cq)
-		default:
-			cr = clientReq.(*ChatRequest)
-		}
-		b, _ := json.Marshal(chatToGeminiRequest(cr))
-		return b
+// translateRequest 把客户端请求翻译为上游协议（M4-W4 重构为两步式：
+// 客户端→ChatRequest→上游，每协议只写一对适配器，消除 12 组合的分支
+// 优先级纠缠；模型名改写在 attempt 层完成，Chat↔Messages 行为等价）。
+func translateRequest(_ ClientProto, clientReq any, upstream ClientProto, stream bool) []byte {
+	// 第一步：客户端请求 → ChatRequest（枢纽）。
+	var cr *ChatRequest
+	switch cq := clientReq.(type) {
+	case *MessagesRequest:
+		cr = messagesToChatRequest(cq)
+	case *ResponsesRequest:
+		cr = responsesToChatRequest(cq)
+	case *GeminiRequest:
+		cr = geminiToChatRequest(cq, cq.Model, stream)
 	default:
-		b, _ := json.Marshal(clientReq)
-		return b
+		cr = cq.(*ChatRequest)
 	}
+	cr.Stream = stream
+	// 第二步：ChatRequest → 上游协议。
+	var b []byte
+	switch upstream {
+	case ProtoMessages:
+		b, _ = json.Marshal(chatToMessagesRequest(cr))
+	case ProtoResponses:
+		b, _ = json.Marshal(chatToResponsesRequest(cr))
+	case ProtoGemini:
+		b, _ = json.Marshal(chatToGeminiRequest(cr))
+	default:
+		b, _ = json.Marshal(cr)
+	}
+	return b
 }
 
+// translateResponse 把上游非流响应翻译为客户端协议（M4-W4 重构为
+// 两步式：上游→ChatChunk→客户端，消除 12 组合的分支优先级纠缠；
+// Chat↔Messages 直连行为等价迁移）。
 func translateResponse(client, upstream ClientProto, clientReq any, upstreamBody []byte) ([]byte, error) {
-	switch {
-	case client == ProtoChat && upstream == ProtoMessages:
+	if upstream == client { // 理论不可达（同协议走透传），保形直通
+		return upstreamBody, nil
+	}
+	// 第一步：上游响应 → ChatChunk。
+	var cc ChatChunk
+	switch upstream {
+	case ProtoMessages:
 		var ms MessagesResponse
 		if err := json.Unmarshal(upstreamBody, &ms); err != nil {
 			return nil, fmt.Errorf("解析上游 messages 响应: %w", err)
 		}
-		return json.Marshal(messagesResponseToChat(ms))
-	case client == ProtoMessages && upstream == ProtoChat:
-		var cc ChatChunk
-		if err := json.Unmarshal(upstreamBody, &cc); err != nil {
-			return nil, fmt.Errorf("解析上游 chat 响应: %w", err)
-		}
-		mr := clientReq.(*MessagesRequest)
-		return json.Marshal(chatResponseToMessages(mr, &cc))
-	// M4-W2：涉及 Responses 的非流翻译（Messages 侧经 Chat 中转）
-	case upstream == ProtoResponses:
+		cc = *messagesResponseToChat(ms)
+	case ProtoResponses:
 		var rsp ResponsesResponse
 		if err := json.Unmarshal(upstreamBody, &rsp); err != nil {
 			return nil, fmt.Errorf("解析上游 responses 响应: %w", err)
 		}
-		switch client {
-		case ProtoResponses: // 理论不可达（同协议走透传），保形直通
-			return upstreamBody, nil
-		case ProtoChat:
-			return json.Marshal(responsesResponseToChat(&rsp))
-		default: // Messages 客户端：Responses → Chat → Messages
-			mr := clientReq.(*MessagesRequest)
-			return json.Marshal(chatResponseToMessages(mr, responsesResponseToChat(&rsp)))
+		cc = *responsesResponseToChat(&rsp)
+	case ProtoGemini:
+		var gr GeminiResponse
+		if err := json.Unmarshal(upstreamBody, &gr); err != nil {
+			return nil, fmt.Errorf("解析上游 gemini 响应: %w", err)
 		}
-	case client == ProtoResponses:
-		var cc ChatChunk
-		if upstream == ProtoMessages {
-			var ms MessagesResponse
-			if err := json.Unmarshal(upstreamBody, &ms); err != nil {
-				return nil, fmt.Errorf("解析上游 messages 响应: %w", err)
-			}
-			cc = *messagesResponseToChat(ms)
-		} else if err := json.Unmarshal(upstreamBody, &cc); err != nil {
+		cc = *geminiResponseToChat(&gr)
+	default: // Chat 上游
+		if err := json.Unmarshal(upstreamBody, &cc); err != nil {
 			return nil, fmt.Errorf("解析上游 chat 响应: %w", err)
 		}
+	}
+	// 第二步：ChatChunk → 客户端协议。
+	switch client {
+	case ProtoChat:
+		return json.Marshal(&cc)
+	case ProtoMessages:
+		mr := clientReq.(*MessagesRequest)
+		return json.Marshal(chatResponseToMessages(mr, &cc))
+	case ProtoResponses:
 		model := cc.Model
 		if rr, ok := clientReq.(*ResponsesRequest); ok && rr.Model != "" {
 			model = rr.Model
 		}
 		return json.Marshal(chatResponseToResponses(model, &cc))
-	// M4-W3：Gemini 组合（经 Chat 枢纽中转）
-	case upstream == ProtoGemini:
-		var gr GeminiResponse
-		if err := json.Unmarshal(upstreamBody, &gr); err != nil {
-			return nil, fmt.Errorf("解析上游 gemini 响应: %w", err)
-		}
-		cc := geminiResponseToChat(&gr)
-		switch client {
-		case ProtoGemini: // 理论不可达（同协议走透传），保形直通
-			return upstreamBody, nil
-		case ProtoChat:
-			return json.Marshal(cc)
-		case ProtoMessages:
-			mr := clientReq.(*MessagesRequest)
-			return json.Marshal(chatResponseToMessages(mr, cc))
-		default: // Responses
-			rr := clientReq.(*ResponsesRequest)
-			return json.Marshal(chatResponseToResponses(rr.Model, cc))
-		}
-	case client == ProtoGemini:
-		var cc ChatChunk
-		if upstream == ProtoMessages {
-			var ms MessagesResponse
-			if err := json.Unmarshal(upstreamBody, &ms); err != nil {
-				return nil, fmt.Errorf("解析上游 messages 响应: %w", err)
-			}
-			cc = *messagesResponseToChat(ms)
-		} else if err := json.Unmarshal(upstreamBody, &cc); err != nil {
-			return nil, fmt.Errorf("解析上游 chat 响应: %w", err)
-		}
+	default: // Gemini
 		return json.Marshal(chatResponseToGemini(&cc))
-	default:
-		return upstreamBody, nil
 	}
 }
 

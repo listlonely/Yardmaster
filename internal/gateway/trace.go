@@ -67,6 +67,8 @@ type Trace struct {
 	Time         string           `json:"time"` // RFC3339
 	Caller       string           `json:"caller,omitempty"`
 	RequestModel string           `json:"request_model,omitempty"`
+	ClientProto  string           `json:"client_proto,omitempty"` // 入站协议（M4-W4 互转路径）
+	UpstreamProto string          `json:"upstream_proto,omitempty"`
 	Intent       string           `json:"intent,omitempty"`
 	Rule         string           `json:"rule,omitempty"` // 命中的规则 ID
 	RoutePath    string           `json:"route_path,omitempty"`
@@ -323,10 +325,11 @@ func LoadTraceFiles(dir string, maxLines int) ([]Trace, error) {
 
 // ---------- 流式 usage 提取 ----------
 
-// usageRe 匹配上游流/非流响应体中的 token 用量字段（chat 与 messages
-// 两种协议、流式多个 chunk 时取最后一次出现）。
+// usageRe 匹配上游流/非流响应体中的 token 用量字段（chat/messages/
+// responses 三协议同形字段 + gemini 的 camelCase；流式多个 chunk 时取
+// 最后一次出现）。
 var usageRe = regexp.MustCompile(
-	`"(?:prompt_tokens|input_tokens)"\s*:\s*(\d+)|"(?:completion_tokens|output_tokens)"\s*:\s*(\d+)`)
+	`"(?:prompt_tokens|input_tokens|promptTokenCount)"\s*:\s*(\d+)|"(?:completion_tokens|output_tokens|candidatesTokenCount)"\s*:\s*(\d+)`)
 
 // usageScanner 从上游字节流中尽力提取 token 用量。只保留尾部小窗口
 // 匹配（usage JSON 很短），对流式逐块增量扫描。
