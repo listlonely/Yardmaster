@@ -85,9 +85,30 @@ stdout，结果与耗时留痕。与 `internal/agent` 接线子系统协同成�
 | W3 | 本设计稿 + runner 原语（Run/Outcome/Result）+ CLI `run` 直通 | 已交付 |
 | W4 | dispatch.json 加载校验（fail-closed）+ 匹配引擎 + 会话表 + 派发 trace | 已交付 |
 | W5 | 管理面 API（run/agents/sessions/cancel + config/dispatch 写路径热替换）+ 控制台派发页 + CLI `dispatch` | 已交付 |
-| W6 | 三家真实形状冒烟（本机未装 → 如实标注未实测）+ 发布 v0.5.0 | 计划 |
+| W6 | 双平台冒烟 + 发布 v0.5.0 | 已交付（见下「冒烟记录与未实测项」） |
 
-## 七、边界与铁律对照
+## 八、冒烟记录与未实测项（W6，如实标注）
+
+已实测（2026-10-30，Windows 本机）：
+
+- 管理面全链路：`POST /api/dispatch/run`（后台 ctx 会话）→ 会话 done（44ms）→
+  详情含输出尾部 → trace 落盘 `route_path=dispatch`（与真实模型请求 trace
+  同构并存）；取消路径与配置 PUT 热替换由 httptest 全覆盖。
+- 控制台派发页浏览器验证（7/7）：tab 切换、agent 下拉、任务提交、
+  会话表 5s 自动刷新至终态、输出面板回显。
+- CLI：`run`（stdin→stdout 透传、退出码透传/124/127/130）、
+  `dispatch agents`、`dispatch run`（匹配选择 + 流式输出 + 摘要行）。
+- 假 Agent 冒烟以 `cmd /c more`（stdin 回显）为载体，验证
+  stdin→Agent→stdout→会话/trace 的字节保真链路。
+
+未实测项（如实标注）：
+
+- 三家真实 Agent headless 形状（本机未安装 claude/codex/gemini CLI；
+  读不懂=未知纪律，按官方文档建模的 command 形状待真实冒烟核实）。
+- Linux 侧真实派发冒烟（CI 仅覆盖构建与单测）。
+- OTLP 真实后端联调、真实上游缓存命中对账（沿用 v0.4.0 未实测标注）。
+
+## 八、边界与铁律对照
 
 - ToS：仅启动用户已安装的 Agent（launch 失败报错指引），不代装不代登录。
 - 纯 Go：进程管理仅 os/exec，无 cgo，交叉编译矩阵不变。
