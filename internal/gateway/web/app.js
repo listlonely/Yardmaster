@@ -295,11 +295,18 @@ async function loadProviders() {
             ? `<span class="badge oauth">OAuth</span>${a.oauth?.state === 'stale' ? ' <span class="badge resting">已过期待刷新</span>' : ''}
                <div class="muted">过期 ${esc(oauthExpiryText(a.oauth))}</div>`
             : `<code>${esc(a.api_key || '（未设置）')}</code>`;
+          // M3-W5 运行态：订阅窗口 / 余额 / 在途（/api/state join）
+          let liveCell = '';
+          if (lv.window_status === 'restricted' && (lv.window_reset_at || 0) * 1000 > Date.now()) {
+            liveCell += `<span class="badge resting">窗口限频</span><div class="muted">重置 ${esc(new Date(lv.window_reset_at * 1000).toLocaleTimeString())}</div>`;
+          }
+          if (lv.balance_at) liveCell += `<div class="muted">余额 ¥${Number(lv.balance).toFixed(2)}</div>`;
+          if (lv.inflight) liveCell += `<div class="muted">在途 ${esc(lv.inflight)}</div>`;
           return `
           <tr>
             <td>${esc(a.name)}</td>
             <td>${credCell}</td>
-            <td>${statusBadge(view.status)}${restUntil ? `<div class="muted">休眠至 ${esc(restUntil.replace('T', ' '))}</div>` : ''}</td>
+            <td>${statusBadge(view.status)}${restUntil ? `<div class="muted">休眠至 ${esc(restUntil.replace('T', ' '))}</div>` : ''}${liveCell}</td>
             <td>${usageBar(view)} <a class="quota-btn" data-p="${esc(p.id)}" data-a="${esc(a.name)}">额度</a></td>
             <td><code>${esc(eff.v)}</code> <span class="muted">（${eff.src}层）</span></td>
           </tr>`;

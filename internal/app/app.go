@@ -1,4 +1,4 @@
-// Package app 装配用户入口：CLI 子命令与网关 serve（托盘为 P1）。
+// Package app 装配用户入口：CLI 子命令与网关 serve（M3-W6 起含托盘）。
 package app
 
 import (
@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,6 +15,8 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"fyne.io/systray"
 
 	"yardmaster/internal/credential"
 	"yardmaster/internal/gateway"
@@ -35,7 +38,7 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	}
 	switch args[0] {
 	case "serve":
-		return runServe(stdout)
+		return runServe(args[1:], stdout)
 	case "version":
 		fmt.Fprintln(stdout, "yardmaster "+Version)
 		return nil
@@ -69,7 +72,15 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	}
 }
 
-func runServe(stdout io.Writer) error {
+// runServe 启动网关（M3-W6：-no-open 关闭自动开控制台，-tray 启用
+// 系统托盘常驻——桌面壳两步走第一步）。
+func runServe(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	noOpen := fs.Bool("no-open", false, "启动后不自动打开控制台")
+	tray := fs.Bool("tray", false, "启用系统托盘常驻（打开控制台/退出）")
+	if err := fs.Parse(args); err != nil {
+		return ErrUsage
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -140,14 +151,29 @@ func runServe(stdout io.Writer) error {
 		}
 	}()
 
+	consoleURL := "http://" + listen + "/"
 	fmt.Fprintf(stdout, "yardmaster %s · 网关监听 http://%s · 数据目录 %s\n", Version, srv.Addr, paths.AppDir)
 	if settings.GlobalProxy != "" {
 		fmt.Fprintf(stdout, "  全局代理: %s\n", netproxy.Redact(settings.GlobalProxy))
 	}
 	fmt.Fprintf(stdout, "  端点: /v1/chat/completions · /v1/messages · /healthz · /api/state · /api/trace\n")
-	fmt.Fprintf(stdout, "  控制台: http://%s（总览/Provider/路由/观测；管理 API /api/config/* · /api/reload）\n", srv.Addr)
+	fmt.Fprintf(stdout, "  控制台: %s（总览/Provider/路由/观测；管理 API /api/config/* · /api/reload）\n", consoleURL)
 	if settings.L1Classifier != "" {
 		fmt.Fprintf(stdout, "  L1 分类: %s（超时 %s）\n", settings.L1Classifier, l1TimeoutOrDefault(settings))
+	}
+	// 桌面壳（M3-W6）：托盘常驻 + 自动打开控制台（-no-open 可关）
+	if *tray {
+		go runTray(consoleURL, func() {
+			slog.Info("托盘请求退出")
+			stop()
+			systray.Quit()
+		})
+		fmt.Fprintln(stdout, "  托盘: 已启用（系统托盘区图标）")
+	}
+	if !*noOpen {
+		if oerr := openBrowser(consoleURL); oerr == nil {
+			fmt.Fprintln(stdout, "  已在浏览器打开控制台（-no-open 关闭此行为）")
+		}
 	}
 	err = srv.Serve(ctx)
 	if ferr := planner.FlushUsage(paths.ProvidersPath()); ferr != nil {

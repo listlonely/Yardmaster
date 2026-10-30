@@ -10,8 +10,10 @@ Agent ──▶ 127.0.0.1:8317 ──▶ Yardmaster ──▶ 按任务/额度/�
 
 - **双协议网关**：OpenAI Chat Completions ↔ Anthropic Messages 双向解析与翻译（文本 + 工具，流式/非流式）
 - **Agent 接线**：声明式改写 Agent 配置指向网关（预览 diff、备份栈、一键还原、漂移检测）
+- **订阅账号（OAuth）**：一键导入 Claude Code / Codex / Gemini CLI 的已登录会话凭证（加密存储：Windows DPAPI / 其余 0600），到期自动续期（主动扫描 + 401 被动刷新），.providers.json 永不落 token
+- **厂商预设**：`provider add -preset glm-coding` 等 13 个预设开箱即用；GLM 1113 自动纠偏到 Coding Plan 端点；Zhipu 200 伪装拒绝识别；认证头（x-api-key/Bearer）自动学习
 - **路由引擎**：`provider/model`、裸 provider 自动组、`group/<id>` 跨上游路由组；order / rotate / smart / usage / weight（平滑加权）五策略
-- **额度感知**：账号当日额度耗尽自动休眠至次日重置，提前切下一候选（不等上游 429）；smart 按剩余比例排序
+- **额度感知与 SwitchWhenSpent**：账号当日额度耗尽自动休眠至次日重置；订阅窗口（响应头学习）与余额轮询（QuotaProbe）喂路由；按 key 并发上限
 - **成本核算**：模型单价表（pricing.json）× 决策 trace 聚合，按账号/模型出成本报告（零新增持久化）
 - **故障转移**：429/5xx/网络错自动切换候选并休眠，额度断流无感接续；会话粘性（`X-Gw-Session`）
 - **任务规则 + 意图分类**：rules.json 首条命中改道；自定义意图词表热生效；内置 L0 启发式 + 可选 L1 小模型分类（缓存/冷却/回落）
@@ -19,6 +21,7 @@ Agent ──▶ 127.0.0.1:8317 ──▶ Yardmaster ──▶ 按任务/额度/�
 - **决策追溯**：每次路由决策记录完整候选尝试链（谁调用、命中什么、试过谁、为何切换），落盘 30 天/200MB，`/api/trace`、控制台与 CLI 可查
 - **代理挂载**：全局 → Provider → 账号三级继承（http/https/socks5/socks5h/direct），HTTP/2 半死连接健康检查
 - **局域网共享**：`listen` + 强制令牌（token）；控制台/API/推断端点统一过闸，默认仅本机
+- **桌面托盘**：`serve -tray` 系统托盘常驻（打开控制台/退出，纯 Go 无 cgo）；启动自动打开控制台（`-no-open` 可关）
 
 ## 安装
 
@@ -35,19 +38,20 @@ irm https://github.com/listlonely/Yardmaster/releases/latest/download/install.ps
 ## 快速开始
 
 ```sh
-# 1. 添加上游（预检验证凭证并拉取模型清单）
-yardmaster provider add -id siliconflow -base-url https://api.siliconflow.cn/v1 -key sk-xxx
-yardmaster provider probe siliconflow
+# 1. 添加上游（厂商预设开箱即用，或手填 base-url；预检验证凭证并拉取模型清单）
+yardmaster provider presets                        # 查看全部厂商预设
+yardmaster provider add -preset deepseek -key sk-xxx
+yardmaster provider probe deepseek
 
-# 2. 把 Agent 接到网关（预览确认后改写其配置）
+# 2. 导入订阅账号（读 Agent 已登录会话，自动续期）
+yardmaster provider add-oauth anthropic -from claude-code   # 或 codex / gemini-cli
+
+# 3. 把 Agent 接到网关（预览确认后改写其配置）
 yardmaster agents preview claude-code -model yardmaster-main claude-code
 yardmaster agents wire claude-code -model yardmaster-main
 
-# 3. 启动网关（默认仅监听 127.0.0.1:8317）
+# 4. 启动网关（默认仅监听 127.0.0.1:8317；自动打开控制台；-tray 启用托盘常驻）
 yardmaster serve
-
-# 4. 浏览器打开控制台（总览 / Provider / 路由 / 观测）
-#    http://127.0.0.1:8317/
 
 # 5. 观测与经营
 yardmaster trace list                 # 路由决策追溯
