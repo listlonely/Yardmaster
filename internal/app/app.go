@@ -60,8 +60,10 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		return runAgents(args[1:], stdout, stderr)
 	case "update":
 		return updateCheck(args[1:], stdout, stderr)
+	case "tui":
+		return runTUI(args[1:], stdout, stderr)
 	default:
-		fmt.Fprintf(stderr, "未知子命令 %q；可用：serve、version、provider、group、rules、keys、intents、trace、settings、agents、price、cost、update\n", args[0])
+		fmt.Fprintf(stderr, "未知子命令 %q；可用：serve、version、provider、group、rules、keys、intents、trace、settings、agents、price、cost、update、tui\n", args[0])
 		return ErrUsage
 	}
 }
