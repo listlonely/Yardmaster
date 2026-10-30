@@ -41,10 +41,13 @@ type gwEvent struct {
 	usage gwUsage
 }
 
-// gwUsage 是事件层用量快照。
+// gwUsage 是事件层用量快照。prompt 统一「含命中」口径（anthropic
+// cache_read 折叠进 prompt，与 M5-W2 TraceUsage 同规）；cached 为命中数
+// （各协议展开见 encoder 出口语义）。
 type gwUsage struct {
 	prompt     int
 	completion int
+	cached     int
 }
 
 // ---------- 适配器接口 ----------
@@ -165,8 +168,12 @@ func (d *chatDecoder) Feed(ev sseEvent) ([]gwEvent, error) {
 		out = append(out, gwEvent{kind: evStart, msgID: cc.ID})
 	}
 	if cc.Usage != nil {
+		var cached int
+		if cc.Usage.PromptTokensDetails != nil {
+			cached = cc.Usage.PromptTokensDetails.CachedTokens
+		}
 		out = append(out, gwEvent{kind: evUsage, usage: gwUsage{
-			prompt: cc.Usage.PromptTokens, completion: cc.Usage.CompletionTokens,
+			prompt: cc.Usage.PromptTokens, completion: cc.Usage.CompletionTokens, cached: cached,
 		}})
 	}
 	return out, nil
@@ -252,7 +259,13 @@ func (e *chatEncoder) Finish() {
 	stop := orDefault(e.stop, "stop")
 	var cu *ChatUsage
 	if e.usage != nil {
+		// chat 出口语义：cached 含于 prompt（openai 同形，原样携带）。
 		cu = &ChatUsage{PromptTokens: e.usage.prompt, CompletionTokens: e.usage.completion}
+		if e.usage.cached > 0 {
+			cu.PromptTokensDetails = &struct {
+				CachedTokens int `json:"cached_tokens"`
+			}{CachedTokens: e.usage.cached}
+		}
 	}
 	e.chunk(ChatMessage{}, stop, cu)
 	e.out.raw("", []byte("[DONE]"))

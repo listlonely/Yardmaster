@@ -164,8 +164,15 @@ func chatResponseToMessages(mr *MessagesRequest, cc *ChatChunk) *MessagesRespons
 	}
 	ms.StopReason = chatFinishToMsg(ch.FinishReason)
 	if cc.Usage != nil {
-		ms.Usage.InputTokens = cc.Usage.PromptTokens
+		// anthropic 出口：input_tokens 不含 cache_read（cached 含于上游
+		// prompt，展开为两列——M6-W1 校准）。
+		var cached int
+		if cc.Usage.PromptTokensDetails != nil {
+			cached = cc.Usage.PromptTokensDetails.CachedTokens
+		}
+		ms.Usage.InputTokens = cc.Usage.PromptTokens - cached
 		ms.Usage.OutputTokens = cc.Usage.CompletionTokens
+		ms.Usage.CacheReadInputTokens = cached
 	}
 	if ms.ID == "" {
 		ms.ID = "msg_yardmaster"
@@ -187,6 +194,7 @@ type msgsEncoder struct {
 	nextBlock int
 	toolBlks  map[int]int // 事件工具顺序号 → anthropic 块索引
 	stopMsg   string
+	usage     gwUsage // 真实用量（evUsage 携带；M6-W1 校准：此前硬编码 0）
 }
 
 func newMsgsEncoder(out *sseOut) *msgsEncoder {
@@ -254,6 +262,8 @@ func (t *msgsEncoder) Encode(ev gwEvent) {
 		if ev.stop != "" {
 			t.stopMsg = chatFinishToMsg(ev.stop)
 		}
+	case evUsage:
+		t.usage = ev.usage
 	}
 }
 
@@ -268,10 +278,16 @@ func (t *msgsEncoder) Finish() {
 	if t.stopMsg == "" {
 		t.stopMsg = "end_turn"
 	}
+	// anthropic 出口语义：input_tokens 不含 cache_read（openai/gemini 的
+	// cached 含于 prompt，此处展开为「未命中 + 命中」两列）。
+	usage := map[string]any{"input_tokens": t.usage.prompt - t.usage.cached, "output_tokens": t.usage.completion}
+	if t.usage.cached > 0 {
+		usage["cache_read_input_tokens"] = t.usage.cached
+	}
 	t.emit("message_delta", map[string]any{
 		"type":  "message_delta",
 		"delta": map[string]any{"stop_reason": t.stopMsg},
-		"usage": map[string]any{"output_tokens": 0},
+		"usage": usage,
 	})
 	t.emit("message_stop", map[string]any{"type": "message_stop"})
 }
@@ -281,10 +297,13 @@ func (t *msgsEncoder) Finish() {
 // msgsDecoder 解析上游 anthropic SSE 事件（承接 M4 msgsToChatStream 的
 // 块索引→顺序号归一与 stop 映射）。
 type msgsDecoder struct {
-	started   bool
-	stopChat  string
-	toolIdx   map[int]int // anthropic 块索引 → 事件工具顺序号
-	toolCount int
+	started    bool
+	stopChat   string
+	toolIdx    map[int]int // anthropic 块索引 → 事件工具顺序号
+	toolCount  int
+	outTokens  int         // message_delta 累计 output_tokens（usage 出现在流尾）
+	sawInUsage bool        // message_start 已带输入侧 usage
+	inUsage    gwUsage
 }
 
 func newMsgsDecoder() *msgsDecoder { return &msgsDecoder{toolIdx: map[int]int{}} }
@@ -309,6 +328,15 @@ func (d *msgsDecoder) Feed(ev sseEvent) ([]gwEvent, error) {
 			model := ""
 			if e.Message != nil {
 				model = e.Message.Model
+				// 输入侧 usage（input_tokens 不含 cache_read；统一折叠为
+				// 「prompt 含命中」口径）。
+				if u := e.Message.Usage; u != nil {
+					d.sawInUsage = true
+					d.inUsage = gwUsage{
+						prompt: u.InputTokens + u.CacheReadInputTokens,
+						cached: u.CacheReadInputTokens,
+					}
+				}
 			}
 			out = append(out, gwEvent{kind: evStart, model: model})
 		}
@@ -334,6 +362,9 @@ func (d *msgsDecoder) Feed(ev sseEvent) ([]gwEvent, error) {
 		if e.Delta.StopReason != "" {
 			d.stopChat = msgStopToChat(e.Delta.StopReason)
 		}
+		if e.Usage != nil && e.Usage.OutputTokens > 0 {
+			d.outTokens = e.Usage.OutputTokens
+		}
 	case "ping":
 		// 忽略
 	case "error":
@@ -347,7 +378,8 @@ func (d *msgsDecoder) Feed(ev sseEvent) ([]gwEvent, error) {
 	return out, nil
 }
 
-// Done 收尾：未启动则补 start，输出终止事件（stop 兜底 stop）。
+// Done 收尾：未启动则补 start，输出终止事件（stop 兜底 stop）与输入侧
+// usage 快照（输出侧 token 在 message_delta 已随 evUsage 携带则合并）。
 func (d *msgsDecoder) Done() []gwEvent {
 	var out []gwEvent
 	if !d.started {
@@ -358,5 +390,10 @@ func (d *msgsDecoder) Done() []gwEvent {
 		d.stopChat = "stop"
 	}
 	out = append(out, gwEvent{kind: evStop, stop: d.stopChat})
+	if d.sawInUsage || d.outTokens > 0 {
+		u := d.inUsage
+		u.completion = d.outTokens
+		out = append(out, gwEvent{kind: evUsage, usage: u})
+	}
 	return out
 }

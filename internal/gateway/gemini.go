@@ -79,8 +79,9 @@ type GeminiCandidate struct {
 }
 
 type GeminiUsage struct {
-	PromptTokenCount     int `json:"promptTokenCount,omitempty"`
-	CandidatesTokenCount int `json:"candidatesTokenCount,omitempty"`
+	PromptTokenCount        int `json:"promptTokenCount,omitempty"`
+	CandidatesTokenCount    int `json:"candidatesTokenCount,omitempty"`
+	CachedContentTokenCount int `json:"cachedContentTokenCount,omitempty"` // 含于 PromptTokenCount
 }
 
 // geminiUpstreamPath 拼上游 URL（模型名在路径里，Magpie GeminiPath 同形）。
@@ -339,9 +340,16 @@ func geminiResponseToChat(gr *GeminiResponse) *ChatChunk {
 	}
 	msg.Content = strings.Join(texts, "")
 	if gr.UsageMeta != nil {
+		// 入站 gemini 细分折叠为 chat「prompt 含命中」（cachedContentTokenCount
+		// 含于 promptTokenCount——M6-W1 校准）。
 		out.Usage = &ChatUsage{
 			PromptTokens:     gr.UsageMeta.PromptTokenCount,
 			CompletionTokens: gr.UsageMeta.CandidatesTokenCount,
+		}
+		if gr.UsageMeta.CachedContentTokenCount > 0 {
+			out.Usage.PromptTokensDetails = &struct {
+				CachedTokens int `json:"cached_tokens"`
+			}{CachedTokens: gr.UsageMeta.CachedContentTokenCount}
 		}
 	}
 	finish := "stop"
@@ -390,9 +398,15 @@ func chatResponseToGemini(cc *ChatChunk) *GeminiResponse {
 		gr.Candidates[0].FinishReason = chatFinishToGemini(finish)
 	}
 	if cc.Usage != nil {
+		// gemini 出口：cachedContentTokenCount 含于 promptTokenCount（M6-W1 校准）。
+		cached := 0
+		if cc.Usage.PromptTokensDetails != nil {
+			cached = cc.Usage.PromptTokensDetails.CachedTokens
+		}
 		gr.UsageMeta = &GeminiUsage{
-			PromptTokenCount:     cc.Usage.PromptTokens,
-			CandidatesTokenCount: cc.Usage.CompletionTokens,
+			PromptTokenCount:        cc.Usage.PromptTokens,
+			CandidatesTokenCount:    cc.Usage.CompletionTokens,
+			CachedContentTokenCount: cached,
 		}
 	}
 	return gr
@@ -470,8 +484,11 @@ func (t *geminiEncoder) Finish() {
 		Content: GeminiContent{Role: "model", Parts: nil}, FinishReason: chatFinishToGemini(t.finish),
 	}}}
 	if t.usage != nil {
+		// gemini 出口语义：cachedContentTokenCount 含于 promptTokenCount。
 		final.UsageMeta = &GeminiUsage{
-			PromptTokenCount: t.usage.prompt, CandidatesTokenCount: t.usage.completion,
+			PromptTokenCount:        t.usage.prompt,
+			CandidatesTokenCount:    t.usage.completion,
+			CachedContentTokenCount: t.usage.cached,
 		}
 	}
 	t.out.emit("", final)
@@ -533,6 +550,7 @@ func (d *geminiDecoder) Feed(ev sseEvent) ([]gwEvent, error) {
 	if gr.UsageMeta != nil {
 		out = append(out, gwEvent{kind: evUsage, usage: gwUsage{
 			prompt: gr.UsageMeta.PromptTokenCount, completion: gr.UsageMeta.CandidatesTokenCount,
+			cached: gr.UsageMeta.CachedContentTokenCount,
 		}})
 	}
 	return out, nil

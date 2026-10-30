@@ -58,10 +58,14 @@ type ResponsesOutputItem struct {
 }
 
 // ResponsesUsage 是 Responses 的用量字段（形状对齐官方：input/output
-// 而非 prompt/completion；W4 成本核算对齐时以此为源）。
+// 而非 prompt/completion；W4 成本核算对齐时以此为源。input_tokens_details.
+// cached_tokens 含于 input_tokens——M6-W1 校准补齐）。
 type ResponsesUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens        int `json:"input_tokens"`
+	OutputTokens       int `json:"output_tokens"`
+	InputTokensDetails *struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"input_tokens_details,omitempty"`
 }
 
 // ResponsesResponse 是非流式响应的最小骨架。

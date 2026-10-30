@@ -960,7 +960,17 @@ func messagesResponseToChat(ms MessagesResponse) *ChatChunk {
 	out.ID = ms.ID
 	out.Object = "chat.completion"
 	out.Model = ms.Model
-	out.Usage = &ChatUsage{PromptTokens: ms.Usage.InputTokens, CompletionTokens: ms.Usage.OutputTokens}
+	// 入站 anthropic 折叠口径还原为 chat：「prompt 含命中」（cache_read
+	// 并回 prompt，cached 细分进 details——M6-W1 校准）。
+	out.Usage = &ChatUsage{
+		PromptTokens:     ms.Usage.InputTokens + ms.Usage.CacheReadInputTokens,
+		CompletionTokens: ms.Usage.OutputTokens,
+	}
+	if ms.Usage.CacheReadInputTokens > 0 {
+		out.Usage.PromptTokensDetails = &struct {
+			CachedTokens int `json:"cached_tokens"`
+		}{CachedTokens: ms.Usage.CacheReadInputTokens}
+	}
 	choice := ChatChoice{Index: 0, FinishReason: msgStopToChat(ms.StopReason)}
 	msg := &ChatMessage{Role: "assistant"}
 	var texts []string

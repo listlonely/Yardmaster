@@ -243,7 +243,17 @@ func responsesResponseToChat(rsp *ResponsesResponse) *ChatChunk {
 	}
 	msg.Content = strings.Join(texts, "")
 	if rsp.Usage != nil {
-		out.Usage = &ChatUsage{PromptTokens: rsp.Usage.InputTokens, CompletionTokens: rsp.Usage.OutputTokens}
+		// 入站 responses 细分折叠为 chat「prompt 含命中」（M6-W1 校准）。
+		cached := 0
+		if rsp.Usage.InputTokensDetails != nil {
+			cached = rsp.Usage.InputTokensDetails.CachedTokens
+		}
+		out.Usage = &ChatUsage{PromptTokens: rsp.Usage.InputTokens + cached, CompletionTokens: rsp.Usage.OutputTokens}
+		if cached > 0 {
+			out.Usage.PromptTokensDetails = &struct {
+				CachedTokens int `json:"cached_tokens"`
+			}{CachedTokens: cached}
+		}
 	}
 	incomplete := ""
 	if rsp.Incomplete != nil {
@@ -288,7 +298,17 @@ func chatResponseToResponses(model string, cc *ChatChunk) *ResponsesResponse {
 		}{Reason: reason}
 	}
 	if cc.Usage != nil {
-		rsp.Usage = &ResponsesUsage{InputTokens: cc.Usage.PromptTokens, OutputTokens: cc.Usage.CompletionTokens}
+		// responses 出口：cached_tokens 含于 input_tokens（M6-W1 校准）。
+		cached := 0
+		if cc.Usage.PromptTokensDetails != nil {
+			cached = cc.Usage.PromptTokensDetails.CachedTokens
+		}
+		rsp.Usage = &ResponsesUsage{InputTokens: cc.Usage.PromptTokens - cached, OutputTokens: cc.Usage.CompletionTokens}
+		if cached > 0 {
+			rsp.Usage.InputTokensDetails = &struct {
+				CachedTokens int `json:"cached_tokens"`
+			}{CachedTokens: cached}
+		}
 	}
 	return rsp
 }
@@ -452,7 +472,12 @@ func (t *respEncoder) Finish() {
 		resp["incomplete_details"] = map[string]any{"reason": reason}
 	}
 	if t.usage != nil {
-		resp["usage"] = map[string]any{"input_tokens": t.usage.prompt, "output_tokens": t.usage.completion}
+		// responses 出口语义：cached_tokens 含于 input_tokens（对齐官方）。
+		u := map[string]any{"input_tokens": t.usage.prompt - t.usage.cached, "output_tokens": t.usage.completion}
+		if t.usage.cached > 0 {
+			u["input_tokens_details"] = map[string]any{"cached_tokens": t.usage.cached}
+		}
+		resp["usage"] = u
 	}
 	evt := "response.completed"
 	if status == "incomplete" {
@@ -572,8 +597,12 @@ func (d *respDecoder) Done() []gwEvent {
 	finish := respStopToChat(status, d.incomp, d.toolAny || len(d.fcItems) > 0)
 	out := []gwEvent{{kind: evStop, stop: finish}}
 	if d.usage != nil {
+		var cached int
+		if d.usage.InputTokensDetails != nil {
+			cached = d.usage.InputTokensDetails.CachedTokens
+		}
 		out = append(out, gwEvent{kind: evUsage, usage: gwUsage{
-			prompt: d.usage.InputTokens, completion: d.usage.OutputTokens,
+			prompt: d.usage.InputTokens, completion: d.usage.OutputTokens, cached: cached,
 		}})
 	}
 	return out

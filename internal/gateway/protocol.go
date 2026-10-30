@@ -85,10 +85,14 @@ type ChatChunk struct {
 	Usage   *ChatUsage   `json:"usage,omitempty"`
 }
 
-// ChatUsage 是 token 用量。
+// ChatUsage 是 token 用量（PromptTokensDetails 对齐 openai：cached_tokens
+// 含于 prompt_tokens；M6-W1 校准补齐——此前事件/翻译层丢弃缓存细分）。
 type ChatUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
+	PromptTokens        int `json:"prompt_tokens"`
+	CompletionTokens    int `json:"completion_tokens"`
+	PromptTokensDetails *struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details,omitempty"`
 }
 
 // ---------- Anthropic Messages ----------
@@ -136,8 +140,9 @@ type MessagesResponse struct {
 	Content    []Block `json:"content"`
 	StopReason string  `json:"stop_reason,omitempty"`
 	Usage      struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
+		InputTokens          int `json:"input_tokens"`
+		OutputTokens         int `json:"output_tokens"`
+		CacheReadInputTokens int `json:"cache_read_input_tokens,omitempty"`
 	} `json:"usage"`
 }
 
@@ -154,9 +159,15 @@ type msgEvent struct {
 	ContentBlock *Block `json:"content_block,omitempty"`
 	Message      *struct {
 		Model string `json:"model,omitempty"`
+		Usage *struct {
+			InputTokens          int `json:"input_tokens"`
+			CacheReadInputTokens int `json:"cache_read_input_tokens"`
+		} `json:"usage,omitempty"`
 	} `json:"message,omitempty"`
 	Usage *struct {
-		OutputTokens int `json:"output_tokens"`
+		InputTokens          int `json:"input_tokens"`
+		OutputTokens         int `json:"output_tokens"`
+		CacheReadInputTokens int `json:"cache_read_input_tokens"`
 	} `json:"usage,omitempty"`
 	Error *struct {
 		Message string `json:"message,omitempty"`
