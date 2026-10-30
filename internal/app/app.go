@@ -67,8 +67,10 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		return updateCheck(args[1:], stdout, stderr)
 	case "tui":
 		return runTUI(args[1:], stdout, stderr)
+	case "run": // M5-W3：headless Agent 启动原语（stdin 任务 → stdout 透传）
+		return runRun(args[1:], os.Stdin, stdout, stderr)
 	default:
-		fmt.Fprintf(stderr, "未知子命令 %q；可用：serve、version、provider、group、rules、keys、intents、trace、settings、agents、price、cost、update、tui\n", args[0])
+		fmt.Fprintf(stderr, "未知子命令 %q；可用：serve、version、provider、group、rules、keys、intents、trace、settings、agents、price、cost、update、tui、run\n", args[0])
 		return ErrUsage
 	}
 }
