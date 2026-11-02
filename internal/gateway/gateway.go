@@ -102,6 +102,7 @@ func (s *Server) routes() http.Handler {
 	})
 	mux.HandleFunc("POST /api/reload", s.handleReload)
 	mux.HandleFunc("GET /api/cost", s.handleCost)
+	mux.HandleFunc("POST /api/pricing/sync", s.handlePricingSync) // M7-W1：models.dev 单价同步
 	// 派发管理面（M5-W5）：提交/清单/详情/取消；配置读写走 /api/config/dispatch
 	mux.HandleFunc("POST /api/dispatch/run", s.handleDispatchRun)
 	mux.HandleFunc("GET /api/dispatch/agents", s.handleDispatchAgents)

@@ -2,8 +2,10 @@
 //
 // 设计决策：成本不新增持久化——每次请求的 token 用量、服务方、上游
 // 模型名已在 trace（F9）中按天落盘（保留 30 天），成本报告按
-// 「单价表 × trace 聚合」在查询时计算。单价表为用户手工维护
-// （models.dev 集成为后续里程碑范围）。
+// 「单价表 × trace 聚合」在查询时计算。单价表人工维护（price set）
+// + 自动同步（[2026-11-02-单价同步] M7-W1 起支持 models.dev 目录，
+// 见 pricing_sync.go：同步条目带 source/synced_at 标记，人工价受
+// 保护不被静默覆盖）。
 //
 // 计价语义：
 //   - 单价单位：美元 / 1M tokens（input_per_m / output_per_m）；
@@ -27,10 +29,12 @@ import (
 
 // PriceEntry 是一个模型的单价（cached 列 M5-W2 增补，缺省 0）。
 type PriceEntry struct {
-	Model          string  `json:"model"`              // "provider/model" 或裸 "model"
-	InputPerM      float64 `json:"input_per_m"`        // 美元 / 1M 输入 token
-	OutputPerM     float64 `json:"output_per_m"`       // 美元 / 1M 输出 token
+	Model           string  `json:"model"`                        // "provider/model" 或裸 "model"
+	InputPerM       float64 `json:"input_per_m"`                  // 美元 / 1M 输入 token
+	OutputPerM      float64 `json:"output_per_m"`                 // 美元 / 1M 输出 token
 	CachedInputPerM float64 `json:"cached_input_per_m,omitempty"` // 美元 / 1M 缓存命中输入 token；缺省 0（扣除语义）
+	Source          string  `json:"source,omitempty"`             // 来源："models.dev"（自动同步）；空=人工（受同步保护）
+	SyncedAt        string  `json:"synced_at,omitempty"`          // 最近同步时刻（RFC3339；仅同步条目）
 }
 
 // PricingFile 是 pricing.json 的文件形态。

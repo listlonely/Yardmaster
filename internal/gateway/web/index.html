@@ -107,8 +107,10 @@
         <div id="cost-body" class="muted">…</div>
       </div>
       <div class="card">
-        <div class="row"><b>模型单价表</b><span class="spacer"></span><button class="mini" id="btn-add-price">＋ 新建单价</button></div>
-        <p class="muted">单位：美元 / 1M tokens；价格键 provider/model（精确）优先于裸 model；models.dev 自动目录为后续里程碑。</p>
+        <div class="row"><b>模型单价表</b><span class="spacer"></span>
+          <button class="mini" id="btn-price-sync">同步 models.dev 单价</button>
+          <button class="mini" id="btn-add-price">＋ 新建单价</button></div>
+        <p class="muted">单位：美元 / 1M tokens；价格键 provider/model（精确）优先于裸 model；「同步 models.dev 单价」填充裸 model 键（来源列 models.dev），人工价不被覆盖（覆盖用 CLI price sync -force）。</p>
         <table id="tbl-pricing"><thead><tr><th>价格键</th><th>输入 $/1M</th><th>输出 $/1M</th><th></th></tr></thead><tbody></tbody></table>
       </div>
     </section>

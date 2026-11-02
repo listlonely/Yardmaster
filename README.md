@@ -16,7 +16,7 @@ Agent ──▶ 127.0.0.1:8317 ──▶ Yardmaster ──▶ 按任务/额度/�
 - **厂商预设**：`provider add -preset glm-coding` 等 13 个预设开箱即用；GLM 1113 自动纠偏到 Coding Plan 端点；Zhipu 200 伪装拒绝识别；认证头（x-api-key/Bearer）自动学习
 - **路由引擎**：`provider/model`、裸 provider 自动组、`group/<id>` 跨上游路由组；order / rotate / smart / usage / weight（平滑加权）五策略
 - **额度感知与 SwitchWhenSpent**：账号当日额度耗尽自动休眠至次日重置；订阅窗口（响应头学习）与余额轮询（QuotaProbe）喂路由；按 key 并发上限
-- **成本核算**：模型单价表（pricing.json）× 决策 trace 聚合，按账号/模型出成本报告（零新增持久化）
+- **成本核算（v0.7.0 起单价自动填充）**：模型单价表（pricing.json）× 决策 trace 聚合，按账号/模型出成本报告（零新增持久化）；`price sync` 从 models.dev 公开目录一键填充（数千模型，缓存命中价同步捕获），条目带来源标记，人工价受保护（`-force` 才覆盖），同名键多源冲突按字典序留痕；控制台观测页一键同步
 - **故障转移**：429/5xx/网络错自动切换候选并休眠，额度断流无感接续；会话粘性（`X-Gw-Session`）
 - **任务规则 + 意图分类**：rules.json 首条命中改道；自定义意图词表热生效；内置 L0 启发式 + 可选 L1 小模型分类（缓存/冷却/回落）
 - **Web 控制台**：总览/Provider/路由/观测/派发五页；配置读写全走管理 API（严格校验 + 写前备份栈 + 审计日志），不手改配置文件即可全量管理
@@ -61,7 +61,9 @@ yardmaster console        # 在浏览器打开控制台（也可 -addr 指向远
 
 # 5. 观测与经营
 yardmaster trace list                 # 路由决策追溯
-yardmaster cost --days 7              # 成本报告（先 price set 配单价）
+yardmaster price sync                 # 从 models.dev 目录自动填充单价（人工价受保护，-force 覆盖）
+yardmaster price list                 # 单价表（来源列：models.dev / 人工）
+yardmaster cost --days 7              # 成本报告
 yardmaster tui                        # 终端面板：状态 / 追溯 / 绑定切换
 yardmaster update check               # 升级提示
 

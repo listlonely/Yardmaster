@@ -6,7 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"time"
@@ -31,8 +33,10 @@ func runPrice(args []string, stdout, stderr io.Writer) error {
 		return priceRm(path, args[1:], stdout, stderr)
 	case "list", "":
 		return priceList(path, stdout)
+	case "sync":
+		return priceSync(path, paths.AppDir, args[1:], stdout, stderr)
 	default:
-		fmt.Fprintf(stderr, "未知 price 子命令 %q；可用：set、rm、list\n", args[0])
+		fmt.Fprintf(stderr, "未知 price 子命令 %q；可用：set、rm、list、sync\n", args[0])
 		return ErrUsage
 	}
 }
@@ -118,13 +122,69 @@ func priceList(path string, stdout io.Writer) error {
 		return fmt.Errorf("单价表读取失败: %w", err)
 	}
 	if len(f.Prices) == 0 {
-		fmt.Fprintln(stdout, "单价表为空（yardmaster price set <model> <input> <output> 添加）")
+		fmt.Fprintln(stdout, "单价表为空（yardmaster price set <model> <input> <output> 或 price sync 从 models.dev 填充）")
 		return nil
 	}
 	sort.Slice(f.Prices, func(i, j int) bool { return f.Prices[i].Model < f.Prices[j].Model })
-	fmt.Fprintf(stdout, "%-32s %14s %14s\n", "MODEL", "INPUT $/1M", "OUTPUT $/1M")
+	fmt.Fprintf(stdout, "%-36s %14s %14s %12s\n", "MODEL", "INPUT $/1M", "OUTPUT $/1M", "来源")
 	for _, p := range f.Prices {
-		fmt.Fprintf(stdout, "%-32s %14g %14g\n", p.Model, p.InputPerM, p.OutputPerM)
+		src := "人工"
+		if p.Source != "" {
+			src = p.Source
+		}
+		fmt.Fprintf(stdout, "%-36s %14g %14g %12s\n", p.Model, p.InputPerM, p.OutputPerM, src)
+	}
+	return nil
+}
+
+// priceSync 从 models.dev 公开目录同步单价（M7-W1）：合并语义见
+// gateway.SyncPricing（人工价保护/-force/冲突留痕）；写前备份与
+// 管理 API 写路径同款（backup/ 留底 + 原子写 + 审计日志）。
+func priceSync(path, appDir string, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("price sync", flag.ContinueOnError)
+	fs.SetOutput(stderr) // flag 用法错误输出到 stderr（unparam：参数必须被使用）
+	from := fs.String("from", "", "目录来源：http(s) URL 或本地文件（空=默认 models.dev api.json）")
+	force := fs.Bool("force", false, "覆盖人工维护的单价（缺省保护）")
+	provider := fs.String("provider", "", "仅同步该 models.dev provider 的模型")
+	if err := fs.Parse(args); err != nil {
+		return ErrUsage
+	}
+	cur, err := loadPricingOrDefault(path)
+	if err != nil {
+		return fmt.Errorf("单价表读取失败（fail-closed，请先修复）: %w", err)
+	}
+	fmt.Fprintf(stdout, "拉取目录 %s …\n", orDefaultStr(*from, gateway.ModelsDevURL))
+	cat, err := gateway.LoadModelsDev(*from)
+	if err != nil {
+		return err
+	}
+	merged, res := gateway.SyncPricing(cat, cur, *force, *provider, time.Now())
+	if err := gateway.ValidatePricing(merged); err != nil {
+		return fmt.Errorf("合并结果校验失败（不落盘）: %w", err)
+	}
+	// 写前备份（同管理 API writeConfig 语义：宁可拒绝也不无留底覆写）。
+	backupDir := filepath.Join(appDir, "backup")
+	if err := store.BackupConfig(path, backupDir, store.BaseName(path), 10); err != nil {
+		return fmt.Errorf("写前备份失败，已中止写入: %w", err)
+	}
+	if err := gateway.SavePricingFile(path, merged); err != nil {
+		return err
+	}
+	slog.Info("单价表已由 models.dev 同步更新", "path", path,
+		"added", len(res.Added), "updated", len(res.Updated),
+		"overwritten", len(res.Overwritten), "skipped", len(res.Skipped))
+
+	fmt.Fprintf(stdout, "同步完成：新增 %d、刷新 %d、覆盖人工价 %d、保护跳过 %d（目录 providers=%d 带成本模型=%d 无成本=%d 未填充）\n",
+		len(res.Added), len(res.Updated), len(res.Overwritten), len(res.Skipped),
+		res.Providers, res.Models, res.NoPrice)
+	for _, m := range res.Added {
+		fmt.Fprintf(stdout, "  新增 %s\n", m)
+	}
+	for _, m := range res.Overwritten {
+		fmt.Fprintf(stdout, "  覆盖人工价 %s\n", m)
+	}
+	for _, m := range res.Skipped {
+		fmt.Fprintf(stdout, "  跳过 %s\n", m)
 	}
 	return nil
 }

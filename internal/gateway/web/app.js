@@ -823,9 +823,9 @@ $('cost-days').addEventListener('change', loadCost);
 
 function costTableBody(prices) {
   return (prices || []).map((p) => `
-    <tr><td><code>${esc(p.model)}</code></td><td>${p.input_per_m}</td><td>${p.output_per_m}</td>
+    <tr><td><code>${esc(p.model)}</code>${p.source ? ` <span class="muted">· ${esc(p.source)}</span>` : ''}</td><td>${p.input_per_m}</td><td>${p.output_per_m}</td>
     <td class="muted-actions"><a class="edit" data-price="${esc(p.model)}">编辑</a><a class="del" data-price="${esc(p.model)}">删除</a></td></tr>`).join('')
-    || '<tr><td colspan="4" class="muted">单价表为空（未配置的模型不计入成本，调用计入「未计价」）</td></tr>';
+    || '<tr><td colspan="4" class="muted">单价表为空（未配置的模型不计入成本，调用计入「未计价」；可用「同步 models.dev 单价」填充）</td></tr>';
 }
 
 async function loadPricing() {
@@ -890,6 +890,27 @@ q('#tbl-pricing tbody').addEventListener('click', async (e) => {
   if (e.target.classList.contains('del')) deletePrice(model);
 });
 $('btn-add-price').addEventListener('click', () => priceModal(null));
+
+// models.dev 单价同步（M7-W1）：默认保护人工价；报告各类计数。
+$('btn-price-sync').addEventListener('click', async () => {
+  const btn = $('btn-price-sync');
+  btn.disabled = true;
+  try {
+    const r = await api('/api/pricing/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const s = r.sync || {};
+    toast(`同步完成：新增 ${(s.added || []).length}、刷新 ${(s.updated || []).length}、保护跳过 ${(s.skipped || []).length}` +
+      (s.no_price ? `（目录无成本模型 ${s.no_price} 个未填充）` : ''));
+    if ((s.skipped || []).length) {
+      console.log('[pricing-sync] 跳过明细:', s.skipped);
+    }
+    loadPricing();
+    loadCost();
+  } catch (e) {
+    toast('同步失败: ' + e.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 // ---------- 派发（M5-W5：任务→Agent headless） ----------
 
