@@ -9,7 +9,7 @@ Agent ──▶ 127.0.0.1:8317 ──▶ Yardmaster ──▶ 按任务/额度/�
 ## 核心能力
 
 - **四协议网关（v0.4.0）**：OpenAI Chat / OpenAI Responses / Anthropic Messages / Google Gemini 四协议任一入站可路由至任意协议上游（4×4 互转矩阵，文本 + 工具调用，流式/非流式）；流式经内存事件层（七类 gwEvent，四协议各一对 decoder/encoder，v0.5.0）逐事件翻译，无中间 JSON round-trip
-- **任务→Agent 派发（v0.5.0）**：把任务文本交给本机已安装的 Agent（Claude Code / Codex / Gemini CLI 的 headless 模式）执行——意图→Agent 匹配（dispatch.json，fail-closed 校验）、headless 会话管理（stdin/stdout 协议、超时/取消、每 Agent 并发上限）、stdout 实时回传、终态记入决策 trace；控制台「派发」页提交/实时输出/取消，CLI `dispatch agents|init|run`；ToS 边界：仅启动已安装的 Agent，不代装不代登录
+- **任务→Agent 派发（v0.5.0，v0.6.0 深化）**：把任务文本交给本机已安装的 Agent（Claude Code / Codex / Gemini CLI 的 headless 模式）执行——意图→Agent 匹配（dispatch.json，fail-closed 校验）、headless 会话管理（stdin/stdout 协议、超时/取消、每 Agent 并发上限）、stdout 实时回传、终态记入决策 trace；v0.6.0：jsonl 事件级实时（六类事件解析，控制台事件视图着色/工具折叠/终态高亮，CLI `run -events`）、任务模板（`templates[]` + `dispatch run -t` + 控制台模板下拉）、会话持久化（跨重启可见）、失败一键重派、结果导出/复制、会话筛选；控制台「派发」页提交/实时输出/取消，CLI `dispatch agents|init|run`；ToS 边界：仅启动已安装的 Agent，不代装不代登录
 - **成本缓存扣除（v0.5.0）**：usage 捕获缓存命中细分（openai `cached_tokens` / gemini `cachedContentTokenCount` / anthropic `cache_read_input_tokens` 折叠统一语义），命中部分按 `cached_input_per_m` 计价（缺省 0=扣除），报告桶单列缓存命中数
 - **Agent 接线**：声明式改写 Agent 配置指向网关（预览 diff、备份栈、一键还原、漂移检测）
 - **订阅账号（OAuth）**：一键导入 Claude Code / Codex / Gemini CLI 的已登录会话凭证（加密存储：Windows DPAPI / 其余 0600），到期自动续期（主动扫描 + 401 被动刷新），.providers.json 永不落 token
@@ -65,14 +65,17 @@ yardmaster cost --days 7              # 成本报告（先 price set 配单价�
 yardmaster tui                        # 终端面板：状态 / 追溯 / 绑定切换
 yardmaster update check               # 升级提示
 
-# 6. 任务→Agent 派发（v0.5.0，可选）
-yardmaster dispatch init              # 预览三家建议配置（形状未实测，按本机安装修改 command）
+# 6. 任务→Agent 派发（v0.5.0，v0.6.0 深化，可选）
+yardmaster dispatch init              # 预览三家建议配置（claude-code 已实测核实；按本机安装修改 command）
 yardmaster dispatch agents            # 查看已配置的派发 Agent
 yardmaster dispatch run "把 TODO 整理成清单"   # 派发（或在控制台「派发」页提交）
+yardmaster dispatch run -events "长任务"        # 实时事件流渲染（jsonl agent）
+yardmaster dispatch run -t <模板> key=val      # 按任务模板派发（dispatch.json templates[]）
 echo "任务文本" | yardmaster run -- claude -p  # headless 原语直通（stdin→stdout 透传）
+# 控制台「派发」页：事件视图、会话持久化（跨重启）、失败重派、结果导出/复制、筛选
 ```
 
-> **派发未实测项（v0.5.0 如实标注）**：三家 Agent 的 headless 输出形状（`claude -p` / `codex exec --json` / `gemini -p`）按官方文档建模，本机未安装未做真实冒烟；`dispatch init` 的建议 command 请按本机实际安装确认。OTLP 真实后端联调与真实上游的缓存命中对账仍为未实测项（沿用 v0.4.0 标注）。
+> **派发实测情况（v0.6.0 如实标注）**：Claude Code（2.1.314）headless 全链路已真实冒烟——`claude -p` → 网关 `/v1/messages` → openai-chat 上游 → 回翻，事件词表（system/assistant/user/result）与缓存命中对账经实机核实，v0.6.0 全链路冒烟（模板→派发→事件流→持久化→重派→导出）通过；codex（`codex exec --json`）/ gemini（`gemini -p`）本机无对应订阅/登录，形状沿用官方文档口径降级留档。OTLP 真实后端（Jaeger v2.22）与真实上游缓存命中对账已实测；Linux 侧真实派发冒烟仍为未实测项（无实机，CI fake-agent 冒烟覆盖）。
 
 数据目录：`~/.yardmaster`（providers/keys/rules/intents/pricing/settings 均为可 diff 的 JSON，写前自动备份到 `backup/`，原子写入）。
 

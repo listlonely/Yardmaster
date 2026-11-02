@@ -144,7 +144,7 @@ func dispatchRun(paths store.Paths, args []string, stdout, stderr io.Writer) err
 		for _, kv := range rest {
 			k, v, ok := strings.Cut(kv, "=")
 			if !ok || k == "" {
-				fmt.Fprintf(stderr, "模板参数须为 key=val 形式: %q\n", kv)
+				fmt.Fprintf(stderr, "模板参数须为 key=val 形式: %q（-t 之后的参数都按模板传参解析；标志需写在前面，如 dispatch run -events -t 模板 k=v）\n", kv)
 				return ErrUsage
 			}
 			params[k] = v

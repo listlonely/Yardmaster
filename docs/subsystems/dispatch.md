@@ -174,6 +174,7 @@ stdout，结果与耗时留痕。与 `internal/agent` 接线子系统协同成�
 | M6-W3 | jsonl 事件级实时（解析器/控制台事件视图/CLI `-events`） | 已交付（[2026-11-02-事件级实时]，见 §五） |
 | M6-W4 | 任务模板（templates[]/CLI `-t`/控制台模板下拉） | 已交付（[2026-11-02-任务模板]，见 §五·一） |
 | M6-W5 | 结果消费与重派（重派/导出复制/筛选；托盘通知砍） | 已交付（[2026-11-02-结果消费与重派]，见 §四·一） |
+| M6-W6 | 全链路真实冒烟（模板→派发→事件流→持久化→重派→导出）+ 发布 v0.6.0 | 已交付（[2026-11-02-v0.6.0发布]，见上冒烟记录） |
 
 ## 八、冒烟记录与未实测项（W6，如实标注）
 
@@ -222,6 +223,27 @@ M6-W5 冒烟（2026-11-02，Windows 本机）[2026-11-02-结果消费与重派]�
   `location.href` 附件下载在浏览器以 net::ERR_ABORTED 收场——改
   fetch→blob→对象 URL 下载（无导航副作用，文件名按 output_mode 生成）
   后复测通过（无新控制台错误 + 成功 toast）。
+
+M6-W6 全链路真实冒烟（2026-11-02，Windows 本机，真实 HOME + 真实
+Claude Code 2.1.314 → 网关 → 硅基流动）[2026-11-02-v0.6.0发布]：
+
+- 模板→派发→事件流（CLI）：`dispatch run -events -t <模板> topic=…`
+  → 真实 claude 多轮工具会话（Glob/Read/Grep + permission_denied 子
+  类型）事件全渲染，`ok · 77.9s`；system 子类型（permission_denied）
+  经 init 事件自然携带（词表容错生效）。**抓出 CLI 易用性缺陷**：Go
+  flag 语义下位置参数后的 `-events` 会被当模板传参拒绝——保持
+  fail-closed，报错改为可操作指引（标志需写在 -t 传参之前）。
+- 派发→事件流（serve API）：POST run 模板形态 → 真实 claude done，
+  events 3 条（init/text/result）。
+- 持久化：serve 重启 → 5 条会话恢复（含历史），恢复会话详情从留存
+  尾部现场解析出事件（无 live 依赖）。
+- 重派：热替换加 slow agent（timeout 2s）→ timeout failed →
+  redispatch → 新会话同 agent/任务独立终态；配置经 PUT 写路径加与
+  还原（备份审计留痕，用户配置零残留）。
+- 导出：claude jsonl 会话 `Content-Disposition: attachment;
+  filename="dispatch-<id>.jsonl"`。
+- 顺带实测：OTLP 后端未运行时降级路径（重试 4 次耗尽丢弃本批，不崩
+  不阻断）；PUT /api/config/dispatch 中文 body 经 UTF-8 字节提交正常。
 
 未实测项（如实标注）：
 
