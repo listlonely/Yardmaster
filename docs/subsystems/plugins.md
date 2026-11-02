@@ -5,6 +5,27 @@
 > 主线采纳——载体选型终局：子进程插件协议（长驻进程），yaegi 降为
 > 未来「轻量内联钩子」备选，不作为 W3 载体**。依据见 §二。
 
+> [2026-11-02-插件交付] M7-W3~W6 全部落地（提交 e7a4176 / 76caff3 /
+> v0.7.0）。实测与设计偏差备注：
+> - 四扩展点全部接线并测试；vendor.verdict 响应契约落地形态为
+>   `{action:"error"|"retry","status","base_url"}`（比设计稿的
+>   `verdict:"error:<code>"` 字符串编码更直接；语义不变：error 映射
+>   伪装拒绝（400~599 校验），retry 端点纠偏落盘+就地重试一次，镜像
+>   GLM 1113 内置机制）。
+> - 协议实测确认：**信封 payload 为内联 JSON 值**（`"payload":{…}` 非
+>   字符串——示例插件首版按字符串 parse 踩坑，冒烟抓出后修正并兼容
+>   两种形态）；事件经 stderr 回执在冒烟中端到端验证。
+> - 配置闸实测加固：PUT /api/config/plugins 对**损坏现值 409 拒覆写**
+> （loadCurrentForWrite 同规——测试抓出初版缺失，fail-closed 补齐）；
+> PUT 后注册表热替换（变更实例重建，禁用实例 StatusStopped 不 spawn）。
+> - 崩溃隔离真机演练：crasher 插件退避 1s→2s→4s→…→60s 循环重启
+> （crash_1h 累计入管理面），邻居插件 running 不受影响；启动失败
+> （如路径错误）走同一崩溃路径，stderr（node MODULE_NOT_FOUND）入
+> 日志尾可诊断。
+> - 冒烟 PowerShell 陷阱备忘：Invoke-RestMethod 发 UTF-8 中文 body 须
+> 传**字节数组**（`[Text.Encoding]::UTF8.GetBytes`）+ charset=utf-8，
+> 字符串直发按 Latin-1 转码把中文路径变 `??????`（实机抓出）。
+
 ## 一、目标与边界
 
 把 M3~M6 积淀的「内置硬编码逻辑」泛化为外部扩展点，让用户不重编译
@@ -148,10 +169,10 @@ P99 <10ms（httptest 计时，不碰网络）。
 | 周 | 交付 | 状态 |
 | :-- | :-- | :-- |
 | W2 | 本设计稿（主线可行性复核） | 已交付 |
-| W3 | internal/plugin 运行时（注册表/生命周期/NDJSON/重启退避/崩溃隔离）+ plugins.json fail-closed + 扇出 dispatcher + events.trace 落地 | 待做 |
-| W4 | 三个钩子契约（dispatch.parse / classify.intent / vendor.verdict）+ dispatch 配置 parser 字段 | 待做 |
-| W5 | 管理面（控制台插件页：清单/启停/日志尾/崩溃计数；CLI plugin list/enable/disable）+ examples/ 示例插件 | 待做 |
-| W6 | 全链路冒烟（示例插件→装载→生效→崩溃隔离演练）+ 发布 v0.7.0 | 待做 |
+| W3 | internal/plugin 运行时（注册表/生命周期/NDJSON/重启退避/崩溃隔离）+ plugins.json fail-closed + 扇出 dispatcher + events.trace 落地 + 网关接线（配置闸/状态视图/启停 API） | 已交付（e7a4176） |
+| W4 | 三个钩子契约（dispatch.parse / classify.intent / vendor.verdict）+ dispatch 配置 parser 字段 | 已交付（e7a4176） |
+| W5 | 管理面（控制台插件页：清单/启停/日志尾/崩溃计数；CLI plugin list/enable/disable）+ examples/ 示例插件 | 已交付（76caff3） |
+| W6 | 全链路冒烟（示例插件→装载→事件落盘→崩溃隔离演练→管理面启停，浏览器 4/4 PASS）+ 发布 v0.7.0 | 已交付 |
 
 ## 九、边界与铁律对照
 

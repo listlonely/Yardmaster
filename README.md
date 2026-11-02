@@ -16,10 +16,11 @@ Agent ──▶ 127.0.0.1:8317 ──▶ Yardmaster ──▶ 按任务/额度/�
 - **厂商预设**：`provider add -preset glm-coding` 等 13 个预设开箱即用；GLM 1113 自动纠偏到 Coding Plan 端点；Zhipu 200 伪装拒绝识别；认证头（x-api-key/Bearer）自动学习
 - **路由引擎**：`provider/model`、裸 provider 自动组、`group/<id>` 跨上游路由组；order / rotate / smart / usage / weight（平滑加权）五策略
 - **额度感知与 SwitchWhenSpent**：账号当日额度耗尽自动休眠至次日重置；订阅窗口（响应头学习）与余额轮询（QuotaProbe）喂路由；按 key 并发上限
-- **成本核算（v0.7.0 起单价自动填充）**：模型单价表（pricing.json）× 决策 trace 聚合，按账号/模型出成本报告（零新增持久化）；`price sync` 从 models.dev 公开目录一键填充（数千模型，缓存命中价同步捕获），条目带来源标记，人工价受保护（`-force` 才覆盖），同名键多源冲突按字典序留痕；控制台观测页一键同步
+- **成本核算（v0.7.0 起单价自动填充）**：模型单价表（pricing.json）× 决策 trace 聚合，按账号/模型出成本报告（零新增持久化）；`price sync` 从 models.dev 公开目录一键填充（数千模型，缓存命中价同步捕获），条目带来源标记，人工价受保护（`-force` 才覆盖），同名键多源冲突按字典序留痕；v0.7.0 增量：按用量同步（缺省只填充实际用到的模型，同名模型按本地供应商写 `provider/model` 精确键——不同供应商单价可不同）、价格旁双币显示（`settings set fx-usd-cny <汇率>` 后成本报告与单价表显示 ≈¥）；控制台观测页一键同步
+- **插件体系（v0.7.0）**：不重编译网关接入自定义行为——子进程插件协议（长驻进程 + NDJSON 管道，语言无关：node/python/任意可执行体；OS 进程边界天然崩溃隔离，纯 Go 零 cgo）。四扩展点：`events.trace`（决策 trace 订阅）、`dispatch.parse`（Agent 输出行解析，agent 条目 `parser` 字段指向插件，行级回退内置词表）、`classify.intent`（意图分类兜底，词表外拒收）、`vendor.verdict`（200 伪装拒绝长尾特判，内置词表先行）。fail-closed 权限：握手授予 granted=配置∩声明、事件队列满丢最旧不阻塞推理、崩溃退避重启（1 小时 >10 次标 failed）、默认最小 env（`INHERIT_ENV=1` 才继承）；控制台「插件」页清单/启停（热生效）/日志尾，CLI `plugin list|enable|disable`，示例见 `examples/trace-logger.mjs`
 - **故障转移**：429/5xx/网络错自动切换候选并休眠，额度断流无感接续；会话粘性（`X-Gw-Session`）
 - **任务规则 + 意图分类**：rules.json 首条命中改道；自定义意图词表热生效；内置 L0 启发式 + 可选 L1 小模型分类（缓存/冷却/回落）
-- **Web 控制台**：总览/Provider/路由/观测/派发五页；配置读写全走管理 API（严格校验 + 写前备份栈 + 审计日志），不手改配置文件即可全量管理
+- **Web 控制台**：总览/Provider/路由/观测/派发/插件六页；配置读写全走管理 API（严格校验 + 写前备份栈 + 审计日志），不手改配置文件即可全量管理
 - **决策追溯**：每次路由决策记录完整候选尝试链（谁调用、命中什么、试过谁、为何切换），落盘 30 天/200MB，`/api/trace`、控制台与 CLI 可查
 - **代理挂载**：全局 → Provider → 账号三级继承（http/https/socks5/socks5h/direct），HTTP/2 半死连接健康检查
 - **局域网共享**：`listen` + 强制令牌（token）；控制台/API/推断端点统一过闸，默认仅本机
@@ -75,6 +76,12 @@ yardmaster dispatch run -events "长任务"        # 实时事件流渲染（jso
 yardmaster dispatch run -t <模板> key=val      # 按任务模板派发（dispatch.json templates[]）
 echo "任务文本" | yardmaster run -- claude -p  # headless 原语直通（stdin→stdout 透传）
 # 控制台「派发」页：事件视图、会话持久化（跨重启）、失败重派、结果导出/复制、筛选
+
+# 7. 插件（v0.7.0，可选）
+yardmaster plugin list                # 插件清单（plugins.json，损坏 fail-closed 拒改）
+yardmaster plugin disable trace-logger   # 启停（写前备份；serve 运行中在控制台热启停）
+# 控制台「插件」页：状态徽章/授予能力/崩溃计数/丢事件、启停（热生效）、stderr 日志尾
+# 示例插件：examples/trace-logger.mjs（订阅决策 trace 落本地 JSONL，写法见 docs/subsystems/plugins.md）
 ```
 
 > **派发实测情况（v0.6.0 如实标注）**：Claude Code（2.1.314）headless 全链路已真实冒烟——`claude -p` → 网关 `/v1/messages` → openai-chat 上游 → 回翻，事件词表（system/assistant/user/result）与缓存命中对账经实机核实，v0.6.0 全链路冒烟（模板→派发→事件流→持久化→重派→导出）通过；codex（`codex exec --json`）/ gemini（`gemini -p`）本机无对应订阅/登录，形状沿用官方文档口径降级留档。OTLP 真实后端（Jaeger v2.22）与真实上游缓存命中对账已实测；Linux 侧真实派发冒烟仍为未实测项（无实机，CI fake-agent 冒烟覆盖）。
