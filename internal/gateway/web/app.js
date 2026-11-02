@@ -947,12 +947,16 @@ function dispRenderParams() {
 async function loadDispatchSessions() {
   try {
     const r = await api('/api/dispatch/sessions');
-    const rows = (r.sessions || []).map((s) => {
+    const all = r.sessions || [];
+    dispSyncAgentFilter(all);
+    const rows = dispFilterSessions(all).map((s) => {
       const badge = { done: 'ok', failed: 'prefail' }[s.status] || '';
       const dur = s.result ? `${s.result.duration_ms} ms` : '…';
       const act = s.status === 'running'
         ? `<button class="mini disp-cancel" data-id="${esc(s.id)}">取消</button> `
-        : '';
+        : (s.status === 'failed'
+          ? `<button class="mini disp-redispatch" data-id="${esc(s.id)}" title="以留存任务摘要与相同 agent/model 提交全新会话">重派</button> `
+          : '');
       const view = `<button class="mini disp-view" data-id="${esc(s.id)}">输出</button>`;
       return `<tr class="${dispSelected === s.id ? 'sel' : ''}">
         <td><code>${esc(s.id)}</code></td>
@@ -967,6 +971,32 @@ async function loadDispatchSessions() {
   } catch (e) {
     toast('会话加载失败: ' + e.message, true);
   }
+}
+
+// dispSyncAgentFilter 按历史会话的 agent 集合刷新筛选项（保留当前选择）。
+function dispSyncAgentFilter(all) {
+  const sel = $('disp-f-agent');
+  const cur = sel.value;
+  const ids = [...new Set(all.map((s) => s.agent))].sort();
+  sel.innerHTML = '<option value="">全部</option>' +
+    ids.map((a) => `<option value="${esc(a)}">${esc(a)}</option>`).join('');
+  sel.value = ids.includes(cur) ? cur : '';
+}
+
+// dispFilterSessions 客户端筛选（环形 ≤256+恢复条目，无需服务端分页）：
+// agent / 状态 / 时间窗（started_at）。
+function dispFilterSessions(all) {
+  const agent = $('disp-f-agent').value;
+  const status = $('disp-f-status').value;
+  const win = $('disp-f-time').value;
+  let list = all;
+  if (agent) list = list.filter((s) => s.agent === agent);
+  if (status) list = list.filter((s) => s.status === status);
+  if (win) {
+    const cut = Date.now() - ({ '1h': 3600e3, '24h': 86400e3, '7d': 7 * 86400e3 }[win] || 0);
+    list = list.filter((s) => new Date(s.started_at).getTime() >= cut);
+  }
+  return list;
 }
 
 async function showDispatchOutput(id) {
@@ -1024,7 +1054,19 @@ function dispEventHTML(ev) {
 q('#tbl-dispatch tbody').addEventListener('click', async (e) => {
   const view = e.target.closest('.disp-view');
   const cancel = e.target.closest('.disp-cancel');
+  const redis = e.target.closest('.disp-redispatch');
   if (view) { showDispatchOutput(view.dataset.id); return; }
+  if (redis) {
+    try {
+      const r = await api('/api/dispatch/sessions/' + encodeURIComponent(redis.dataset.id) + '/redispatch', { method: 'POST' });
+      toast(`已重派 → ${r.session.id}（原会话 ${r.redispatched_from} 留档不变）`);
+      dispSelected = r.session.id;
+      loadDispatchSessions();
+    } catch (ex) {
+      toast('重派失败: ' + ex.message, true);
+    }
+    return;
+  }
   if (cancel) {
     try {
       await api('/api/dispatch/sessions/' + encodeURIComponent(cancel.dataset.id) + '/cancel', { method: 'POST' });
@@ -1035,6 +1077,8 @@ q('#tbl-dispatch tbody').addEventListener('click', async (e) => {
     }
   }
 });
+
+['disp-f-agent', 'disp-f-status', 'disp-f-time'].forEach((id) => $(id).addEventListener('change', loadDispatchSessions));
 
 $('btn-dispatch-run').addEventListener('click', async () => {
   const tmplName = $('disp-template').value;
@@ -1076,6 +1120,35 @@ $('btn-disp-refresh').addEventListener('click', loadDispatchSessions);
 $('disp-evtoggle').addEventListener('click', () => {
   dispEvView = !dispEvView;
   if (dispLast) dispRenderOutput(dispLast);
+});
+// 复制/导出（M6-W5）：原文尾部（text/jsonl 原样）。
+$('disp-copy').addEventListener('click', async () => {
+  if (!dispLast) return;
+  try {
+    await navigator.clipboard.writeText(dispLast.output || '');
+    toast('已复制输出尾部');
+  } catch (e) {
+    toast('复制失败: ' + e.message, true);
+  }
+});
+// 导出走 fetch→blob→对象 URL（location.href 附件下载会以 ERR_ABORTED
+// 收场且占用导航；blob 下载无导航副作用，文件名按 output_mode 生成）。
+$('disp-export').addEventListener('click', async () => {
+  if (!dispSelected) return;
+  try {
+    const r = await fetch('/api/dispatch/sessions/' + encodeURIComponent(dispSelected) + '/export');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(await r.blob());
+    a.download = 'dispatch-' + dispSelected + ((dispLast && dispLast.output_mode === 'jsonl') ? '.jsonl' : '.txt');
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(a.href);
+    toast('已导出输出尾部');
+  } catch (e) {
+    toast('导出失败: ' + e.message, true);
+  }
 });
 setInterval(() => {
   if (q('#page-dispatch').classList.contains('active') && $('disp-auto').checked) {

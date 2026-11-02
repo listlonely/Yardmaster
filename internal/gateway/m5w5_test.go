@@ -49,6 +49,9 @@ func TestDispatchHelperProcess(t *testing.T) {
 	case "jsonl": // M6-W3：W1 核实词表形状的最小事件流
 		os.Stdout.WriteString(`{"type":"system","subtype":"init"}` + "\n")
 		os.Stdout.WriteString(`{"type":"result","subtype":"success","result":"事件终态 ok"}` + "\n")
+	case "fail": // M6-W5：非 0 退出（重派测试载体）
+		os.Stderr.WriteString("boom: 上游拒绝\n")
+		os.Exit(3)
 	case "slow":
 		os.Stdout.WriteString("开始\n")
 		time.Sleep(30 * time.Second)

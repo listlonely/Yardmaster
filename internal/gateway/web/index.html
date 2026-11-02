@@ -133,12 +133,23 @@
         <div class="row"><b>会话</b><span class="spacer"></span>
           <label class="inline"><input type="checkbox" id="disp-auto" checked> 自动刷新(5s)</label>
           <button id="btn-disp-refresh">刷新</button></div>
+        <div class="row" id="disp-filterrow">
+          <label class="inline">Agent <select id="disp-f-agent"><option value="">全部</option></select></label>
+          <label class="inline">状态 <select id="disp-f-status">
+            <option value="">全部</option><option>running</option><option>done</option>
+            <option>failed</option><option>cancelled</option></select></label>
+          <label class="inline">时间 <select id="disp-f-time">
+            <option value="">全部</option><option value="1h">近 1 小时</option>
+            <option value="24h">近 24 小时</option><option value="7d">近 7 天</option></select></label>
+        </div>
         <table id="tbl-dispatch">
           <thead><tr><th>会话</th><th>Agent</th><th>任务</th><th>状态</th><th>耗时</th><th></th></tr></thead>
           <tbody></tbody>
         </table>
         <div class="row" id="disp-viewbar" hidden>
           <span class="muted" id="disp-viewhint">事件视图</span><span class="spacer"></span>
+          <button class="mini" id="disp-copy">复制</button>
+          <button class="mini" id="disp-export">导出</button>
           <button class="mini" id="disp-evtoggle">切换原文</button>
         </div>
         <pre id="disp-output" class="disp-output" hidden></pre>

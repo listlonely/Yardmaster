@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 
@@ -209,6 +210,64 @@ func (s *Server) handleDispatchCancel(w http.ResponseWriter, id string) {
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true, "effect": effectImmediate, "cancelled": id})
+}
+
+// handleDispatchRedispatch 失败会话一键重派（M6-W5）：以留存的任务摘要
+// 与 agent/model 提交一个**全新会话**（复用 trace 候选链语义——旧会话
+// 与其 trace 原样保留，重派作为新候选链留痕；不续跑旧进程）。边界：
+// 任务文本为留存摘要（≤512 字，超长任务以 … 结尾提示——全文按留存纪律
+// 不落盘）。仅 failed 可重派（cancelled 是用户主动取消，不鼓捣重跑）。
+func (s *Server) handleDispatchRedispatch(w http.ResponseWriter, id string) {
+	if s.Dispatch == nil {
+		dispatchDisabled(w)
+		return
+	}
+	sv, ok := s.Dispatch.Snapshot(id)
+	if !ok {
+		writeAPIErr(w, errNotFound("会话 "+id))
+		return
+	}
+	if sv.Status != "failed" {
+		writeAPIErr(w, badRequest(fmt.Errorf("仅失败会话可重派（%s 状态为 %s）", id, sv.Status)))
+		return
+	}
+	agent, err := s.Dispatch.Select(sv.Agent, sv.Task, "", sv.Model)
+	if err != nil { // agent 已被配置移除等：fail-closed 拒绝，不静默换 agent
+		writeAPIErr(w, badRequest(err))
+		return
+	}
+	// 会话生命周期独立于本次 HTTP 请求：后台 ctx（同 handleDispatchRun）。
+	sess, err := s.Dispatch.Submit(context.Background(), agent, sv.Task, sv.Model, nil)
+	if err != nil {
+		writeAPIErr(w, err)
+		return
+	}
+	nv, _ := s.Dispatch.Snapshot(sess.ID)
+	writeJSON(w, map[string]any{
+		"ok": true, "effect": effectImmediate,
+		"redispatched_from": id, "session": dispatchSessionView(nv),
+	})
+}
+
+// handleDispatchSessionExport 结果导出（M6-W5）：text/jsonl 原文下载。
+// 内容为留存输出尾部（≤64KB——导出即留存语义，不读进程内存之外的东西）。
+func (s *Server) handleDispatchSessionExport(w http.ResponseWriter, id string) {
+	if s.Dispatch == nil {
+		dispatchDisabled(w)
+		return
+	}
+	sv, ok := s.Dispatch.Snapshot(id)
+	if !ok {
+		writeAPIErr(w, errNotFound("会话 "+id))
+		return
+	}
+	ext := "txt"
+	if sv.OutputMode == "jsonl" {
+		ext = "jsonl"
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="dispatch-%s.%s"`, id, ext))
+	_, _ = io.WriteString(w, sv.Output())
 }
 
 // dispatchSessionView 是会话的 JSON 视图（入参为锁内字段拷贝）。

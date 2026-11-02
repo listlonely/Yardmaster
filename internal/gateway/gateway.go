@@ -110,6 +110,12 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/dispatch/sessions/{id}", func(w http.ResponseWriter, r *http.Request) {
 		s.handleDispatchSession(w, r.PathValue("id"))
 	})
+	mux.HandleFunc("GET /api/dispatch/sessions/{id}/export", func(w http.ResponseWriter, r *http.Request) {
+		s.handleDispatchSessionExport(w, r.PathValue("id"))
+	})
+	mux.HandleFunc("POST /api/dispatch/sessions/{id}/redispatch", func(w http.ResponseWriter, r *http.Request) {
+		s.handleDispatchRedispatch(w, r.PathValue("id"))
+	})
 	mux.HandleFunc("POST /api/dispatch/sessions/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
 		s.handleDispatchCancel(w, r.PathValue("id"))
 	})

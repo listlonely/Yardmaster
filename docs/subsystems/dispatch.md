@@ -15,6 +15,9 @@
 > （§五·一）命名任务 + {param} 占位 + 默认 agent/超时；CLI
 > `dispatch run -t <模板> key=val…` 与控制台模板下拉双入口；缺参/
 > 多传键/未知模板/引用缺失 agent 一律 fail-closed 拒绝。
+> [2026-11-02-结果消费与重派] M6-W5 已交付：失败会话一键重派（§四·一，
+> 新会话新候选链）+ 结果导出/复制（原文尾部）+ 会话筛选（agent/状态/
+> 时间窗，客户端）；托盘通知为可砍项按计划砍除。
 
 ## 一、产品形态（产品设计文档 §1 差异化定位）
 
@@ -77,6 +80,25 @@ stdout，结果与耗时留痕。与 `internal/agent` 接线子系统协同成�
   {Provider:agent, Result: ok|launch|timeout|...}], Usage:nil}`——
   观测页与 OTLP 导出对派发会话零改动生效（用量为 nil：headless 会话
   的 token 消耗经网关的模型请求已各自计量，不重复计）。
+
+### 四·一、结果消费与重派（M6-W5）[2026-11-02-结果消费与重派]
+
+- 失败会话一键重派：`POST /api/dispatch/sessions/{id}/redispatch`
+  ——以**留存的任务摘要**（≤512 字；超长任务以 … 结尾提示，全文按
+  §三留存纪律不落盘）与相同 agent/model 提交一个**全新会话**；复用
+  trace 候选链语义：旧会话与其 trace 原样留档，重派作为新候选链独立
+  留痕（不续跑旧进程）。仅 `failed` 可重派（`cancelled` 是用户主动
+  取消，不鼓捣重跑）；agent 已被配置移除时 fail-closed 拒绝（不静默
+  换 agent）。控制台入口：failed 行内「重派」按钮。
+- 结果导出/复制：`GET /api/dispatch/sessions/{id}/export` 以附件下载
+  留存输出尾部（text → `dispatch-<id>.txt`、jsonl → `.jsonl`——导出
+  即留存语义，≤64KB 尾部）；控制台详情按钮条「导出」（fetch→blob
+  下载，避免 location.href 附件导航以 ERR_ABORTED 收场）与「复制」
+  （剪贴板写原文尾部）。
+- 会话筛选：控制台客户端筛选（环形 ≤256+恢复条目，无需服务端分页）
+  ——agent（按历史会话集合动态生成）、状态（running/done/failed/
+  cancelled）、时间窗（近 1h/24h/7d，按 started_at）。
+- 砍项：完成通知（托盘气泡）按开发文档 §9.7 可砍清单砍除。
 
 ## 五、stdin/stdout 协议与三家形状（读不懂=未知）
 
@@ -151,6 +173,7 @@ stdout，结果与耗时留痕。与 `internal/agent` 接线子系统协同成�
 | M6-W2 | 会话持久化（dispatch-sessions.jsonl + 启动恢复） | 已交付（见 §三） |
 | M6-W3 | jsonl 事件级实时（解析器/控制台事件视图/CLI `-events`） | 已交付（[2026-11-02-事件级实时]，见 §五） |
 | M6-W4 | 任务模板（templates[]/CLI `-t`/控制台模板下拉） | 已交付（[2026-11-02-任务模板]，见 §五·一） |
+| M6-W5 | 结果消费与重派（重派/导出复制/筛选；托盘通知砍） | 已交付（[2026-11-02-结果消费与重派]，见 §四·一） |
 
 ## 八、冒烟记录与未实测项（W6，如实标注）
 
@@ -188,6 +211,17 @@ M6-W4 冒烟（2026-11-02，Windows 本机）[2026-11-02-任务模板]：
   任务；浏览器验证 3/3 + 复测 3/3（**首轮实测抓出前端缺陷**：模板提交
   路径误用单元素 querySelector 致「派发」按钮无反应，改
   querySelectorAll 后闭环通过——事件视图含实例化正文与 success 终态）。
+
+M6-W5 冒烟（2026-11-02，Windows 本机）[2026-11-02-结果消费与重派]：
+
+- 重派网络证据：failed 会话 POST redispatch → 新会话同 agent/同任务
+  摘要，原会话原样留档，新会话独立终态；导出证据：`Content-Disposition:
+  attachment; filename="dispatch-<id>.jsonl"` + 原文尾部字节。
+- 控制台浏览器验证（2/3→修复→3/3）：筛选 failed 只剩失败行且带「重
+  派」、重派出新行+toast；**首轮实测抓出前端缺陷**：导出用
+  `location.href` 附件下载在浏览器以 net::ERR_ABORTED 收场——改
+  fetch→blob→对象 URL 下载（无导航副作用，文件名按 output_mode 生成）
+  后复测通过（无新控制台错误 + 成功 toast）。
 
 未实测项（如实标注）：
 
