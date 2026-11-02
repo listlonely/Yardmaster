@@ -235,6 +235,28 @@ func (st *serveSetup) banner(stdout io.Writer) {
 	}
 }
 
+// 原生窗口壳挂点（M8-W2）：支持的平台在各自 build tag 文件里接线
+// （window_wails.go=Windows/Wails v3，全仓库唯一 wails import 点）；
+// 其余平台保持 nil=浏览器窗口路径（行为同 v0.7.0）。依赖边界铁律：
+// webview 依赖禁止进入网关核心，TestCorePackagesNoWailsDependency 断言。
+var (
+	nativeShellProbe func() error
+	nativeShellRun   func(st *serveSetup, ctx context.Context, stop context.CancelFunc, consoleURL string, stdout io.Writer) error
+	nativeReopen     func(consoleURL string)
+)
+
+// serveUntilDone 阻塞服务网关直至 ctx 结束，随后用量落盘（serve/app
+// 两模式与原生窗口壳共用收尾语义）。
+func serveUntilDone(st *serveSetup, ctx context.Context) error {
+	if err := st.srv.Serve(ctx); err != nil {
+		return err
+	}
+	if ferr := st.planner.FlushUsage(st.paths.ProvidersPath()); ferr != nil {
+		slog.Warn("退出前用量落盘失败", "err", ferr)
+	}
+	return nil
+}
+
 // runServe 无头启动网关（不打开任何界面——网页控制台经 `yardmaster
 // console` 或 app 模式窗口显式打开）。-tray 启用托盘常驻。
 func runServe(args []string, stdout io.Writer) error {
@@ -261,19 +283,13 @@ func runServe(args []string, stdout io.Writer) error {
 		})
 		fmt.Fprintln(stdout, "  托盘: 已启用（系统托盘区图标）")
 	}
-	if err := st.srv.Serve(ctx); err != nil {
-		return err
-	}
-	if ferr := st.planner.FlushUsage(st.paths.ProvidersPath()); ferr != nil {
-		slog.Warn("退出前用量落盘失败", "err", ferr)
-	}
-	return nil
+	return serveUntilDone(st, ctx)
 }
 
-// runApp 桌面应用模式（无参数缺省）：进程内网关 + 托盘常驻 + 应用窗口
-// （浏览器 --app 模式：无地址栏/标签页的独立窗口，FLClash 式观感；
-// exec 纯 Go 零 cgo，不动交叉编译矩阵）。窗口关闭不影响网关（托盘
-// 菜单可重开）；退出走托盘。
+// runApp 桌面应用模式（无参数缺省）：进程内网关 + 托盘常驻 + 应用窗口。
+// M8-W2 起 Windows 走 Wails v3 原生窗口（关窗=隐藏到托盘，app.md §六），
+// 不可用/其他平台回退浏览器 --app 窗口（M5.5 零依赖方案，exec 纯 Go）。
+// 退出走托盘。
 func runApp(args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("app", flag.ContinueOnError)
 	noTray := fs.Bool("no-tray", false, "不启动系统托盘（窗口关闭后 Ctrl-C 退出）")
@@ -292,8 +308,12 @@ func runApp(args []string, stdout io.Writer) error {
 	defer st.startHelpers(ctx)()
 	st.banner(stdout)
 	consoleURL := "http://" + st.listen + "/?app=1"
+	onOpen := func() { _ = openAppWindow(consoleURL) }
+	if nativeReopen != nil {
+		onOpen = func() { nativeReopen(consoleURL) }
+	}
 	if !*noTray {
-		go runTray(func() { _ = openAppWindow(consoleURL) }, func() {
+		go runTray(onOpen, func() {
 			slog.Info("托盘请求退出")
 			stop()
 			systray.Quit()
@@ -301,19 +321,23 @@ func runApp(args []string, stdout io.Writer) error {
 		fmt.Fprintln(stdout, "  托盘: 已启用（系统托盘区图标；退出请走托盘菜单）")
 	}
 	if !*noWindow {
+		if nativeShellProbe != nil {
+			if nerr := nativeShellProbe(); nerr == nil && nativeShellRun != nil {
+				fmt.Fprintln(stdout, "  应用窗口: 原生窗口（Wails v3/WebView2；关窗=隐藏到托盘）")
+				return nativeShellRun(st, ctx, stop, consoleURL, stdout)
+			} else {
+				// 回退浏览器窗口（app.md §五）：原生壳可用性不阻塞主功能
+				slog.Warn("原生窗口壳不可用，回退浏览器窗口", "reason", nerr)
+				fmt.Fprintln(stdout, "  应用窗口: 原生窗口不可用（"+nerr.Error()+"），回退浏览器窗口")
+			}
+		}
 		if werr := openAppWindow(consoleURL); werr == nil {
 			fmt.Fprintln(stdout, "  应用窗口: 已打开（关闭窗口后台仍运行；重开走托盘菜单）")
 		} else {
 			fmt.Fprintln(stdout, "  应用窗口: 打开失败（"+werr.Error()+"），可用 yardmaster console 在浏览器打开")
 		}
 	}
-	if err := st.srv.Serve(ctx); err != nil {
-		return err
-	}
-	if ferr := st.planner.FlushUsage(st.paths.ProvidersPath()); ferr != nil {
-		slog.Warn("退出前用量落盘失败", "err", ferr)
-	}
-	return nil
+	return serveUntilDone(st, ctx)
 }
 
 // runConsole 显式在浏览器打开控制台（用户指令；serve/app 不再自动开网页）。
