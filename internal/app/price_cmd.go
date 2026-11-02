@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"yardmaster/internal/gateway"
@@ -34,7 +35,7 @@ func runPrice(args []string, stdout, stderr io.Writer) error {
 	case "list", "":
 		return priceList(path, stdout)
 	case "sync":
-		return priceSync(path, paths.AppDir, args[1:], stdout, stderr)
+		return priceSync(path, paths.AppDir, paths.TraceDir(), args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "未知 price 子命令 %q；可用：set、rm、list、sync\n", args[0])
 		return ErrUsage
@@ -137,15 +138,20 @@ func priceList(path string, stdout io.Writer) error {
 	return nil
 }
 
-// priceSync 从 models.dev 公开目录同步单价（M7-W1）：合并语义见
-// gateway.SyncPricing（人工价保护/-force/冲突留痕）；写前备份与
-// 管理 API 写路径同款（backup/ 留底 + 原子写 + 审计日志）。
-func priceSync(path, appDir string, args []string, stdout, stderr io.Writer) error {
+// priceSync 从 models.dev 公开目录同步单价（M7-W1 增量）：**缺省按用
+// 量同步**——只填充决策 trace 窗口内用到的 (provider, model) 对（同名
+// 模型按本地 provider 写 "provider/model" 精确键，供应商级单价）；-all
+// 全量目录；-models 显式追加。合并语义见 gateway.SyncPricingUsage /
+// SyncPricing（人工价保护/-force）；写前备份与管理 API 写路径同款
+// （backup/ 留底 + 原子写 + 审计日志）。
+func priceSync(path, appDir, traceDir string, args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("price sync", flag.ContinueOnError)
 	fs.SetOutput(stderr) // flag 用法错误输出到 stderr（unparam：参数必须被使用）
 	from := fs.String("from", "", "目录来源：http(s) URL 或本地文件（空=默认 models.dev api.json）")
 	force := fs.Bool("force", false, "覆盖人工维护的单价（缺省保护）")
-	provider := fs.String("provider", "", "仅同步该 models.dev provider 的模型")
+	provider := fs.String("provider", "", "models.dev provider id（-all 模式限定范围；-models 显式模型的精确键匹配 provider）")
+	all := fs.Bool("all", false, "全量同步目录所有带成本模型（缺省仅同步用到的）")
+	models := fs.String("models", "", "逗号分隔的显式模型 id（追加到用量集合）")
 	if err := fs.Parse(args); err != nil {
 		return ErrUsage
 	}
@@ -158,7 +164,26 @@ func priceSync(path, appDir string, args []string, stdout, stderr io.Writer) err
 	if err != nil {
 		return err
 	}
-	merged, res := gateway.SyncPricing(cat, cur, *force, *provider, time.Now())
+	var merged gateway.PricingFile
+	var res gateway.SyncResult
+	var mode string
+	if *all {
+		mode = "全量"
+		merged, res = gateway.SyncPricing(cat, cur, *force, *provider, time.Now())
+	} else {
+		used := usedModelsFromTrace(traceDir)
+		for _, m := range strings.Split(*models, ",") {
+			if m = strings.TrimSpace(m); m != "" {
+				used = append(used, gateway.ModelUse{Provider: *provider, Model: m})
+			}
+		}
+		if len(used) == 0 {
+			fmt.Fprintln(stdout, "决策 trace 内无已计费用量（无从同步）；-all 全量目录或 -model 指定模型，或先跑几次真实请求")
+			return nil
+		}
+		mode = fmt.Sprintf("按用量（%d 个模型对）", len(used))
+		merged, res = gateway.SyncPricingUsage(cat, cur, *force, used, time.Now())
+	}
 	if err := gateway.ValidatePricing(merged); err != nil {
 		return fmt.Errorf("合并结果校验失败（不落盘）: %w", err)
 	}
@@ -170,12 +195,12 @@ func priceSync(path, appDir string, args []string, stdout, stderr io.Writer) err
 	if err := gateway.SavePricingFile(path, merged); err != nil {
 		return err
 	}
-	slog.Info("单价表已由 models.dev 同步更新", "path", path,
+	slog.Info("单价表已由 models.dev 同步更新", "path", path, "mode", mode,
 		"added", len(res.Added), "updated", len(res.Updated),
 		"overwritten", len(res.Overwritten), "skipped", len(res.Skipped))
 
-	fmt.Fprintf(stdout, "同步完成：新增 %d、刷新 %d、覆盖人工价 %d、保护跳过 %d（目录 providers=%d 带成本模型=%d 无成本=%d 未填充）\n",
-		len(res.Added), len(res.Updated), len(res.Overwritten), len(res.Skipped),
+	fmt.Fprintf(stdout, "同步完成（%s）：新增 %d、刷新 %d、覆盖人工价 %d、保护跳过 %d（目录 providers=%d 带成本模型=%d 无成本=%d 未填充）\n",
+		mode, len(res.Added), len(res.Updated), len(res.Overwritten), len(res.Skipped),
 		res.Providers, res.Models, res.NoPrice)
 	for _, m := range res.Added {
 		fmt.Fprintf(stdout, "  新增 %s\n", m)
@@ -187,6 +212,24 @@ func priceSync(path, appDir string, args []string, stdout, stderr io.Writer) err
 		fmt.Fprintf(stdout, "  跳过 %s\n", m)
 	}
 	return nil
+}
+
+// usedModelsFromTrace 收集决策 trace 窗口内的用量对（与成本报告同口径：
+// outcome=ok 且带 usage）；trace 不可读=空集合（不阻断，报告会如实为空）。
+func usedModelsFromTrace(traceDir string) []gateway.ModelUse {
+	traces, err := gateway.LoadTraceFiles(traceDir, 0)
+	if err != nil {
+		return nil
+	}
+	var used []gateway.ModelUse
+	for _, tr := range traces {
+		if tr.Outcome != "ok" || tr.Usage == nil || tr.Served == "" || tr.ServedModel == "" {
+			continue
+		}
+		pid, _, _ := strings.Cut(tr.Served, "/")
+		used = append(used, gateway.ModelUse{Provider: pid, Model: tr.ServedModel})
+	}
+	return used
 }
 
 // runCost 输出最近 N 天的成本报告（默认 7，上限 30=trace 保留期）。
@@ -218,24 +261,42 @@ func runCost(args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("trace 读取失败: %w", err)
 	}
 	rep := gateway.ComputeCost(traces, prices, *days, time.Now())
+	// 展示换算汇率自 settings（0=仅美元；读取失败按 0，不阻断报告）。
+	if st, err := store.LoadSettings(paths); err == nil {
+		rep.FxUsdCNY = st.FxUsdCNY
+	}
 
 	fmt.Fprintf(stdout, "成本报告 %s ~ %s（%d 天，单价来自 pricing.json）\n", rep.From, rep.To, rep.Days)
 	if len(rep.ByAccount) == 0 && rep.Unpriced == 0 {
 		fmt.Fprintln(stdout, "  窗口内无已计费请求")
 		return nil
 	}
-	fmt.Fprintf(stdout, "\n按账号：\n%-28s %8s %14s %14s %12s\n", "ACCOUNT", "CALLS", "INPUT tok", "OUTPUT tok", "COST $")
+	priceCell := func(b gateway.CostBucket) string {
+		if len(b.Prices) == 1 {
+			return fmt.Sprintf("%g/%g", b.Prices[0].In, b.Prices[0].Out)
+		}
+		if len(b.Prices) > 1 {
+			return fmt.Sprintf("混合(%d种)", len(b.Prices))
+		}
+		return "-"
+	}
+	fmt.Fprintf(stdout, "\n按账号：\n%-28s %8s %14s %14s %12s  %-14s\n", "ACCOUNT", "CALLS", "INPUT tok", "OUTPUT tok", "COST $", "单价 in/out")
+	var total float64
 	for _, k := range gateway.SortedCostKeys(rep.ByAccount) {
 		b := rep.ByAccount[k]
-		fmt.Fprintf(stdout, "%-28s %8d %14d %14d %12.4f\n", k, b.Calls, b.InputTokens, b.OutputTokens, b.Cost)
+		total += b.Cost
+		fmt.Fprintf(stdout, "%-28s %8d %14d %14d %12.4f  %-14s\n", k, b.Calls, b.InputTokens, b.OutputTokens, b.Cost, priceCell(b))
 	}
-	fmt.Fprintf(stdout, "\n按模型：\n%-28s %8s %14s %14s %12s\n", "MODEL", "CALLS", "INPUT tok", "OUTPUT tok", "COST $")
+	fmt.Fprintf(stdout, "\n按模型：\n%-28s %8s %14s %14s %12s  %-14s\n", "MODEL", "CALLS", "INPUT tok", "OUTPUT tok", "COST $", "单价 in/out")
 	for _, k := range gateway.SortedCostKeys(rep.ByModel) {
 		b := rep.ByModel[k]
-		fmt.Fprintf(stdout, "%-28s %8d %14d %14d %12.4f\n", k, b.Calls, b.InputTokens, b.OutputTokens, b.Cost)
+		fmt.Fprintf(stdout, "%-28s %8d %14d %14d %12.4f  %-14s\n", k, b.Calls, b.InputTokens, b.OutputTokens, b.Cost, priceCell(b))
 	}
 	if rep.Unpriced > 0 {
 		fmt.Fprintf(stdout, "\n未计价调用 %d 次（pricing.json 无对应单价；失败请求不计费不出现在此列）\n", rep.Unpriced)
+	}
+	if rep.FxUsdCNY > 0 {
+		fmt.Fprintf(stdout, "\n合计 $%.4f ≈¥%.2f（汇率 %g，仅展示换算）\n", total, total*rep.FxUsdCNY, rep.FxUsdCNY)
 	}
 	return nil
 }

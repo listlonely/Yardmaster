@@ -20,6 +20,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -171,10 +172,13 @@ type SyncResult struct {
 // handlePricingSync（POST /api/pricing/sync，M7-W1）：models.dev 目录
 // 同步，写路径与管理 API 同一闸门（现值 fail-closed 读取 → 合并 →
 // 校验 → 备份+审计 → 写响应包携同步报告与写后单价表）。
-// body 可空：{force?, provider?, from?}——from 支持 URL/本地文件
-// （离线/测试；空=默认目录），与管理 API 同信任域（本机/令牌已闸）。
+// body 可空：{scope?, force?, provider?, from?}——scope "usage"（缺省，
+// 仅同步 trace 窗口内用到的模型；同名模型按本地 provider 写精确键）
+// 或 "all"（全量目录）；from 支持 URL/本地文件（离线/测试；空=默认
+// 目录），与管理 API 同信任域（本机/令牌已闸）。
 func (s *Server) handlePricingSync(w http.ResponseWriter, r *http.Request) {
 	var req struct {
+		Scope    string `json:"scope"`
 		Force    bool   `json:"force"`
 		Provider string `json:"provider"`
 		From     string `json:"from"`
@@ -195,7 +199,13 @@ func (s *Server) handlePricingSync(w http.ResponseWriter, r *http.Request) {
 		writeAPIErr(w, badRequest(err))
 		return
 	}
-	merged, res := SyncPricing(cat, cur, req.Force, req.Provider, time.Now())
+	var merged PricingFile
+	var res SyncResult
+	if req.Scope == "all" {
+		merged, res = SyncPricing(cat, cur, req.Force, req.Provider, time.Now())
+	} else {
+		merged, res = SyncPricingUsage(cat, cur, req.Force, s.usedModels(), time.Now())
+	}
 	if err := ValidatePricing(merged); err != nil {
 		writeAPIErr(w, badRequest(err))
 		return
@@ -207,8 +217,27 @@ func (s *Server) handlePricingSync(w http.ResponseWriter, r *http.Request) {
 	s.writeResultExtra(w, effectImmediate, map[string]any{"sync": res, "config": merged})
 }
 
-// SyncPricing 用目录合并不现有单价表（cur 不被修改）。onlyProvider
+// usedModels 从决策 trace 收集用量对 (本地 provider, 上游模型名)——
+// 用量驱动同步的目标集合（与成本报告同口径：outcome=ok 且带 usage）。
+func (s *Server) usedModels() []ModelUse {
+	traces, err := LoadTraceFiles(filepath.Join(s.AppDir, "trace"), 0)
+	if err != nil {
+		return nil // trace 读取失败=同步目标为空（空操作，不阻断配置写）
+	}
+	var used []ModelUse
+	for _, tr := range traces {
+		if tr.Outcome != "ok" || tr.Usage == nil || tr.Served == "" || tr.ServedModel == "" {
+			continue
+		}
+		pid, _, _ := strings.Cut(tr.Served, "/")
+		used = append(used, ModelUse{Provider: pid, Model: tr.ServedModel})
+	}
+	return used
+}
+
+// SyncPricing 用目录全量合并进现有单价表（cur 不被修改）。onlyProvider
 // 非空时仅同步该 models.dev provider；force=true 时人工价可被覆盖。
+// 用量驱动（只同步用到的模型）走 SyncPricingUsage。
 func SyncPricing(cat ModelsDevCatalog, cur PricingFile, force bool, onlyProvider string, now time.Time) (PricingFile, SyncResult) {
 	res := SyncResult{Providers: len(cat.Providers)}
 	merged := PricingFile{Prices: append([]PriceEntry(nil), cur.Prices...)}
@@ -243,34 +272,112 @@ func SyncPricing(cat ModelsDevCatalog, cur PricingFile, force bool, onlyProvider
 				continue
 			}
 			seen[mid] = pid
-			entry := PriceEntry{
-				Model: mid, InputPerM: float64(m.Input), OutputPerM: float64(m.Output),
-				CachedInputPerM: float64(m.CacheRead),
-				Source:          "models.dev", SyncedAt: now.UTC().Format(time.RFC3339),
-			}
-			if i, ok := idx[mid]; ok {
-				if merged.Prices[i].Source != "models.dev" && !force {
-					res.Skipped = append(res.Skipped, fmt.Sprintf("%s（人工价保护，-force 覆盖）", mid))
-					continue
+			entry := catalogEntry(m, mid, now)
+			upsert(&merged, idx, entry, force, &res)
+		}
+	}
+	finalize(&res, cat)
+	return merged, res
+}
+
+// ModelUse 是用量驱动同步的一个目标：本地 (provider, 上游模型名) 对
+// （来自决策 trace 窗口）。Provider 为空时只做裸键兜底匹配。
+type ModelUse struct {
+	Provider string
+	Model    string
+}
+
+// SyncPricingUsage 按用量同步（M7-W1 增量：默认不全量拉取——目录数千
+// 模型绝大多数用不到）。对每个 used 对：
+//   - 目录存在与本地 provider 同名的 models.dev provider 且含该模型
+//     → 写 "provider/model" 精确键（供应商级单价，同名模型不同供应商
+//     单价可以不同）；
+//   - 否则任意 provider 含该模型 id（字典序首个）→ 裸键（通用兜底）；
+//   - 都没有 → Skipped「目录未收录」留痕。
+//
+// 人工价保护/-force/刷新语义与全量模式一致（共用 upsert）。
+func SyncPricingUsage(cat ModelsDevCatalog, cur PricingFile, force bool, used []ModelUse, now time.Time) (PricingFile, SyncResult) {
+	res := SyncResult{Providers: len(cat.Providers)}
+	merged := PricingFile{Prices: append([]PriceEntry(nil), cur.Prices...)}
+	idx := map[string]int{}
+	for i, p := range merged.Prices {
+		idx[p.Model] = i
+	}
+	seenUse := map[[2]string]bool{}
+	var ordered []ModelUse
+	for _, u := range used {
+		k := [2]string{u.Provider, u.Model}
+		if !seenUse[k] {
+			seenUse[k] = true
+			ordered = append(ordered, u)
+		}
+	}
+	for _, u := range ordered {
+		res.Models++
+		key := u.Provider + "/" + u.Model
+		m, ok := cat.Providers[u.Provider][u.Model]
+		if !ok {
+			// 裸键兜底：字典序首个含该模型 id 的 provider（确定性）。
+			var pids []string
+			for pid, models := range cat.Providers {
+				if _, has := models[u.Model]; has {
+					pids = append(pids, pid)
 				}
-				overwritten := merged.Prices[i].Source != "models.dev"
-				merged.Prices[i] = entry
-				if overwritten {
-					res.Overwritten = append(res.Overwritten, mid)
+			}
+			sort.Strings(pids)
+			if len(pids) == 0 {
+				if u.Provider == "" {
+					res.Skipped = append(res.Skipped, fmt.Sprintf("%s（目录未收录）", u.Model))
 				} else {
-					res.Updated = append(res.Updated, mid)
+					res.Skipped = append(res.Skipped, fmt.Sprintf("%s（目录未收录，本地 provider %s）", u.Model, u.Provider))
 				}
 				continue
 			}
-			merged.Prices = append(merged.Prices, entry)
-			idx[mid] = len(merged.Prices) - 1
-			res.Added = append(res.Added, mid)
+			m = cat.Providers[pids[0]][u.Model]
+			key = u.Model
 		}
+		upsert(&merged, idx, catalogEntry(m, key, now), force, &res)
 	}
+	finalize(&res, cat)
+	return merged, res
+}
+
+// catalogEntry 由目录模型构造同步条目（来源与时刻标记）。
+func catalogEntry(m modelsDevModel, key string, now time.Time) PriceEntry {
+	return PriceEntry{
+		Model: key, InputPerM: float64(m.Input), OutputPerM: float64(m.Output),
+		CachedInputPerM: float64(m.CacheRead),
+		Source:          "models.dev", SyncedAt: now.UTC().Format(time.RFC3339),
+	}
+}
+
+// upsert 合并一个同步条目（人工价保护/-force/刷新判定共用）。
+func upsert(merged *PricingFile, idx map[string]int, entry PriceEntry, force bool, res *SyncResult) {
+	i, ok := idx[entry.Model]
+	if !ok {
+		merged.Prices = append(merged.Prices, entry)
+		idx[entry.Model] = len(merged.Prices) - 1
+		res.Added = append(res.Added, entry.Model)
+		return
+	}
+	if merged.Prices[i].Source != "models.dev" && !force {
+		res.Skipped = append(res.Skipped, fmt.Sprintf("%s（人工价保护，-force 覆盖）", entry.Model))
+		return
+	}
+	overwritten := merged.Prices[i].Source != "models.dev"
+	merged.Prices[i] = entry
+	if overwritten {
+		res.Overwritten = append(res.Overwritten, entry.Model)
+	} else {
+		res.Updated = append(res.Updated, entry.Model)
+	}
+}
+
+// finalize 排序留痕清单并写入目录计数（两个同步模式共用收尾）。
+func finalize(res *SyncResult, cat ModelsDevCatalog) {
 	sort.Strings(res.Added)
 	sort.Strings(res.Updated)
 	sort.Strings(res.Overwritten)
 	sort.Strings(res.Skipped)
 	res.NoPrice = cat.NoPrice
-	return merged, res
 }

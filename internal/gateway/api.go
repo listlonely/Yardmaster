@@ -166,6 +166,18 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, name st
 		if f.Listen == "" {
 			f.Listen = cur.Listen
 		}
+		// 控制台设置表单不含以下字段（CLI settings set 维护）——空值
+		// 保留现值，否则每次控制台保存都会抹掉 OTLP/汇率/凭证配置
+		//（实测发现的清零缺陷，M7-W1 增量修复）。
+		if f.FxUsdCNY <= 0 {
+			f.FxUsdCNY = cur.FxUsdCNY
+		}
+		if f.GeminiClientSecret == "" {
+			f.GeminiClientSecret = cur.GeminiClientSecret
+		}
+		if !f.OTel.Enabled && f.OTel.Endpoint == "" && len(f.OTel.Headers) == 0 {
+			f.OTel = cur.OTel
+		}
 		// 安全基线（F10）：非回环监听必须带令牌；非法地址拒绝落盘。
 		if f.Listen != "" {
 			if _, _, err := net.SplitHostPort(f.Listen); err != nil {
@@ -345,7 +357,13 @@ func (s *Server) handleCost(w http.ResponseWriter, r *http.Request) {
 			Msg: "trace 读取失败: " + err.Error()})
 		return
 	}
-	writeJSON(w, ComputeCost(traces, prices, days, time.Now()))
+	rep := ComputeCost(traces, prices, days, time.Now())
+	// 展示换算汇率自 settings（0=仅美元；不参与计费）。读取失败按 0
+	// 处理（成本报告不因设置文件损坏而不可用）。
+	if st, err := store.LoadSettings(store.Paths{AppDir: s.AppDir}); err == nil {
+		rep.FxUsdCNY = st.FxUsdCNY
+	}
+	writeJSON(w, rep)
 }
 
 // loadCurrent 读当前配置到 v：文件不存在保持零值（首次创建合法），

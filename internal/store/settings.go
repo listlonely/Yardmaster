@@ -27,6 +27,10 @@ type Settings struct {
 	// OTLP traces 导出（M4-W5）：默认关。Enabled 且 Endpoint 非空才装配
 	// 导出器（otlphttp JSON，OTel 兼容后端）；失败只降级不阻断主流程。
 	OTel OTelSettings `json:"otel,omitempty"`
+
+	// 美元→人民币汇率（M7-W1 增量）：>0 时成本报告/单价表显示 ≈¥ 换算
+	// 列；0=仅美元。纯展示换算，不参与计费（计费恒以美元单价计算）。
+	FxUsdCNY float64 `json:"fx_usd_cny,omitempty"`
 }
 
 // OTelSettings 是 OTLP 导出配置。

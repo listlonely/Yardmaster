@@ -75,11 +75,11 @@ function promptToken() {
   return tokenPrompt;
 }
 
-function toast(msg, isErr = false) {
+function toast(msg, isErr = false, ms = 2600) {
   const t = $('toast');
   t.textContent = msg;
   t.classList.add('show');
-  setTimeout(() => t.classList.remove('show'), 2600);
+  setTimeout(() => t.classList.remove('show'), ms);
 }
 
 const fmtTokens = (n) => Number(n || 0).toLocaleString('zh-CN');
@@ -796,22 +796,34 @@ async function loadCost() {
   const days = $('cost-days').value;
   try {
     const rep = await api(`/api/cost?days=${days}`);
+    const fx = rep.fx_usd_cny || 0;
+    const fmtCNY = (n) => '≈¥' + Number(n || 0).toFixed(2);
+    // 单价列：单价格键直接显示（in/out $/1M），混合列键数（悬停看明细）。
+    const priceCell = (b) => {
+      const ps = b.prices || [];
+      if (!ps.length) return '<span class="muted">—</span>';
+      if (ps.length === 1) return `${ps[0].in_per_m}/${ps[0].out_per_m}`;
+      return `<span title="${esc(ps.map((p) => p.key).join(', '))}">${ps.length} 种单价</span>`;
+    };
     const table = (m, label) => {
       const keys = Object.keys(m || {}).sort((a, b) => m[b].cost - m[a].cost);
       if (!keys.length) return `<div class="muted">窗口内无 ${esc(label)} 数据</div>`;
-      return `<table><thead><tr><th>${esc(label)}</th><th>调用</th><th>输入 tok</th><th>输出 tok</th><th>成本</th></tr></thead><tbody>` +
+      return `<table><thead><tr><th>${esc(label)}</th><th>调用</th><th>输入 tok</th><th>输出 tok</th><th>单价 $/1M (in/out)</th><th>成本${fx > 0 ? ' $ ≈¥' : ' $'}</th></tr></thead><tbody>` +
         keys.map((k) => {
           const b = m[k];
           return `<tr><td><code>${esc(k)}</code></td><td>${b.calls}</td>
             <td>${fmtTokens(b.input_tokens)}</td><td>${fmtTokens(b.output_tokens)}</td>
-            <td>${fmtUSD(b.cost)}</td></tr>`;
+            <td>${priceCell(b)}</td>
+            <td>${fmtUSD(b.cost)}${fx > 0 ? ` <span class="muted">${fmtCNY(b.cost * fx)}</span>` : ''}</td></tr>`;
         }).join('') + '</tbody></table>';
     };
+    const total = Object.values(rep.by_account || {}).reduce((s, b) => s + (b.cost || 0), 0);
     $('cost-body').innerHTML =
       `${table(rep.by_account, '账号')}${table(rep.by_model, '模型')}` +
       (rep.unpriced > 0
         ? `<div class="muted">未计价调用 ${rep.unpriced} 次（单价表无对应价格键；失败请求不计费）</div>`
         : '') +
+      (fx > 0 ? `<div class="muted">合计 ${fmtUSD(total)} ${fmtCNY(total * fx)}（汇率 ${fx}，仅展示换算）</div>` : '') +
       `<div class="muted">窗口 ${esc(rep.from)} ~ ${esc(rep.to)}</div>`;
   } catch (e) {
     $('cost-body').innerHTML = `<div class="muted">加载失败: ${esc(e.message)}</div>`;
@@ -822,8 +834,12 @@ $('btn-cost-refresh').addEventListener('click', loadCost);
 $('cost-days').addEventListener('change', loadCost);
 
 function costTableBody(prices) {
+  // 汇率换算列（fx>0 时价格旁显示 ≈¥，来自 settings fx_usd_cny）。
+  const fx = (cache.settings && cache.settings.fx_usd_cny) || 0;
+  const cny = (usd) => (fx > 0 ? ` <span class="muted">≈¥${(usd * fx).toFixed(2)}</span>` : '');
   return (prices || []).map((p) => `
-    <tr><td><code>${esc(p.model)}</code>${p.source ? ` <span class="muted">· ${esc(p.source)}</span>` : ''}</td><td>${p.input_per_m}</td><td>${p.output_per_m}</td>
+    <tr><td><code>${esc(p.model)}</code>${p.source ? ` <span class="muted">· ${esc(p.source)}</span>` : ''}</td>
+    <td>${p.input_per_m}${cny(p.input_per_m)}</td><td>${p.output_per_m}${cny(p.output_per_m)}</td>
     <td class="muted-actions"><a class="edit" data-price="${esc(p.model)}">编辑</a><a class="del" data-price="${esc(p.model)}">删除</a></td></tr>`).join('')
     || '<tr><td colspan="4" class="muted">单价表为空（未配置的模型不计入成本，调用计入「未计价」；可用「同步 models.dev 单价」填充）</td></tr>';
 }
@@ -891,15 +907,19 @@ q('#tbl-pricing tbody').addEventListener('click', async (e) => {
 });
 $('btn-add-price').addEventListener('click', () => priceModal(null));
 
-// models.dev 单价同步（M7-W1）：默认保护人工价；报告各类计数。
+// models.dev 单价同步（M7-W1）：默认用量模式（只拉用到的模型对）；
+// 目录拉取可达数秒-数十秒，按钮进行中反馈防重复点击。
 $('btn-price-sync').addEventListener('click', async () => {
   const btn = $('btn-price-sync');
   btn.disabled = true;
+  const orig = btn.textContent;
+  btn.textContent = '同步中…';
   try {
     const r = await api('/api/pricing/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
     const s = r.sync || {};
+    // 目录拉取可达数十秒，完成提示用长时窗（8s）避免一闪而过。
     toast(`同步完成：新增 ${(s.added || []).length}、刷新 ${(s.updated || []).length}、保护跳过 ${(s.skipped || []).length}` +
-      (s.no_price ? `（目录无成本模型 ${s.no_price} 个未填充）` : ''));
+      (s.no_price ? `（目录无成本模型 ${s.no_price} 个未填充）` : ''), false, 8000);
     if ((s.skipped || []).length) {
       console.log('[pricing-sync] 跳过明细:', s.skipped);
     }
@@ -909,6 +929,7 @@ $('btn-price-sync').addEventListener('click', async () => {
     toast('同步失败: ' + e.message, true);
   } finally {
     btn.disabled = false;
+    btn.textContent = orig;
   }
 });
 

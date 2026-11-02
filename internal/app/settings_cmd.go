@@ -31,7 +31,7 @@ func runSettings(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "用法: yardmaster settings <get|set> [键 值]；当前支持键：global_proxy、l1_classifier、l1_timeout_ms、listen、token、gemini_client_secret")
+		fmt.Fprintln(stderr, "用法: yardmaster settings <get|set> [键 值]；当前支持键：global_proxy、l1_classifier、l1_timeout_ms、listen、token、gemini_client_secret、fx-usd-cny")
 		return ErrUsage
 	}
 	switch args[0] {
@@ -65,6 +65,11 @@ func runSettings(args []string, stdout, stderr io.Writer) error {
 			fmt.Fprintln(stdout, "gemini_client_secret = （空，gemini-cli 凭证将无法自动刷新）")
 		} else {
 			fmt.Fprintf(stdout, "gemini_client_secret = %s\n", maskSecret(s.GeminiClientSecret))
+		}
+		if s.FxUsdCNY <= 0 {
+			fmt.Fprintln(stdout, "fx_usd_cny = （空，成本报告仅显示美元）")
+		} else {
+			fmt.Fprintf(stdout, "fx_usd_cny = %g（成本报告显示 ≈¥ 换算）\n", s.FxUsdCNY)
 		}
 		return nil
 	case "set":
@@ -115,8 +120,15 @@ func runSettings(args []string, stdout, stderr io.Writer) error {
 			s.Token = val
 		case "gemini_client_secret":
 			s.GeminiClientSecret = val
+		case "fx-usd-cny", "fx_usd_cny":
+			fx, err := strconv.ParseFloat(val, 64)
+			if err != nil || fx < 0 || fx > 1000 {
+				fmt.Fprintln(stderr, "fx-usd-cny 须为 0~1000 的数字（0=关闭人民币换算）")
+				return ErrUsage
+			}
+			s.FxUsdCNY = fx
 		default:
-			fmt.Fprintf(stderr, "不支持的设置键 %q；当前支持：global_proxy、l1_classifier、l1_timeout_ms、listen、token、gemini_client_secret\n", key)
+			fmt.Fprintf(stderr, "不支持的设置键 %q；当前支持：global_proxy、l1_classifier、l1_timeout_ms、listen、token、gemini_client_secret、fx-usd-cny\n", key)
 			return ErrUsage
 		}
 		// 安全基线（F10）：非回环监听必须带令牌（M2-W5，serve 拒启的

@@ -70,23 +70,34 @@ func priceOf(prices []PriceEntry, providerID, model string) *PriceEntry {
 	return nil
 }
 
+// PriceUse 记录一个聚合桶内使用的价格键与单价（同一模型跨 provider
+// 可能命中不同价格键——混合时逐条列出；M7-W1 增量「模型旁显示单价」）。
+type PriceUse struct {
+	Key   string  `json:"key"`      // 价格键（"provider/model" 或裸 "model"）
+	In    float64 `json:"in_per_m"` // 输入单价 $/1M
+	Out   float64 `json:"out_per_m"`
+	Calls int     `json:"calls"`
+}
+
 // CostBucket 是一个聚合桶：调用次数、token 与美元成本。
 type CostBucket struct {
-	Calls        int     `json:"calls"`
-	InputTokens  int64   `json:"input_tokens"`
-	OutputTokens int64   `json:"output_tokens"`
-	CachedTokens int64   `json:"cached_tokens,omitempty"` // 缓存命中的输入 token（含于 InputTokens）
-	Cost         float64 `json:"cost"`                    // 美元
+	Calls        int        `json:"calls"`
+	InputTokens  int64      `json:"input_tokens"`
+	OutputTokens int64      `json:"output_tokens"`
+	CachedTokens int64      `json:"cached_tokens,omitempty"` // 缓存命中的输入 token（含于 InputTokens）
+	Cost         float64    `json:"cost"`                    // 美元
+	Prices       []PriceUse `json:"prices,omitempty"`        // 使用的价格键（首次出现序；单键=模型旁直接显示单价）
 }
 
 // CostReport 是一个时间窗的成本聚合。
 type CostReport struct {
 	Days      int                   `json:"days"`
-	From      string                `json:"from"`       // "2006-01-02"（含）
-	To        string                `json:"to"`         // "2006-01-02"（含）
-	ByAccount map[string]CostBucket `json:"by_account"` // key: "provider/account"
-	ByModel   map[string]CostBucket `json:"by_model"`   // key: 上游模型名
-	Unpriced  int                   `json:"unpriced"`   // 有用量但无单价的调用次数
+	From      string                `json:"from"`                 // "2006-01-02"（含）
+	To        string                `json:"to"`                   // "2006-01-02"（含）
+	ByAccount map[string]CostBucket `json:"by_account"`           // key: "provider/account"
+	ByModel   map[string]CostBucket `json:"by_model"`             // key: 上游模型名
+	Unpriced  int                   `json:"unpriced"`             // 有用量但无单价的调用次数
+	FxUsdCNY  float64               `json:"fx_usd_cny,omitempty"` // 展示换算汇率（0=仅美元；调用方自 settings 注入，不参与计费）
 }
 
 // ComputeCost 从 trace 集合计算最近 days 天（含当日）的成本报告。
@@ -106,13 +117,24 @@ func ComputeCost(traces []Trace, prices []PriceEntry, days int, now time.Time) *
 		ByAccount: map[string]CostBucket{},
 		ByModel:   map[string]CostBucket{},
 	}
-	add := func(m map[string]CostBucket, key string, calls int, in, out, cached int64, cost float64) {
+	add := func(m map[string]CostBucket, key string, calls int, in, out, cached int64, cost float64, pu PriceUse) {
 		b := m[key]
 		b.Calls += calls
 		b.InputTokens += in
 		b.OutputTokens += out
 		b.CachedTokens += cached
 		b.Cost += cost
+		found := false
+		for i := range b.Prices {
+			if b.Prices[i].Key == pu.Key {
+				b.Prices[i].Calls += pu.Calls
+				found = true
+				break
+			}
+		}
+		if !found {
+			b.Prices = append(b.Prices, pu)
+		}
 		m[key] = b
 	}
 	for _, tr := range traces {
@@ -140,8 +162,9 @@ func ComputeCost(traces []Trace, prices []PriceEntry, days int, now time.Time) *
 		cost := float64(tr.Usage.Prompt-cached)/1e6*pe.InputPerM +
 			float64(cached)/1e6*pe.CachedInputPerM +
 			float64(tr.Usage.Completion)/1e6*pe.OutputPerM
-		add(rep.ByAccount, tr.Served, 1, tr.Usage.Prompt, tr.Usage.Completion, cached, cost)
-		add(rep.ByModel, tr.ServedModel, 1, tr.Usage.Prompt, tr.Usage.Completion, cached, cost)
+		pu := PriceUse{Key: pe.Model, In: pe.InputPerM, Out: pe.OutputPerM, Calls: 1}
+		add(rep.ByAccount, tr.Served, 1, tr.Usage.Prompt, tr.Usage.Completion, cached, cost, pu)
+		add(rep.ByModel, tr.ServedModel, 1, tr.Usage.Prompt, tr.Usage.Completion, cached, cost, pu)
 	}
 	return rep
 }
