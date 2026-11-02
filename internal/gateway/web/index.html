@@ -16,6 +16,7 @@
       <a href="#routing" data-tab="routing">路由</a>
       <a href="#observe" data-tab="observe">观测</a>
       <a href="#dispatch" data-tab="dispatch">派发</a>
+      <a href="#plugins" data-tab="plugins">插件</a>
     </nav>
     <div class="spacer"></div>
     <button id="btn-reload" title="重读 providers.json 并热替换路由快照">重载配置</button>
@@ -157,6 +158,23 @@
         <pre id="disp-output" class="disp-output" hidden></pre>
       </div>
       <p class="muted">派发配置经管理 API（PUT /api/config/dispatch：严格校验、写前备份、审计）；会话终态写入观测页 trace（RoutePath=dispatch）。</p>
+    </section>
+
+    <!-- 插件（M7-W5：子进程插件管理面） -->
+    <section id="page-plugins" class="page">
+      <div class="card">
+        <div class="row"><b>插件</b><span class="spacer"></span><button id="btn-plugins-refresh">刷新</button></div>
+        <p class="muted">清单源 plugins.json（写路径严格校验+备份+审计）；启停即时热生效。子进程协议：握手授予 granted=配置∩声明；事件队列满丢最旧；崩溃退避重启（1 小时 &gt;10 次标 failed，改配置或重载恢复）。</p>
+        <table id="tbl-plugins">
+          <thead><tr><th>ID</th><th>状态</th><th>启用</th><th>授予能力</th><th>崩溃(1h)</th><th>丢事件</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="card" id="card-plugin-log" hidden>
+        <div class="row"><b>日志（stderr 尾部 50 行）</b><span class="spacer"></span><span class="muted" id="plugin-log-id"></span></div>
+        <pre id="plugin-log" class="disp-output"></pre>
+      </div>
+      <p class="muted">能力词表：events.trace（决策 trace 订阅）/ dispatch.parse（Agent 输出行解析，agent 条目 parser 字段指向插件 id）/ classify.intent（意图兜底，词表外拒收）/ vendor.verdict（200 伪装拒绝长尾特判）。示例见仓库 examples/。</p>
     </section>
   </main>
 

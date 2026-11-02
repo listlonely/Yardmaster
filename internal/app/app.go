@@ -69,6 +69,8 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		return runCost(args[1:], stdout, stderr)
 	case "settings":
 		return runSettings(args[1:], stdout, stderr)
+	case "plugin": // M7-W5：插件清单管理（list/enable/disable）
+		return runPlugin(args[1:], stdout, stderr)
 	case "agents":
 		return runAgents(args[1:], stdout, stderr)
 	case "update":
@@ -80,7 +82,7 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	case "dispatch": // M5-W5：任务→Agent 派发（agents/init/run）
 		return runDispatch(args[1:], stdout, stderr)
 	default:
-		fmt.Fprintf(stderr, "未知子命令 %q；可用：app（缺省，桌面应用）、serve、console、version、provider、group、rules、keys、intents、trace、settings、agents、price、cost、update、tui、run、dispatch\n", args[0])
+		fmt.Fprintf(stderr, "未知子命令 %q；可用：app（缺省，桌面应用）、serve、console、version、provider、group、rules、keys、intents、trace、settings、plugin、agents、price、cost、update、tui、run、dispatch\n", args[0])
 		return ErrUsage
 	}
 }

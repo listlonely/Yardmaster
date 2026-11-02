@@ -108,6 +108,7 @@ function activateTab(name) {
     p.classList.toggle('active', p.id === 'page-' + name));
   if (name === 'observe') { loadTraces(); loadCost(); loadPricing(); }
   if (name === 'dispatch') { loadDispatchAgents(); loadDispatchTemplates(); loadDispatchSessions(); }
+  if (name === 'plugins') { loadPlugins(); }
 }
 
 // ---------- 总览 ----------
@@ -1197,6 +1198,69 @@ setInterval(() => {
     loadDispatchSessions();
   }
 }, 5000);
+
+// ---------- 插件（M7-W5：子进程插件管理面） ----------
+
+function pluginBadge(st) {
+  const cls = { running: 'ok', starting: 'resting', backoff: 'resting', failed: 'bad-credential', stopped: 'disabled' }[st] || '';
+  return `<span class="badge ${cls}">${esc(st)}</span>`;
+}
+
+async function loadPlugins() {
+  try {
+    const r = await api('/api/plugins');
+    const tb = q('#tbl-plugins tbody');
+    tb.innerHTML = (r.plugins || []).map((p) => {
+      const granted = (p.granted || []).map((c) => `<code>${esc(c)}</code>`).join('、') || '<span class="muted">无</span>';
+      const drop = p.dropped_events ? `<span class="badge bad-credential">丢 ${p.dropped_events}</span>` : '0';
+      return `<tr>
+        <td><code>${esc(p.id)}</code></td>
+        <td>${pluginBadge(p.status)}</td>
+        <td>${p.enabled ? '是' : '否'}</td>
+        <td>${granted}</td>
+        <td>${p.crash_1h || 0}${p.status === 'failed' ? ' <span class="badge bad-credential">failed</span>' : ''}</td>
+        <td>${drop}</td>
+        <td class="row">
+          ${p.enabled
+            ? `<button class="mini" data-plug="disable" data-id="${esc(p.id)}">停用</button>`
+            : `<button class="mini" data-plug="enable" data-id="${esc(p.id)}">启用</button>`}
+          <button class="mini" data-plug="log" data-id="${esc(p.id)}">日志</button>
+        </td>
+      </tr>`;
+    }).join('') || '<tr><td colspan="7" class="muted">未配置插件（plugins.json）</td></tr>';
+  } catch (e) {
+    toast('插件清单加载失败: ' + e.message, true);
+  }
+}
+
+q('#tbl-plugins').addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-plug]');
+  if (!btn) return;
+  const id = btn.dataset.id;
+  const act = btn.dataset.plug;
+  if (act === 'log') {
+    try {
+      const r = await api('/api/plugins');
+      const p = (r.plugins || []).find((x) => x.id === id);
+      $('plugin-log-id').textContent = id;
+      $('plugin-log').textContent = (p && p.log_tail && p.log_tail.length) ? p.log_tail.join('\n') : '（无输出）';
+      $('card-plugin-log').hidden = false;
+    } catch (err) {
+      toast('日志加载失败: ' + err.message, true);
+    }
+    return;
+  }
+  try {
+    btn.disabled = true;
+    await api(`/api/plugins/${encodeURIComponent(id)}/${act}`, { method: 'POST' });
+    toast(act === 'enable' ? '已启用（热生效）' : '已停用');
+    await loadPlugins();
+  } catch (err) {
+    toast('操作失败: ' + err.message, true);
+    btn.disabled = false;
+  }
+});
+$('btn-plugins-refresh').addEventListener('click', loadPlugins);
 
 // ---------- 启动 ----------
 
