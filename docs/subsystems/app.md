@@ -152,6 +152,30 @@ internal/app/
    stderr 留痕（可观测，不静默）。
 3. 回退路径即 v0.7.0 现行为——降级永不阻塞「二进制直接运行即有界面」。
 
+### 五·甲、平台行为差异（M8-W4 文档化）
+
+矩阵实证（2026-11-02，-trimpath 本地三目标）：windows/amd64 21.1MB
+（含 wails，增量 ~4.7MB）、linux/amd64 16.4MB、linux/arm64 15.2MB
+（两目标 `go list -deps` 零 wailsapp 断言——build tag 隔离有效，纯 Go
+矩阵不变）。release.yml 无需改动：单 job 串行 `CGO_ENABLED=0` 交叉
+三目标 + package.sh 打包形态与 app 壳层改动无耦合。
+
+| 维度 | Windows（Wails v3 原生壳） | Linux / 其他（浏览器 `--app` 窗口，M5.5 方案） |
+| :-- | :-- | :-- |
+| 窗口载体 | WebView2 原生窗口（Go 原生 loader，无 DLL 随包） | 系统 Edge/Chrome `--app` 独立窗口；不可得回退默认浏览器标签页 |
+| 关窗语义 | 隐藏到托盘（EventMapping 接管 WM_CLOSE） | 浏览器窗口关闭即关（进程后台继续运行，网关不受影响）；重开走托盘 |
+| 窗口状态记忆 | 数据目录 `window-state.json`（尺寸/位置/最大化） | 不适用（浏览器自有窗口管理） |
+| 窗口背景色 | 启动时跟系统深浅色（AppsUseLightTheme 探测） | 不适用 |
+| 主题切换（侧栏三态） | 生效（localStorage，查看端偏好） | 同左（同一控制台页面） |
+| WebView2 缺失 | registry 探测 → 回退浏览器窗口路径 | 不适用（本就是浏览器路径） |
+| 外链守卫 | 拦截 + toast 提示 | 同左 |
+| 桌面壳依赖 | wails v3.0.0（`windows` build tag 隔离） | 零 wails import（`!windows` 挂点 nil） |
+
+依赖注记：godbus/v5 随 wails 传递升级 5.1.0→5.2.2（systray v1.12.2
+声明的最低版为 5.1.0，兼容升级；CI linux race 测试绿佐证）。**Linux
+真机 D-Bus 托盘冒烟未实测**（本机无 Linux 桌面环境），与既有未实测
+项同类，如实留档待用户实机验证。
+
 ## 六、关窗语义决策（W1 定稿）
 
 **关窗 = 隐藏到托盘（hide），退出 = 托盘菜单退出。**
