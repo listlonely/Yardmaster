@@ -43,7 +43,8 @@ type AgentSpec struct {
 
 // DispatchFile 是 dispatch.json 的文件形态。
 type DispatchFile struct {
-	Agents []AgentSpec `json:"agents"`
+	Agents    []AgentSpec `json:"agents"`
+	Templates []Template  `json:"templates,omitempty"` // 任务模板（M6-W4）
 }
 
 // Runtime 把配置条目转为 runner 的运行态 Spec。
@@ -105,6 +106,11 @@ func ValidateDispatch(f DispatchFile) error {
 				}
 			}
 		}
+	}
+	// 模板校验（M6-W4）：agent 引用存在性依赖本文件 agents，故在 agents
+	// 循环之后统一校验（fail-closed：引用缺失/名字重复/超时非法皆拒绝）。
+	if err := ValidateTemplates(f.Templates, f.Agents); err != nil {
+		return err
 	}
 	return nil
 }
@@ -224,14 +230,15 @@ func (l *LiveBuffer) Events() []Event {
 
 // Engine 持有派发配置与会话表；零值不可用，经 NewEngine 构造。
 type Engine struct {
-	mu       sync.Mutex
-	agents   []AgentSpec
-	sessions []*Session
-	seq      int64
-	global   chan struct{}
-	sems     map[string]chan struct{}
-	now      func() time.Time
-	store    *SessionStore // 会话终态落盘（M6-W2）；nil=不持久化
+	mu        sync.Mutex
+	agents    []AgentSpec
+	templates []Template // 任务模板（M6-W4）
+	sessions  []*Session
+	seq       int64
+	global    chan struct{}
+	sems      map[string]chan struct{}
+	now       func() time.Time
+	store     *SessionStore // 会话终态落盘（M6-W2）；nil=不持久化
 
 	// OnFinish 在会话终态时回调（观察者：派发 trace/OTLP 导出经此接入；
 	// nil=无）。回调在会话 goroutine 内执行，应快速返回。
@@ -243,6 +250,7 @@ func NewEngine(f *DispatchFile) *Engine {
 	e := &Engine{global: make(chan struct{}, GlobalMaxConcurrent), sems: map[string]chan struct{}{}, now: time.Now}
 	if f != nil {
 		e.agents = f.Agents
+		e.templates = f.Templates
 	}
 	return e
 }
@@ -269,6 +277,25 @@ func (e *Engine) Agents() []AgentSpec {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return append([]AgentSpec(nil), e.agents...)
+}
+
+// Templates 返回模板清单拷贝（展示/实例化用，M6-W4）。
+func (e *Engine) Templates() []Template {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]Template(nil), e.templates...)
+}
+
+// FindTemplate 按名取模板（值拷贝；不存在报错——fail-closed 不猜）。
+func (e *Engine) FindTemplate(name string) (Template, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, t := range e.templates {
+		if t.Name == name {
+			return t, nil
+		}
+	}
+	return Template{}, fmt.Errorf("未找到模板 %q（dispatch.json 现有 %d 个模板）", name, len(e.templates))
 }
 
 // Select 选择 agent：显式 id > 声明顺序首个 match 命中 > default 兜底；
@@ -465,6 +492,7 @@ func (e *Engine) Reload(f DispatchFile) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.agents = f.Agents
+	e.templates = f.Templates
 	e.sems = map[string]chan struct{}{}
 	return nil
 }

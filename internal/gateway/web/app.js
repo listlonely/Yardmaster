@@ -107,7 +107,7 @@ function activateTab(name) {
   document.querySelectorAll('.page').forEach((p) =>
     p.classList.toggle('active', p.id === 'page-' + name));
   if (name === 'observe') { loadTraces(); loadCost(); loadPricing(); }
-  if (name === 'dispatch') { loadDispatchAgents(); loadDispatchSessions(); }
+  if (name === 'dispatch') { loadDispatchAgents(); loadDispatchTemplates(); loadDispatchSessions(); }
 }
 
 // ---------- 总览 ----------
@@ -896,6 +896,7 @@ $('btn-add-price').addEventListener('click', () => priceModal(null));
 let dispSelected = null; // 当前查看输出的会话 ID
 let dispEvView = true;   // 事件视图优先（M6-W3；解析失败/raw 退原文）
 let dispLast = null;     // 最近一次详情缓存（视图切换复用）
+let dispTemplates = [];  // 任务模板清单（M6-W4）
 
 async function loadDispatchAgents() {
   const sel = $('disp-agent');
@@ -909,6 +910,38 @@ async function loadDispatchAgents() {
     sel.innerHTML = '<option value="">派发不可用</option>';
     toast('派发配置加载失败: ' + e.message, true);
   }
+}
+
+// loadDispatchTemplates 拉取模板清单：无模板隐藏入口；有模板渲染下拉。
+async function loadDispatchTemplates() {
+  try {
+    const r = await api('/api/dispatch/templates');
+    dispTemplates = r.templates || [];
+    const row = $('disp-tmplrow'), sel = $('disp-template');
+    row.hidden = dispTemplates.length === 0;
+    sel.innerHTML = '<option value="">自由任务（直接填写上方文本）</option>' +
+      dispTemplates.map((t) => `<option value="${esc(t.name)}">${esc(t.name)}</option>`).join('');
+  } catch (e) { /* 模板不可用不阻塞派发页（fail-open 观测增强） */ }
+}
+
+// dispRenderParams 选中模板后按占位名生成参数输入；切回自由任务还原。
+function dispRenderParams() {
+  const name = $('disp-template').value;
+  const box = $('disp-params'), ta = $('disp-task');
+  const t = dispTemplates.find((x) => x.name === name);
+  if (!t) {
+    box.hidden = true;
+    box.innerHTML = '';
+    ta.disabled = false;
+    return;
+  }
+  ta.disabled = true;
+  ta.value = `（模板 ${t.name}）${t.task}`;
+  const names = t.params || [];
+  box.hidden = names.length === 0;
+  box.innerHTML = names.map((n) =>
+    `<label class="inline">${esc(n)} <input class="disp-param" data-name="${esc(n)}" placeholder="{${esc(n)}}" size="16"></label>`
+  ).join('');
 }
 
 async function loadDispatchSessions() {
@@ -1004,9 +1037,24 @@ q('#tbl-dispatch tbody').addEventListener('click', async (e) => {
 });
 
 $('btn-dispatch-run').addEventListener('click', async () => {
-  const task = $('disp-task').value.trim();
-  if (!task) { toast('任务文本不能为空', true); return; }
-  const body = { task, agent: $('disp-agent').value, model: $('disp-model').value.trim() };
+  const tmplName = $('disp-template').value;
+  const body = { agent: $('disp-agent').value, model: $('disp-model').value.trim() };
+  if (tmplName) {
+    // 模板形态：{template, params}（缺参客户端先拦，服务端仍 fail-closed）。
+    const params = {};
+    let missing = [];
+    document.querySelectorAll('#disp-params .disp-param').forEach((inp) => {
+      const v = inp.value.trim();
+      if (v) params[inp.dataset.name] = v;
+      else missing.push(inp.dataset.name);
+    });
+    if (missing.length) { toast('缺少参数: ' + missing.join(', '), true); return; }
+    body.template = tmplName;
+    body.params = params;
+  } else {
+    body.task = $('disp-task').value.trim();
+    if (!body.task) { toast('任务文本不能为空', true); return; }
+  }
   try {
     const r = await api('/api/dispatch/run', {
       method: 'POST',
@@ -1014,13 +1062,15 @@ $('btn-dispatch-run').addEventListener('click', async () => {
       body: JSON.stringify(body),
     });
     toast(`已派发 → ${r.session.agent}（${r.session.id}${r.intent ? '，意图 ' + r.intent : ''}）`);
-    $('disp-task').value = '';
+    if (!tmplName) $('disp-task').value = '';
     dispSelected = r.session.id;
     loadDispatchSessions();
   } catch (e) {
     toast('派发失败: ' + e.message, true);
   }
 });
+
+$('disp-template').addEventListener('change', dispRenderParams);
 
 $('btn-disp-refresh').addEventListener('click', loadDispatchSessions);
 $('disp-evtoggle').addEventListener('click', () => {

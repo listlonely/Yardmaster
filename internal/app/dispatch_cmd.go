@@ -6,6 +6,9 @@
 //	yardmaster dispatch run [-agent id] [-model m] [-events] 任务文本...
 //	                                      本地引擎派发（stdout 流式透传；
 //	                                      -events 实时事件流，M6-W3）
+//	yardmaster dispatch run -t <模板> key=val...
+//	                                      按任务模板派发（M6-W4：占位
+//	                                      实例化 + 模板默认 agent/超时）
 package app
 
 import (
@@ -122,21 +125,58 @@ func dispatchRun(paths store.Paths, args []string, stdout, stderr io.Writer) err
 	agentID := fs.String("agent", "", "显式指定 agent（空=按 match/default 选择）")
 	model := fs.String("model", "", "argv {model} 占位的替换值")
 	events := fs.Bool("events", false, "实时事件流渲染（jsonl agent 生效；其他输出原样透传）")
+	tmplName := fs.String("t", "", "任务模板名（dispatch.json templates；剩余位置参数按 key=val 传参）")
 	if err := fs.Parse(args); err != nil {
 		return ErrUsage
 	}
-	task := strings.TrimSpace(strings.Join(fs.Args(), " "))
-	if task == "" {
-		fmt.Fprintln(stderr, "用法: yardmaster dispatch run [-agent id] [-model m] [-events] 任务文本")
-		return ErrUsage
-	}
+	rest := fs.Args()
 	e, err := loadEngineOrErr(paths)
 	if err != nil {
 		return err
 	}
-	agent, err := e.Select(*agentID, task, "", *model)
+
+	// 任务来源二选一：-t 模板实例化（fail-closed：缺参/多参/模板不存在
+	// 均拒绝）或位置参数拼任务文本。
+	var taskText string
+	var tmpl dispatch.Template
+	if *tmplName != "" {
+		params := map[string]string{}
+		for _, kv := range rest {
+			k, v, ok := strings.Cut(kv, "=")
+			if !ok || k == "" {
+				fmt.Fprintf(stderr, "模板参数须为 key=val 形式: %q\n", kv)
+				return ErrUsage
+			}
+			params[k] = v
+		}
+		var err error
+		tmpl, err = e.FindTemplate(*tmplName)
+		if err != nil {
+			return err
+		}
+		taskText, err = tmpl.Instantiate(params)
+		if err != nil {
+			return err
+		}
+		if *agentID == "" {
+			*agentID = tmpl.Agent // 模板默认 agent（显式 -agent 仍可覆盖）
+		}
+		if *model == "" {
+			*model = tmpl.Model
+		}
+	} else {
+		taskText = strings.TrimSpace(strings.Join(rest, " "))
+		if taskText == "" {
+			fmt.Fprintln(stderr, "用法: yardmaster dispatch run [-agent id] [-model m] [-events] [-t 模板 key=val...] 任务文本")
+			return ErrUsage
+		}
+	}
+	agent, err := e.Select(*agentID, taskText, "", *model)
 	if err != nil {
 		return err
+	}
+	if tmpl.Timeout != "" { // 模板超时覆盖所选 agent 的超时
+		agent.Timeout = tmpl.Timeout
 	}
 	fmt.Fprintf(stderr, "[dispatch] 选中 %s → %s\n", agent.ID, strings.Join(agent.Command, " "))
 	var stream io.Writer
@@ -147,7 +187,7 @@ func dispatchRun(paths store.Paths, args []string, stdout, stderr io.Writer) err
 	} else {
 		stream = stdout
 	}
-	sess, err := e.Submit(context.Background(), agent, task, *model, stream)
+	sess, err := e.Submit(context.Background(), agent, taskText, *model, stream)
 	if err != nil {
 		return err
 	}

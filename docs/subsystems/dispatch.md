@@ -11,6 +11,10 @@
 > 流式解析 stdout，控制台事件视图 + CLI `dispatch run -events`；解析
 > 失败回退 raw 原样（容错不变）。事件仅是输出视图的再加工，不改留存
 > 语义。
+> [2026-11-02-任务模板] M6-W4 已交付：dispatch.json `templates[]`
+> （§五·一）命名任务 + {param} 占位 + 默认 agent/超时；CLI
+> `dispatch run -t <模板> key=val…` 与控制台模板下拉双入口；缺参/
+> 多传键/未知模板/引用缺失 agent 一律 fail-closed 拒绝。
 
 ## 一、产品形态（产品设计文档 §1 差异化定位）
 
@@ -115,6 +119,26 @@ stdout，结果与耗时留痕。与 `internal/agent` 接线子系统协同成�
   **不自动注册**——命令形状由用户确认，ToS 边界（不代装、不代登录）
   由「启动失败即报错指引」兜底。
 
+### 五·一、任务模板（M6-W4）[2026-11-02-任务模板]
+
+- 配置形态（dispatch.json `templates[]`，与 agents 同文件同写路径——
+  PUT /api/config/dispatch 校验闸自动覆盖）：`{name, task, agent?,
+  model?, timeout?}`；task 含 `{param}` 占位（占位名限字母/数字/下划线/
+  连字符；形如 `{}` 或 `{not a name}` 不识别为占位、原样保留——与 argv
+  展开的「未知占位不猜语义」同款）。
+- 校验（fail-closed）：name 非空唯一、task 非空、agent 引用必须存在于
+  本文件 agents、timeout 可解析为正时长——任一违反整体拒绝（写路径 400
+  不落盘，加载路径派发禁用）。
+- 实例化（fail-closed）：缺占位报错（列出缺失名）；多传键报错（防手
+  误）；替换仅按已验合法的占位名逐键进行。
+- 运行语义：agent = 请求显式 > 模板默认 > match/default 匹配；model =
+  请求显式 > 模板默认；模板 `timeout` 覆盖所选 agent 的超时（会话级，
+  不改 dispatch.json）。意图分类照常作用于实例化后的任务文本。
+- 双入口：CLI `dispatch run -t <模板> key=val…`（位置参数按 key=val
+  传参，缺等号即用法错误）；控制台派发页模板下拉（GET
+  /api/dispatch/templates 返回清单+占位名，选中即动态生成参数输入，
+  提交 `{template, params}`）。
+
 ## 六、交付切分
 
 | 周 | 交付 | 状态 |
@@ -126,6 +150,7 @@ stdout，结果与耗时留痕。与 `internal/agent` 接线子系统协同成�
 | M6-W1 | 真实校准（Claude Code 冒烟/OTLP/缓存对账/缺陷修复） | 已交付（见 §九） |
 | M6-W2 | 会话持久化（dispatch-sessions.jsonl + 启动恢复） | 已交付（见 §三） |
 | M6-W3 | jsonl 事件级实时（解析器/控制台事件视图/CLI `-events`） | 已交付（[2026-11-02-事件级实时]，见 §五） |
+| M6-W4 | 任务模板（templates[]/CLI `-t`/控制台模板下拉） | 已交付（[2026-11-02-任务模板]，见 §五·一） |
 
 ## 八、冒烟记录与未实测项（W6，如实标注）
 
@@ -153,6 +178,16 @@ M6-W3 冒烟（2026-11-02，Windows 本机）[2026-11-02-事件级实时]：
   正面复现——读不懂=未知，内容零丢失）。
 - serve 启动日志确认恢复语义：`已恢复派发会话历史 count=2`（M6-W2
   落盘的冒烟会话跨重启可见）。
+
+M6-W4 冒烟（2026-11-02，Windows 本机）[2026-11-02-任务模板]：
+
+- CLI：`dispatch run -t intro name=小马 topic=网关` → 假 Agent stdin
+  回显任务全文「向 小马 介绍 网关 的核心概念」（占位实例化字节级证据），
+  `ok`；缺 topic → `模板 intro 缺少参数: topic（占位 {topic}）` 拒绝。
+- 控制台：GET templates 网络证据（清单+占位名）→ 模板 run 返回实例化
+  任务；浏览器验证 3/3 + 复测 3/3（**首轮实测抓出前端缺陷**：模板提交
+  路径误用单元素 querySelector 致「派发」按钮无反应，改
+  querySelectorAll 后闭环通过——事件视图含实例化正文与 success 终态）。
 
 未实测项（如实标注）：
 

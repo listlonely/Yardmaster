@@ -68,7 +68,9 @@ func dispatchDisabled(w http.ResponseWriter) {
 	writeAPIErr(w, badRequest(errors.New("派发不可用：dispatch.json 损坏或 serve 未挂载引擎，请修复后重载")))
 }
 
-// handleDispatchRun 提交一次派发：{task, agent?, model?}；意图经意图链
+// handleDispatchRun 提交一次派发：{task, agent?, model?} 或模板形态
+// {template, params{}, agent?, model?}（M6-W4：模板默认 agent/model，
+// 请求显式传值覆盖；模板 timeout 覆盖所选 agent 的超时）。意图经意图链
 // 尽力分类（分类失败不阻塞——intent 为空参与匹配）。响应为写后状态
 // （写响应即状态精神）：会话快照。
 func (s *Server) handleDispatchRun(w http.ResponseWriter, r *http.Request) {
@@ -77,14 +79,33 @@ func (s *Server) handleDispatchRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Task  string `json:"task"`
-		Agent string `json:"agent"`
-		Model string `json:"model"`
+		Task     string            `json:"task"`
+		Agent    string            `json:"agent"`
+		Model    string            `json:"model"`
+		Template string            `json:"template"`
+		Params   map[string]string `json:"params"`
 	}
 	body := io.LimitReader(r.Body, 1<<20)
 	if err := json.NewDecoder(body).Decode(&req); err != nil {
 		writeAPIErr(w, badRequest(errors.New("请求体解析失败: "+err.Error())))
 		return
+	}
+
+	// 模板解析（fail-closed）：找不到/实例化失败一律 400，不猜。
+	var tmpl dispatch.Template
+	if req.Template != "" {
+		var err error
+		tmpl, err = s.Dispatch.FindTemplate(req.Template)
+		if err != nil {
+			writeAPIErr(w, badRequest(err))
+			return
+		}
+		task, err := tmpl.Instantiate(req.Params)
+		if err != nil {
+			writeAPIErr(w, badRequest(err))
+			return
+		}
+		req.Task = task
 	}
 	if req.Task == "" {
 		writeAPIErr(w, badRequest(errors.New("task 不能为空")))
@@ -94,10 +115,21 @@ func (s *Server) handleDispatchRun(w http.ResponseWriter, r *http.Request) {
 	if s.Intents != nil {
 		intent = s.Intents.Classify(req.Task)
 	}
+	// agent/model：请求显式 > 模板默认 > match/default 匹配。
+	if req.Agent == "" {
+		req.Agent = tmpl.Agent
+	}
+	if req.Model == "" {
+		req.Model = tmpl.Model
+	}
 	agent, err := s.Dispatch.Select(req.Agent, req.Task, intent, req.Model)
 	if err != nil {
 		writeAPIErr(w, badRequest(err))
 		return
+	}
+	// 模板超时覆盖所选 agent 的超时（配置串形态，Submit 的 Runtime 解析）。
+	if tmpl.Timeout != "" {
+		agent.Timeout = tmpl.Timeout
 	}
 	// 会话生命周期独立于本次 HTTP 请求（响应返回后仍需运行）：用后台
 	// ctx；取消只能经 /cancel 端点（设计稿 §三）。
@@ -113,6 +145,25 @@ func (s *Server) handleDispatchRun(w http.ResponseWriter, r *http.Request) {
 		"ok": true, "effect": effectImmediate,
 		"intent": intent, "session": dispatchSessionView(sv),
 	})
+}
+
+// handleDispatchTemplates 返回任务模板清单（M6-W4；params 为占位名清单，
+// 控制台据此生成参数输入）。
+func (s *Server) handleDispatchTemplates(w http.ResponseWriter, _ *http.Request) {
+	if s.Dispatch == nil {
+		dispatchDisabled(w)
+		return
+	}
+	tmpls := s.Dispatch.Templates()
+	type tmplView struct {
+		dispatch.Template
+		Params []string `json:"params"`
+	}
+	views := make([]tmplView, 0, len(tmpls))
+	for _, t := range tmpls {
+		views = append(views, tmplView{Template: t, Params: dispatch.PlaceholderNames(t.Task)})
+	}
+	writeJSON(w, map[string]any{"ok": true, "templates": views})
 }
 
 // handleDispatchAgents 返回派发配置的 agent 清单。

@@ -118,6 +118,10 @@
         <b>提交任务</b>
         <p class="muted">任务文本经 stdin 交给本机已安装的 Agent（headless）；选择规则见 dispatch.json（意图→Agent 匹配，无匹配走 default 兜底）。ToS 边界：不代装、不代登录。</p>
         <textarea id="disp-task" rows="3" placeholder="例：把 src 下的 TODO 注释整理成清单"></textarea>
+        <div class="row" id="disp-tmplrow" hidden>
+          <label class="inline">模板 <select id="disp-template"><option value="">自由任务（直接填写上方文本）</option></select></label>
+        </div>
+        <div class="row" id="disp-params" hidden></div>
         <div class="row">
           <label class="inline">Agent <select id="disp-agent"><option value="">自动（按匹配规则）</option></select></label>
           <label class="inline">模型占位 <input id="disp-model" placeholder="{model} 替换值（可选）" size="14"></label>
