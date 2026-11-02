@@ -21,6 +21,41 @@ if (new URLSearchParams(location.search).get('app') === '1') {
   document.title = 'Yardmaster';
 }
 
+// ---------- 主题（M8-W3）：三态循环 auto→light→dark，localStorage 持久化
+//（查看端设备偏好，不进 settings.json——局域网多客户端各自偏好）。
+const THEME_KEY = 'ym-theme';
+function applyTheme(t) {
+  if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+  else delete document.documentElement.dataset.theme; // auto=跟随系统
+  $('btn-theme').textContent = { auto: '◐ 跟随系统', light: '☀ 亮色', dark: '☾ 暗色' }[t] || '◐ 跟随系统';
+}
+applyTheme(localStorage.getItem(THEME_KEY) || 'auto');
+$('btn-theme').addEventListener('click', () => {
+  const cur = localStorage.getItem(THEME_KEY) || 'auto';
+  const next = { auto: 'light', light: 'dark', dark: 'auto' }[cur] || 'auto';
+  localStorage.setItem(THEME_KEY, next);
+  applyTheme(next);
+});
+
+// Windows 字体栈（:root.win——正文 Segoe UI Variable/YaHei UI，等宽含
+// YaHei UI 兜底防 SimSun 陷阱）。
+if (/Windows/i.test(navigator.userAgent)) {
+  document.documentElement.classList.add('win');
+}
+
+// 外链守卫（M8-W3）：原生窗口不追外部导航——非同源 http(s) 链接拦截并
+// 提示。wails v3.0.0 无 NewWindowRequested API，系统浏览器跳转需 JS 桥
+// （非目标）；控制台当前外链面为零，此为防御性兜底。
+document.addEventListener('click', (e) => {
+  const a = e.target.closest('a[href]');
+  if (!a) return;
+  const u = new URL(a.href, location.href);
+  if ((u.protocol === 'http:' || u.protocol === 'https:') && u.origin !== location.origin) {
+    e.preventDefault();
+    toast('外链已拦截（原生窗口不导航）：' + u.href, false, 5000);
+  }
+});
+
 // ---------- 访问令牌（M2-W5） ----------
 
 // 会话内令牌（sessionStorage）：网关开启 token 校验后，API 401 驱动
@@ -102,8 +137,11 @@ document.querySelectorAll('#tabs a').forEach((a) => {
 });
 
 function activateTab(name) {
-  document.querySelectorAll('#tabs a').forEach((a) =>
-    a.classList.toggle('active', a.dataset.tab === name));
+  document.querySelectorAll('#tabs a').forEach((a) => {
+    const on = a.dataset.tab === name;
+    a.classList.toggle('active', on);
+    if (on) $('page-title').textContent = a.dataset.title || a.textContent.trim();
+  });
   document.querySelectorAll('.page').forEach((p) =>
     p.classList.toggle('active', p.id === 'page-' + name));
   if (name === 'observe') { loadTraces(); loadCost(); loadPricing(); }

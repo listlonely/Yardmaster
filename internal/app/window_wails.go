@@ -80,6 +80,19 @@ func reopenNativeWindow(consoleURL string) {
 	_ = openAppWindow(consoleURL)
 }
 
+// snapshotWindowBounds 取当前窗口几何（逻辑坐标）与最大化态；窗口不在
+// 位（未创建/已销毁，Bounds 返回零值）返回 nil 不落盘。
+func snapshotWindowBounds(win *application.WebviewWindow) *windowState {
+	if win == nil {
+		return nil
+	}
+	b := win.Bounds()
+	if b.Width <= 0 || b.Height <= 0 {
+		return nil
+	}
+	return &windowState{X: b.X, Y: b.Y, W: b.Width, H: b.Height, Max: win.IsMaximised()}
+}
+
 // runWailsShell 原生窗口主循环：网关 serve 转后台 goroutine，wails 占
 // 主线程（Win32 消息泵）——托盘已由调用方在独立 goroutine 启动（fyne
 // systray 自有线程泵，两泵各占一线程，app.md §二#6）。返回时网关已
@@ -94,19 +107,37 @@ func runWailsShell(st *serveSetup, ctx context.Context, stop context.CancelFunc,
 	// 「关窗=隐藏」。其余映射原样保留。
 	mapping := events.DefaultWindowEventMapping()
 	delete(mapping, events.Windows.WindowClosing)
-	win := app.Window.NewWithOptions(application.WebviewWindowOptions{
+
+	// 窗口状态记忆（M8-W3）：恢复上次尺寸/位置/最大化；初始背景色跟
+	// 系统深浅色（防主题不符闪色；运行中切换由页面自身全覆盖背景承接）。
+	state := loadWindowState(st.paths.AppDir)
+	opts := application.WebviewWindowOptions{
 		Name:      "console",
 		Title:     "Yardmaster",
-		Width:     1200,
-		Height:    820,
 		MinWidth:  900,
 		MinHeight: 600,
 		URL:       consoleURL,
 		Windows: application.WindowsWindow{
 			EventMapping: mapping,
 		},
-	})
+	}
+	if systemPrefersLight() {
+		opts.BackgroundColour = application.RGBA{Red: 0xf6, Green: 0xf7, Blue: 0xf9, Alpha: 0xff}
+	} else {
+		opts.BackgroundColour = application.RGBA{Red: 0x14, Green: 0x18, Blue: 0x21, Alpha: 0xff}
+	}
+	if state != nil {
+		opts.X, opts.Y, opts.Width, opts.Height = state.X, state.Y, state.W, state.H
+		if state.Max {
+			opts.StartState = application.WindowStateMaximised
+		}
+	} else {
+		opts.Width, opts.Height = 1200, 820
+	}
+	win := app.Window.NewWithOptions(opts)
+	snapshot := func() { saveWindowState(st.paths.AppDir, snapshotWindowBounds(win)) }
 	win.OnWindowEvent(events.Windows.WindowClosing, func(*application.WindowEvent) {
+		snapshot()
 		win.Hide() // 关窗=隐藏到托盘；重开走托盘「打开窗口」
 	})
 	nativeWindow.Store(win)
@@ -115,6 +146,7 @@ func runWailsShell(st *serveSetup, ctx context.Context, stop context.CancelFunc,
 	// 收敛到单一路径。
 	go func() {
 		<-ctx.Done()
+		snapshot()
 		app.Quit()
 	}()
 

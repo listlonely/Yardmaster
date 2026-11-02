@@ -8,16 +8,42 @@
   <link rel="stylesheet" href="/web/app.css">
 </head>
 <body>
-  <header>
-    <h1><span class="logo" aria-hidden="true">Y</span>yardmaster <span class="pill" id="status">连接中…</span></h1>
-    <nav id="tabs">
-      <a href="#overview" data-tab="overview" class="active">总览</a>
-      <a href="#providers" data-tab="providers">Provider</a>
-      <a href="#routing" data-tab="routing">路由</a>
-      <a href="#observe" data-tab="observe">观测</a>
-      <a href="#dispatch" data-tab="dispatch">派发</a>
-      <a href="#plugins" data-tab="plugins">插件</a>
+  <!-- 侧栏（M8-W3，Magpie 同构信息架构）：常暗、分组导航、脚部主题切换；
+       data-tab 机制与 JS 切页逻辑不变，仅导航从顶栏平移至此。 -->
+  <aside class="sidebar">
+    <div class="brand"><span class="logo" aria-hidden="true">Y</span>yardmaster</div>
+    <nav id="tabs" aria-label="主导航">
+      <span class="nav-gl">运行</span>
+      <a href="#overview" data-tab="overview" class="active" data-title="总览">
+        <svg class="nav-ic" viewBox="0 0 20 20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="5.5" height="5.5" rx="1.2"/><rect x="11.5" y="3" width="5.5" height="5.5" rx="1.2"/><rect x="3" y="11.5" width="5.5" height="5.5" rx="1.2"/><rect x="11.5" y="11.5" width="5.5" height="5.5" rx="1.2"/></g></svg>
+        <span>总览</span></a>
+      <span class="nav-gl">路由</span>
+      <a href="#providers" data-tab="providers" data-title="Provider">
+        <svg class="nav-ic" viewBox="0 0 20 20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3.5" width="14" height="5.5" rx="1.5"/><rect x="3" y="11" width="14" height="5.5" rx="1.5"/><path d="M6 6.2h.01M6 13.8h.01"/></g></svg>
+        <span>Provider</span></a>
+      <a href="#routing" data-tab="routing" data-title="路由">
+        <svg class="nav-ic" viewBox="0 0 20 20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10h5l4-5h5M8 10l4 5h5M14.5 3l2.5 2-2.5 2M14.5 13l2.5 2-2.5 2"/></g></svg>
+        <span>路由</span></a>
+      <span class="nav-gl">观测</span>
+      <a href="#observe" data-tab="observe" data-title="观测">
+        <svg class="nav-ic" viewBox="0 0 20 20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 11h3l2-6 3.5 10 2.5-7 1.5 3h3"/></g></svg>
+        <span>观测</span></a>
+      <span class="nav-gl">自动化</span>
+      <a href="#dispatch" data-tab="dispatch" data-title="派发">
+        <svg class="nav-ic" viewBox="0 0 20 20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3L9.5 10.5M17 3l-5 14-2.5-6.5L3 8l14-5z"/></g></svg>
+        <span>派发</span></a>
+      <a href="#plugins" data-tab="plugins" data-title="插件">
+        <svg class="nav-ic" viewBox="0 0 20 20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3.5h4V6a1.5 1.5 0 0 0 3 0V3.5h1.5v13H4v-4h2.5a1.5 1.5 0 0 0 0-3H4v-6h4z"/></g></svg>
+        <span>插件</span></a>
     </nav>
+    <div class="side-foot">
+      <button id="btn-theme" title="主题：跟随系统 → 亮 → 暗 循环">◐ 跟随系统</button>
+    </div>
+  </aside>
+
+  <!-- 瘦顶栏：页面上下文 + 状态 + 动作（导航已入侧栏） -->
+  <header>
+    <h1><span id="page-title">总览</span> <span class="pill" id="status">连接中…</span></h1>
     <div class="spacer"></div>
     <button id="btn-reload" title="重读 providers.json 并热替换路由快照">重载配置</button>
   </header>
