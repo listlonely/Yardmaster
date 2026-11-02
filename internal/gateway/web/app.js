@@ -894,6 +894,8 @@ $('btn-add-price').addEventListener('click', () => priceModal(null));
 // ---------- 派发（M5-W5：任务→Agent headless） ----------
 
 let dispSelected = null; // 当前查看输出的会话 ID
+let dispEvView = true;   // 事件视图优先（M6-W3；解析失败/raw 退原文）
+let dispLast = null;     // 最近一次详情缓存（视图切换复用）
 
 async function loadDispatchAgents() {
   const sel = $('disp-agent');
@@ -938,12 +940,51 @@ async function showDispatchOutput(id) {
   dispSelected = id;
   try {
     const d = await api('/api/dispatch/sessions/' + encodeURIComponent(id));
-    const pre = $('disp-output');
-    pre.hidden = false;
-    pre.textContent = d.output || '（暂无输出）';
+    dispLast = d;
+    dispRenderOutput(d);
   } catch (e) {
     $('disp-output').hidden = true;
+    $('disp-viewbar').hidden = true;
     dispSelected = null;
+    dispLast = null;
+  }
+}
+
+// dispRenderOutput 渲染输出面板：jsonl 会话（服务端返回 events）默认
+// 事件视图（类型着色/工具折叠/终态高亮）；raw 事件与非 jsonl 会话回退
+// 原文——解析失败不丢内容。
+function dispRenderOutput(d) {
+  const pre = $('disp-output');
+  const evs = d.events || [];
+  const hasEv = evs.length > 0 && dispEvView;
+  $('disp-viewbar').hidden = evs.length === 0;
+  $('disp-evtoggle').textContent = hasEv ? '切换原文' : '切换事件';
+  $('disp-viewhint').textContent = hasEv ? '事件视图' : '原文视图';
+  pre.hidden = false;
+  pre.classList.toggle('ev', hasEv);
+  if (hasEv) {
+    pre.innerHTML = evs.map(dispEventHTML).join('');
+  } else {
+    pre.textContent = d.output || '（暂无输出）';
+  }
+}
+
+// dispEventHTML 单事件渲染：init 灰、text 正文、tool 折叠、result 终态。
+function dispEventHTML(ev) {
+  const t = esc(ev.text || '');
+  switch (ev.kind) {
+    case 'init':
+      return `<div class="ev ev-init">init${ev.subtype ? ' · ' + esc(ev.subtype) : ''}</div>`;
+    case 'text':
+      return `<div class="ev ev-text">${t}</div>`;
+    case 'tool':
+      return `<details class="ev ev-tool"><summary>tool · ${esc(ev.tool || '?')}<span class="ev-sum">${t}</span></summary><pre>${t}</pre></details>`;
+    case 'toolresult':
+      return `<div class="ev ev-toolres">tool-result · ${t}</div>`;
+    case 'result':
+      return `<div class="ev ev-result">result${ev.subtype ? ' · ' + esc(ev.subtype) : ''} — ${t}</div>`;
+    default:
+      return `<div class="ev ev-raw">${t}</div>`;
   }
 }
 
@@ -982,6 +1023,10 @@ $('btn-dispatch-run').addEventListener('click', async () => {
 });
 
 $('btn-disp-refresh').addEventListener('click', loadDispatchSessions);
+$('disp-evtoggle').addEventListener('click', () => {
+  dispEvView = !dispEvView;
+  if (dispLast) dispRenderOutput(dispLast);
+});
 setInterval(() => {
   if (q('#page-dispatch').classList.contains('active') && $('disp-auto').checked) {
     loadDispatchSessions();

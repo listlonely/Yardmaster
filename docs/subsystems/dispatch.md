@@ -7,6 +7,10 @@
 > `internal/app/run_cmd.go`（CLI run）。
 > [2026-10-30-真实校准] M6-W1 已完成 Claude Code 真实冒烟（形状/事件
 > 词表/缓存对账闭环，见 §九）；codex/gemini 降级留档。
+> [2026-11-02-事件级实时] M6-W3 已交付：事件解析器按 W1 词表（§五）
+> 流式解析 stdout，控制台事件视图 + CLI `dispatch run -events`；解析
+> 失败回退 raw 原样（容错不变）。事件仅是输出视图的再加工，不改留存
+> 语义。
 
 ## 一、产品形态（产品设计文档 §1 差异化定位）
 
@@ -90,6 +94,18 @@ stdout，结果与耗时留痕。与 `internal/agent` 接线子系统协同成�
   `{"type":"system","subtype":"init",…}` → `{"type":"assistant","message":{content:[{type:"text",…}]}}`
   →（工具轮次 `{"type":"user",…}`）→ `{"type":"result","subtype":"success","result":"…","usage":{…}}`。
   终态 `result` 字段与 ExtractResult 的键表命中；`subtype` 取 success/error。
+
+- 事件视图（M6-W3）[2026-11-02-事件级实时]：`output: "jsonl"` 会话的
+  stdout 由 LiveBuffer 流式喂入事件解析器（`internal/dispatch/events.go`），
+  按上述词表归类六种事件：`init` / `text` / `tool`（tool_use 折叠为单行
+  JSON 摘要）/ `toolresult` / `result`（Final）/ `raw`（读不懂=未知，
+  原样保留——解析失败回退纯文本，内容零丢失）。留存护栏：单会话 512 条
+  环形；文本 8KB / 工具摘要 512B / 回传 2KB 截断（UTF-8 安全）。半行经
+  终态 Flush 收口（运行期视图读取不冲刷，避免半行与后续分块重复）。
+  出口三处：控制台会话详情 `events` 字段（类型着色/工具折叠/终态高亮，
+  可切原文视图）、CLI `dispatch run -events` 实时渲染、恢复会话从留存
+  尾部现场解析（旧记录无 output_mode 时维持纯文本）。事件是输出视图的
+  再加工，不改 Result.Output 留存与 ExtractResult 语义。
 - 接线模板（经网关回环，[2026-10-30-claude真实冒烟] 验证）：env 三件套
   `ANTHROPIC_BASE_URL=http://127.0.0.1:8317`、`ANTHROPIC_AUTH_TOKEN=<网关key>`、
   `ANTHROPIC_MODEL=<provider/model 形式>`（planner 只认 provider/model；
@@ -107,6 +123,9 @@ stdout，结果与耗时留痕。与 `internal/agent` 接线子系统协同成�
 | W4 | dispatch.json 加载校验（fail-closed）+ 匹配引擎 + 会话表 + 派发 trace | 已交付 |
 | W5 | 管理面 API（run/agents/sessions/cancel + config/dispatch 写路径热替换）+ 控制台派发页 + CLI `dispatch` | 已交付 |
 | W6 | 双平台冒烟 + 发布 v0.5.0 | 已交付（见下「冒烟记录与未实测项」） |
+| M6-W1 | 真实校准（Claude Code 冒烟/OTLP/缓存对账/缺陷修复） | 已交付（见 §九） |
+| M6-W2 | 会话持久化（dispatch-sessions.jsonl + 启动恢复） | 已交付（见 §三） |
+| M6-W3 | jsonl 事件级实时（解析器/控制台事件视图/CLI `-events`） | 已交付（[2026-11-02-事件级实时]，见 §五） |
 
 ## 八、冒烟记录与未实测项（W6，如实标注）
 
@@ -121,6 +140,19 @@ stdout，结果与耗时留痕。与 `internal/agent` 接线子系统协同成�
   `dispatch agents`、`dispatch run`（匹配选择 + 流式输出 + 摘要行）。
 - 假 Agent 冒烟以 `cmd /c more`（stdin 回显）为载体，验证
   stdin→Agent→stdout→会话/trace 的字节保真链路。
+
+M6-W3 冒烟（2026-11-02，Windows 本机）[2026-11-02-事件级实时]：
+
+- 假 jsonl Agent（PowerShell 脚本按 W1 词表出流）→ CLI
+  `dispatch run -events`：init/文本/工具折叠/回传/终态五类事件全渲染，
+  摘要行 `ok`；无 `-events` 时原文透传 + 提取结果行不回归。
+- 控制台：POST run → 详情 `events` 网络证据 5 条结构化（final 终态齐）；
+  浏览器验证 3/3（事件视图着色/折叠/终态、原文/事件双向切换截图）。
+- 容错实测：无 BOM 的 .ps1 中文被 PowerShell 5.1 按 ANSI 搅坏为非法
+  JSON → 解析器正确回退 raw 原样保留（M2 的 BOM 教训在本子系统的
+  正面复现——读不懂=未知，内容零丢失）。
+- serve 启动日志确认恢复语义：`已恢复派发会话历史 count=2`（M6-W2
+  落盘的冒烟会话跨重启可见）。
 
 未实测项（如实标注）：
 

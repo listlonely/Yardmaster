@@ -46,6 +46,9 @@ func TestDispatchHelperProcess(t *testing.T) {
 	switch os.Getenv("YM_GW_HELPER_BEHAVIOR") {
 	case "ok":
 		os.Stdout.WriteString("派发结果 ok\n")
+	case "jsonl": // M6-W3：W1 核实词表形状的最小事件流
+		os.Stdout.WriteString(`{"type":"system","subtype":"init"}` + "\n")
+		os.Stdout.WriteString(`{"type":"result","subtype":"success","result":"事件终态 ok"}` + "\n")
 	case "slow":
 		os.Stdout.WriteString("开始\n")
 		time.Sleep(30 * time.Second)

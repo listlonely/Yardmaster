@@ -3,8 +3,9 @@
 //	yardmaster dispatch agents            列出 dispatch.json 的 agent
 //	yardmaster dispatch init [-write]     打印三家建议配置（形状未实测，
 //	                                      须自行确认；-write 校验后落盘）
-//	yardmaster dispatch run [-agent id] [-model m] 任务文本...
-//	                                      本地引擎派发（stdout 流式透传）
+//	yardmaster dispatch run [-agent id] [-model m] [-events] 任务文本...
+//	                                      本地引擎派发（stdout 流式透传；
+//	                                      -events 实时事件流，M6-W3）
 package app
 
 import (
@@ -120,12 +121,13 @@ func dispatchRun(paths store.Paths, args []string, stdout, stderr io.Writer) err
 	fs := flag.NewFlagSet("dispatch run", flag.ContinueOnError)
 	agentID := fs.String("agent", "", "显式指定 agent（空=按 match/default 选择）")
 	model := fs.String("model", "", "argv {model} 占位的替换值")
+	events := fs.Bool("events", false, "实时事件流渲染（jsonl agent 生效；其他输出原样透传）")
 	if err := fs.Parse(args); err != nil {
 		return ErrUsage
 	}
 	task := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if task == "" {
-		fmt.Fprintln(stderr, "用法: yardmaster dispatch run [-agent id] [-model m] 任务文本")
+		fmt.Fprintln(stderr, "用法: yardmaster dispatch run [-agent id] [-model m] [-events] 任务文本")
 		return ErrUsage
 	}
 	e, err := loadEngineOrErr(paths)
@@ -137,18 +139,33 @@ func dispatchRun(paths store.Paths, args []string, stdout, stderr io.Writer) err
 		return err
 	}
 	fmt.Fprintf(stderr, "[dispatch] 选中 %s → %s\n", agent.ID, strings.Join(agent.Command, " "))
-	sess, err := e.Submit(context.Background(), agent, task, *model, stdout)
+	var stream io.Writer
+	var esw *eventStreamWriter
+	if *events {
+		esw = newEventStreamWriter(stdout)
+		stream = esw
+	} else {
+		stream = stdout
+	}
+	sess, err := e.Submit(context.Background(), agent, task, *model, stream)
 	if err != nil {
 		return err
 	}
 	sess.Wait()
+	if esw != nil { // 末行无换行时收口（运行 goroutine 的 Flush 只进 live 缓冲）
+		for _, ev := range esw.p.Flush() {
+			fmt.Fprintln(stdout, dispatch.RenderEvent(ev))
+		}
+	}
 	if sess.Result == nil {
 		return errors.New("会话无结果（异常）")
 	}
 	r := sess.Result
-	extracted := dispatch.ExtractResult(r.Output, agent.Output)
-	if extracted != "" && agent.Output == "jsonl" && extracted != r.Output {
-		fmt.Fprintln(stdout, "\n[dispatch] 结果: "+extracted)
+	if esw == nil { // 事件流已实时渲染终态，不再重复打印提取结果
+		extracted := dispatch.ExtractResult(r.Output, agent.Output)
+		if extracted != "" && agent.Output == "jsonl" && extracted != r.Output {
+			fmt.Fprintln(stdout, "\n[dispatch] 结果: "+extracted)
+		}
 	}
 	fmt.Fprintf(stderr, "[dispatch] %s · %s · %.1fs · %s\n", sess.ID, r.Outcome,
 		float64(r.DurationMS)/1000, orDefaultStr(r.ErrText, ""))
@@ -156,6 +173,25 @@ func dispatchRun(paths store.Paths, args []string, stdout, stderr io.Writer) err
 		return &ExitCodeError{Code: r.ExitCodeOf()}
 	}
 	return nil
+}
+
+// eventStreamWriter 把原始字节流喂进事件解析器并即时渲染完整事件行
+// （CLI --events；raw 事件原样回显——非 jsonl 输出退化为透传）。
+// 仅会话运行 goroutine 单写者访问，解析器无需加锁。
+type eventStreamWriter struct {
+	p   *dispatch.EventParser
+	out io.Writer
+}
+
+func newEventStreamWriter(out io.Writer) *eventStreamWriter {
+	return &eventStreamWriter{p: dispatch.NewEventParser(), out: out}
+}
+
+func (w *eventStreamWriter) Write(p []byte) (int, error) {
+	for _, ev := range w.p.Feed(p) {
+		fmt.Fprintln(w.out, dispatch.RenderEvent(ev))
+	}
+	return len(p), nil
 }
 
 func orDefaultStr(s, def string) string {

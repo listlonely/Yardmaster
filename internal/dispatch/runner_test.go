@@ -50,6 +50,14 @@ func TestHelperProcess(t *testing.T) {
 		for i := 0; i < 5; i++ {
 			fmt.Printf("chunk-%d\n", i)
 		}
+	case "jsonl": // M6-W3：W1 核实的 Claude Code stream-json 词表形状 + 末尾半行
+		fmt.Println(`{"type":"system","subtype":"init","session_id":"s-1"}`)
+		fmt.Println(`{"type":"assistant","message":{"content":[{"type":"text","text":"开始处理"}]}}`)
+		fmt.Println(`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls -la"}}]}}`)
+		fmt.Println(`{"type":"user","message":{"content":[{"type":"tool_result","content":"file.txt"}]}}`)
+		fmt.Println(`{"type":"assistant","message":{"content":[{"type":"text","text":"完成"}]}}`)
+		fmt.Println(`{"type":"result","subtype":"success","result":"答案是 42"}`)
+		fmt.Print(`{"type":"result","subtype":"error","result":"半行收口"`)
 	}
 	os.Exit(0)
 }

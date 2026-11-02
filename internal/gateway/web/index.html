@@ -133,6 +133,10 @@
           <thead><tr><th>会话</th><th>Agent</th><th>任务</th><th>状态</th><th>耗时</th><th></th></tr></thead>
           <tbody></tbody>
         </table>
+        <div class="row" id="disp-viewbar" hidden>
+          <span class="muted" id="disp-viewhint">事件视图</span><span class="spacer"></span>
+          <button class="mini" id="disp-evtoggle">切换原文</button>
+        </div>
         <pre id="disp-output" class="disp-output" hidden></pre>
       </div>
       <p class="muted">派发配置经管理 API（PUT /api/config/dispatch：严格校验、写前备份、审计）；会话终态写入观测页 trace（RoutePath=dispatch）。</p>

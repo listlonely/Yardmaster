@@ -88,6 +88,18 @@ a.quota-btn { cursor:pointer; font-size:.82rem; color:var(--accent) }
 /* 派发页（M5-W5） */
 #disp-task { width:100%; padding:6px 10px; border:1px solid var(--line); border-radius:8px; font:inherit; resize:vertical; box-sizing:border-box; margin:6px 0 }
 .disp-output { background:#0f172a; color:#dbeafe; border-radius:8px; padding:10px 12px; max-height:16rem; overflow:auto; font-size:.8rem; white-space:pre-wrap; word-break:break-all; margin-top:8px }
+/* 事件视图（M6-W3）：类型着色、工具调用折叠、终态高亮 */
+.disp-output.ev { word-break:break-word }
+.ev { padding:2px 0; border-bottom:1px dashed rgba(148,163,184,.18) }
+.ev:last-child { border-bottom:0 }
+.ev-init { color:#94a3b8; font-family:var(--mono); font-size:.72rem }
+.ev-text { color:#dbeafe }
+.ev-tool summary { color:#fbbf24; cursor:pointer; font-family:var(--mono); font-size:.72rem }
+.ev-tool .ev-sum { color:#94a3b8; margin-left:10px }
+.ev-tool pre { margin:3px 0 4px; color:#cbd5e1; font-size:.72rem; white-space:pre-wrap; word-break:break-all }
+.ev-toolres { color:#94a3b8; font-size:.75rem }
+.ev-result { color:#4ade80; font-weight:600 }
+.ev-raw { color:#9ca3af }
 #tbl-dispatch tr.sel { background:#eef4ff }
 textarea, input, select { font-family:inherit }
 

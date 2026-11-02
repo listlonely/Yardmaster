@@ -122,14 +122,15 @@ const TaskSummaryCap = 512
 
 // Session 是一次派发会话的运行态记录。
 type Session struct {
-	ID        string  `json:"id"`
-	Agent     string  `json:"agent"`
-	Task      string  `json:"task"` // 摘要（≤512 字）
-	Model     string  `json:"model,omitempty"`
-	Status    string  `json:"status"` // running | done | failed | cancelled
-	StartedAt string  `json:"started_at"`
-	EndedAt   string  `json:"ended_at,omitempty"`
-	Result    *Result `json:"result,omitempty"`
+	ID         string  `json:"id"`
+	Agent      string  `json:"agent"`
+	Task       string  `json:"task"` // 摘要（≤512 字）
+	Model      string  `json:"model,omitempty"`
+	OutputMode string  `json:"output_mode,omitempty"` // text（缺省）| jsonl（M6-W3 事件解析门槛）
+	Status     string  `json:"status"`                // running | done | failed | cancelled
+	StartedAt  string  `json:"started_at"`
+	EndedAt    string  `json:"ended_at,omitempty"`
+	Result     *Result `json:"result,omitempty"`
 
 	cancel   context.CancelFunc
 	runCtx   context.Context
@@ -149,20 +150,76 @@ func (s *Session) Output() string {
 	return ""
 }
 
+// Events 返回会话事件视图（M6-W3，仅 jsonl 模式）：运行中取 live 解析
+// 快照；终态/恢复会话无 live 时从 Result.Output 现场解析（事件是输出
+// 视图的再加工，不改留存语义）。text 模式恒 nil（不猜形状）。
+func (s *Session) Events() []Event {
+	if s.OutputMode != "jsonl" {
+		return nil
+	}
+	if s.live != nil {
+		return s.live.Events()
+	}
+	if s.Result != nil {
+		return ParseEvents(s.Result.Output)
+	}
+	return nil
+}
+
 // LiveBuffer 是会话级输出缓冲：转发到下游（可 nil）并保留尾部，运行中
-// 即可读取（控制台实时视图）。
-type LiveBuffer struct{ tw *tailWriter }
+// 即可读取（控制台实时视图）。jsonl 模式（M6-W3）流式喂入事件解析器
+// 留存结构化事件；text 模式不解析（事件恒 nil）。解析器与尾部各自加锁
+// ——HTTP 视图读与运行 goroutine 写并发。
+type LiveBuffer struct {
+	tw     *tailWriter
+	mu     sync.Mutex
+	parser *EventParser // jsonl 模式非 nil
+}
 
-// NewLiveBuffer 构造输出缓冲（out 可为 nil：仅留存）。
-func NewLiveBuffer(out io.Writer) *LiveBuffer { return &LiveBuffer{newTailWriter(out)} }
+// NewLiveBuffer 构造输出缓冲（out 可为 nil：仅留存；outputMode 非
+// "jsonl" 时不启用事件解析）。
+func NewLiveBuffer(out io.Writer, outputMode string) *LiveBuffer {
+	lb := &LiveBuffer{tw: newTailWriter(out)}
+	if outputMode == "jsonl" {
+		lb.parser = NewEventParser()
+	}
+	return lb
+}
 
-func (l *LiveBuffer) Write(p []byte) (int, error) { return l.tw.Write(p) }
+func (l *LiveBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	if l.parser != nil {
+		l.parser.Feed(p)
+	}
+	l.mu.Unlock()
+	return l.tw.Write(p)
+}
+
+// Flush 冲出事件解析器的半行残留（引擎 goroutine 在 Run 返回后调用
+// 一次——此后不再有写入）。
+func (l *LiveBuffer) Flush() {
+	l.mu.Lock()
+	if l.parser != nil {
+		l.parser.Flush()
+	}
+	l.mu.Unlock()
+}
 
 // Tail 返回尾部留存文本。
 func (l *LiveBuffer) Tail() string {
 	l.tw.mu.Lock()
 	defer l.tw.mu.Unlock()
 	return string(l.tw.tail)
+}
+
+// Events 返回留存事件快照（text 模式恒 nil）。
+func (l *LiveBuffer) Events() []Event {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.parser == nil {
+		return nil
+	}
+	return l.parser.Events()
 }
 
 // Engine 持有派发配置与会话表；零值不可用，经 NewEngine 构造。
@@ -288,9 +345,10 @@ func (e *Engine) Submit(parent context.Context, agent AgentSpec, task, model str
 	s := &Session{
 		ID:    fmt.Sprintf("d-%d-%06d", e.now().UnixMilli(), e.seq),
 		Agent: agent.ID, Task: summary(task), Model: model,
-		Status: "running", StartedAt: e.now().UTC().Format(time.RFC3339),
+		OutputMode: agent.Output,
+		Status:     "running", StartedAt: e.now().UTC().Format(time.RFC3339),
 		finished: make(chan struct{}),
-		live:     NewLiveBuffer(stream),
+		live:     NewLiveBuffer(stream, agent.Output),
 	}
 	ctx, cancel := context.WithCancel(parent)
 	s.cancel, s.runCtx = cancel, ctx
@@ -303,6 +361,7 @@ func (e *Engine) Submit(parent context.Context, agent AgentSpec, task, model str
 	go func() {
 		defer func() { <-sem; <-e.global; cancel() }()
 		res := Run(ctx, spec, task, model, s.live)
+		s.live.Flush() // 事件解析半行收口（Run 返回后无写入）
 		e.mu.Lock()
 		s.Result, s.EndedAt = &res, e.now().UTC().Format(time.RFC3339)
 		switch res.Outcome {
@@ -361,7 +420,8 @@ func (e *Engine) Snapshot(id string) (Session, bool) {
 func (s *Session) snapshot() Session {
 	return Session{
 		ID: s.ID, Agent: s.Agent, Task: s.Task, Model: s.Model,
-		Status: s.Status, StartedAt: s.StartedAt, EndedAt: s.EndedAt,
+		OutputMode: s.OutputMode,
+		Status:     s.Status, StartedAt: s.StartedAt, EndedAt: s.EndedAt,
 		Result: s.Result, live: s.live, finished: s.finished,
 	}
 }

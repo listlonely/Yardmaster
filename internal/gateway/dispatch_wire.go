@@ -169,11 +169,17 @@ func dispatchSessionView(s dispatch.Session) map[string]any {
 	}
 }
 
-// dispatchSessionDetail 是会话详情视图（含实时输出尾部——live 缓冲自带锁）。
+// dispatchSessionDetail 是会话详情视图：实时输出尾部 + 事件视图（M6-W3，
+// 仅 jsonl 模式产出 events；解析失败的行为 raw 事件原样保留，前端据此
+// 回退纯文本）。live 缓冲/解析器自带锁，恢复会话从留存尾部现场解析。
 func dispatchSessionDetail(s dispatch.Session) map[string]any {
 	v := dispatchSessionView(s)
 	v["ok"] = true
 	v["output"] = s.Output()
+	v["output_mode"] = s.OutputMode
+	if evs := s.Events(); len(evs) > 0 {
+		v["events"] = evs
+	}
 	return v
 }
 
