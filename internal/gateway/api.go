@@ -31,6 +31,7 @@ import (
 
 	"yardmaster/internal/classify"
 	"yardmaster/internal/dispatch"
+	"yardmaster/internal/plugin"
 	"yardmaster/internal/provider"
 	"yardmaster/internal/store"
 )
@@ -44,6 +45,7 @@ const (
 	cfgIntents   = "intents"
 	cfgPricing   = "pricing"  // M2-W4：模型单价表
 	cfgDispatch  = "dispatch" // M5-W5：任务→Agent 派发配置
+	cfgPlugins   = "plugins"  // M7-W3：插件清单
 )
 
 // maxConfigBody 限制配置写回请求体大小（含模型清单的 providers.json
@@ -101,6 +103,13 @@ func (s *Server) handleConfigGet(w http.ResponseWriter, name string) {
 	case cfgDispatch:
 		var f dispatch.DispatchFile
 		if err := s.loadCurrent(s.dispatchPath(), &f); err != nil {
+			writeAPIErr(w, err)
+			return
+		}
+		writeJSON(w, f)
+	case cfgPlugins:
+		var f plugin.File
+		if err := s.loadCurrent(s.pluginsPath(), &f); err != nil {
 			writeAPIErr(w, err)
 			return
 		}
@@ -283,6 +292,32 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, name st
 			}
 		}
 		s.writeResult(w, effectImmediate, f)
+	case cfgPlugins:
+		var f plugin.File
+		if err := strictDecode(dec, &f); err != nil {
+			writeAPIErr(w, badRequest(err))
+			return
+		}
+		// 现值损坏 → 409 拒绝覆写（fail-closed：宁可拒绝编辑也不覆盖
+		// 可能含有用户数据的损坏文件；cur 仅作闸门，全文档替换无合并）。
+		var cur plugin.File
+		if err := s.loadCurrentForWrite(s.pluginsPath(), &cur); err != nil {
+			writeAPIErr(w, err)
+			return
+		}
+		if err := plugin.Validate(f); err != nil {
+			writeAPIErr(w, badRequest(err))
+			return
+		}
+		if err := s.writeConfig(s.pluginsPath(), cfgPlugins, f); err != nil {
+			writeAPIErr(w, err)
+			return
+		}
+		// 热生效：注册表重建/停启实例（M7-W3）。
+		if s.Plugins != nil {
+			s.Plugins.Reload(f)
+		}
+		s.writeResult(w, effectImmediate, f)
 	default:
 		writeAPIErr(w, errUnknownConfig{name})
 	}
@@ -330,6 +365,8 @@ func (s *Server) keysPath() string     { return filepath.Join(s.AppDir, "keys.js
 func (s *Server) intentsPath() string  { return filepath.Join(s.AppDir, "intents.json") }
 func (s *Server) pricingPath() string  { return filepath.Join(s.AppDir, "pricing.json") }
 func (s *Server) dispatchPath() string { return filepath.Join(s.AppDir, "dispatch.json") }
+
+func (s *Server) pluginsPath() string { return filepath.Join(s.AppDir, "plugins.json") }
 
 // handleCost 返回最近 N 天的成本报告（M2-W4）：单价表 × trace 聚合，
 // 查询时计算、无新增持久化。查询参数：days（默认 7，上限 30=trace 保留期）。
@@ -628,7 +665,7 @@ func (e *apiError) Error() string { return e.Msg }
 type errUnknownConfig struct{ name string }
 
 func (e errUnknownConfig) Error() string {
-	return "未知配置名 " + e.name + "（可用: providers | settings | rules | keys | intents | pricing | dispatch）"
+	return "未知配置名 " + e.name + "（可用: providers | settings | rules | keys | intents | pricing | dispatch | plugins）"
 }
 
 func (e errUnknownConfig) status() int { return http.StatusNotFound }

@@ -91,6 +91,22 @@ func (c *IntentChain) Classify(message string) string {
 	return c.classifyL1Locked(strategy, message)
 }
 
+// Vocabulary 返回当前生效的意图词表（内置+自定义；插件分类兜底的
+// 校验依据，M7-W4——词表外 intent 不采纳）。nil 接收者安全。
+func (c *IntentChain) Vocabulary() []string {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	strategy := c.loadIntentsLocked()
+	c.mu.Unlock()
+	out := append([]string(nil), classify.BuiltinIntents...)
+	for _, def := range intentsOf(strategy) {
+		out = append(out, def.ID)
+	}
+	return out
+}
+
 // loadIntentsLocked 读取自定义意图（mtime 变化才重载；解析失败沿用
 // 旧词表并告警——热生效不中断服务）。
 func (c *IntentChain) loadIntentsLocked() *classify.UserStrategy {

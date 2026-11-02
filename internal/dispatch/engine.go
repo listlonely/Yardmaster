@@ -37,6 +37,7 @@ type AgentSpec struct {
 	Timeout       string   `json:"timeout,omitempty"`        // "10m"；空 = 缺省
 	MaxConcurrent int      `json:"max_concurrent,omitempty"` // 0 = 1
 	Output        string   `json:"output,omitempty"`         // text（缺省）| jsonl
+	Parser        string   `json:"parser,omitempty"`         // 输出解析插件 id（M7-W4）；不可用=该行 raw 回退
 	Default       bool     `json:"default,omitempty"`        // 兜底，至多一个
 	Match         *Match   `json:"match,omitempty"`
 }
@@ -49,7 +50,8 @@ type DispatchFile struct {
 
 // Runtime 把配置条目转为 runner 的运行态 Spec。
 func (a AgentSpec) Runtime() (Spec, error) {
-	spec := Spec{ID: a.ID, Command: a.Command, WorkDir: a.WorkDir, Env: a.Env, MaxConcurrent: a.MaxConcurrent}
+	spec := Spec{ID: a.ID, Command: a.Command, WorkDir: a.WorkDir, Env: a.Env,
+		MaxConcurrent: a.MaxConcurrent, Parser: a.Parser}
 	if a.Timeout != "" {
 		d, err := time.ParseDuration(a.Timeout)
 		if err != nil || d <= 0 {
@@ -201,6 +203,17 @@ func (l *LiveBuffer) Write(p []byte) (int, error) {
 	return l.tw.Write(p)
 }
 
+// UseParser 强制启用解析器并挂插件钩子（M7-W4 agent parser；spec.Parser
+// 非空时由 Submit 在首写前调用一次）。
+func (l *LiveBuffer) UseParser(hook func(line string) ([]Event, bool)) {
+	l.mu.Lock()
+	if l.parser == nil {
+		l.parser = NewEventParser()
+	}
+	l.parser.Hook = hook
+	l.mu.Unlock()
+}
+
 // Flush 冲出事件解析器的半行残留（引擎 goroutine 在 Run 返回后调用
 // 一次——此后不再有写入）。
 func (l *LiveBuffer) Flush() {
@@ -243,6 +256,11 @@ type Engine struct {
 	// OnFinish 在会话终态时回调（观察者：派发 trace/OTLP 导出经此接入；
 	// nil=无）。回调在会话 goroutine 内执行，应快速返回。
 	OnFinish func(*Session)
+
+	// ParseHook 是输出解析插件桥（M7-W4）：spec.Parser 非空时按行调用
+	//（ok=false/错误 → 该行内置词表/raw 回退）。由网关装配注入；nil=
+	// 解析插件不生效。仅在装配期赋值，运行期只读。
+	ParseHook func(pluginID, line string) ([]Event, bool)
 }
 
 // NewEngine 构造引擎；f 为 nil 表示无任何 agent（显式派发报错指引）。
@@ -382,6 +400,14 @@ func (e *Engine) Submit(parent context.Context, agent AgentSpec, task, model str
 	e.sessions = append(e.sessions, s)
 	if len(e.sessions) > SessionRingCap {
 		e.sessions = e.sessions[len(e.sessions)-SessionRingCap:]
+	}
+	// 解析插件（M7-W4）：强制启用解析器并挂钩子（outputMode 一并改写为
+	// jsonl——事件视图数据源；插件不可用行内回退 raw）。
+	if spec.Parser != "" && e.ParseHook != nil {
+		s.live.UseParser(func(line string) ([]Event, bool) {
+			return e.ParseHook(spec.Parser, line)
+		})
+		s.OutputMode = "jsonl"
 	}
 	e.mu.Unlock()
 

@@ -35,6 +35,7 @@ type Spec struct {
 	Env           []string      `json:"env,omitempty"`            // 附加环境变量（KEY=VAL；继承父进程环境）
 	Timeout       time.Duration `json:"timeout,omitempty"`        // 0 = DefaultTimeout
 	MaxConcurrent int           `json:"max_concurrent,omitempty"` // 0 = 1
+	Parser        string        `json:"parser,omitempty"`         // 输出解析插件 id（M7-W4；空=内置词表）
 }
 
 // Outcome 是一次 headless 会话的归一结局。

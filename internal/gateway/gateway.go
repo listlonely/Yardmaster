@@ -28,6 +28,7 @@ import (
 	"yardmaster/internal/credential"
 	"yardmaster/internal/dispatch"
 	"yardmaster/internal/netproxy"
+	"yardmaster/internal/plugin"
 	"yardmaster/internal/provider"
 )
 
@@ -69,6 +70,7 @@ type Server struct {
 	Token         string            // 访问令牌（M2-W5）：非空时 /v1 与 /api 要求匹配；空=本机信任态
 	Creds         *credential.Store // OAuth 凭证库（M3-W3）；nil=无 OAuth 能力
 	Dispatch      *dispatch.Engine  // 任务→Agent 派发引擎（M5-W4）；nil=未挂载
+	Plugins       *plugin.Registry  // 插件注册表（M7-W3）；nil=未挂载
 	oauth         oauthRuntime      // OAuth 运行态（token 缓存/single-flight）
 	started       time.Time
 }
@@ -103,6 +105,13 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/reload", s.handleReload)
 	mux.HandleFunc("GET /api/cost", s.handleCost)
 	mux.HandleFunc("POST /api/pricing/sync", s.handlePricingSync) // M7-W1：models.dev 单价同步
+	mux.HandleFunc("GET /api/plugins", s.handlePluginsView)       // M7-W5：插件状态视图
+	mux.HandleFunc("POST /api/plugins/{id}/enable", func(w http.ResponseWriter, r *http.Request) {
+		s.handlePluginToggle(w, r.PathValue("id"), "enable")
+	})
+	mux.HandleFunc("POST /api/plugins/{id}/disable", func(w http.ResponseWriter, r *http.Request) {
+		s.handlePluginToggle(w, r.PathValue("id"), "disable")
+	})
 	// 派发管理面（M5-W5）：提交/清单/详情/取消；配置读写走 /api/config/dispatch
 	mux.HandleFunc("POST /api/dispatch/run", s.handleDispatchRun)
 	mux.HandleFunc("GET /api/dispatch/agents", s.handleDispatchAgents)
@@ -673,7 +682,46 @@ func (s *Server) attempt(ctx context.Context, client ClientProto, clientReq any,
 	// 就地纠偏端点重试一次（纠偏后不再匹配纠偏条件，重试深度有界）。
 	if resp.StatusCode == http.StatusOK {
 		mapped, peek, ok := peekBody(resp, stream)
-		if ok { // 未命中：响应体已接回，正常中继
+		if ok { // 内置词表未命中：插件长尾判定（M7-W4 vendor.verdict，内置
+			// 先行；无插件/冷却/超时=原样中继，不阻塞主流程）
+			if s.Plugins != nil && s.Plugins.RunningWithCap(plugin.CapVendor) {
+				if raw, err := s.Plugins.VendorVerdict(resp.StatusCode, peek); err == nil {
+					var v struct {
+						Action  string `json:"action"`
+						Status  int    `json:"status"`
+						BaseURL string `json:"base_url"`
+					}
+					if json.Unmarshal(raw, &v) == nil {
+						switch v.Action {
+						case "error": // 伪装拒绝映射（errorReply 同款语义）
+							if v.Status >= 400 && v.Status <= 599 {
+								return attemptResult{status: v.Status, body: peek}
+							}
+						case "retry": // 端点纠偏（GLM 1113 同款语义，落盘审计同规）
+							if v.BaseURL != "" {
+								if cerr := s.Planner.CorrectBaseURL(cand.Provider.ID, v.BaseURL, s.ProvidersPath); cerr == nil {
+									slog.Warn("插件端点纠偏：改写 base_url 并重试",
+										"provider", cand.Provider.ID, "base_url", v.BaseURL)
+									cand.Provider.BaseURL = v.BaseURL
+									resp2, err2 := doSend()
+									if err2 != nil {
+										return attemptResult{err: err2}
+									}
+									if resp2.StatusCode == http.StatusOK {
+										mapped2, peek2, ok2 := peekBody(resp2, stream)
+										if ok2 {
+											return attemptResult{resp: resp2, status: resp2.StatusCode}
+										}
+										_ = resp2.Body.Close()
+										return attemptResult{status: mapped2, body: peek2}
+									}
+									return attemptResult{resp: resp2, status: resp2.StatusCode}
+								}
+							}
+						}
+					}
+				}
+			}
 			return attemptResult{resp: resp, status: resp.StatusCode}
 		}
 		_ = resp.Body.Close()

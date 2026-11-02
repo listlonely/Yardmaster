@@ -116,6 +116,9 @@ func (s *Server) handleDispatchRun(w http.ResponseWriter, r *http.Request) {
 	if s.Intents != nil {
 		intent = s.Intents.Classify(req.Task)
 	}
+	if intent == "" { // 内置链未命中：插件分类兜底（M7-W4，词表校验+熔断内建）
+		intent = s.classifyIntentWithPlugin(req.Task)
+	}
 	// agent/model：请求显式 > 模板默认 > match/default 匹配。
 	if req.Agent == "" {
 		req.Agent = tmpl.Agent

@@ -24,6 +24,7 @@ import (
 	"yardmaster/internal/gateway"
 	"yardmaster/internal/netproxy"
 	"yardmaster/internal/otlp"
+	"yardmaster/internal/plugin"
 	"yardmaster/internal/store"
 )
 
@@ -164,6 +165,24 @@ func (st *serveSetup) startHelpers(ctx context.Context) func() {
 		stops = append(stops, exp.Close)
 		st.srv.Traces.OnTrace = exp.Export
 		slog.Info("otlp traces 导出已开启", "endpoint", st.settings.OTel.Endpoint)
+	}
+
+	// 插件体系（M7-W3）：plugins.json fail-closed——解析/校验失败=全部
+	// 禁用+留痕（绝不当作空配置静默跑）；enabled 条目长驻子进程。
+	pf, perr := plugin.Load(st.paths.PluginsPath())
+	if perr == nil {
+		perr = plugin.Validate(pf)
+	}
+	if perr != nil && !errors.Is(perr, os.ErrNotExist) {
+		slog.Warn("plugins.json 不可用，插件全部禁用（读不懂=未知）", "err", perr)
+		pf = plugin.File{}
+	}
+	if len(pf.Plugins) > 0 {
+		reg := plugin.NewRegistry()
+		reg.Start(pf)
+		stops = append(stops, reg.Stop)
+		st.srv.AttachPlugins(reg) // OnTrace 链式扇出 + 派发解析钩子桥
+		slog.Info("插件已装配", "count", len(pf.Plugins))
 	}
 
 	// OAuth 到期前主动刷新（M3-W3）：每分钟扫描，提前 10 分钟续期。

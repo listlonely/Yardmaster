@@ -49,9 +49,12 @@ const (
 
 // EventParser 是流式 jsonl 行解析器：单写者 Feed，完整行逐条归类；
 // 半行暂存至 Flush（运行期视图读取不冲刷，避免半行与后续分块重复）。
+// Hook 非空时（M7-W4 agent parser 插件）优先走插件解析——ok=false 或
+// 错误回退内置词表（该行 raw 保留，内容零丢失）。
 type EventParser struct {
 	buf    []byte
 	events []Event
+	Hook   func(line string) ([]Event, bool)
 }
 
 func NewEventParser() *EventParser { return &EventParser{} }
@@ -67,7 +70,7 @@ func (p *EventParser) Feed(b []byte) []Event {
 		}
 		line := p.buf[:i]
 		p.buf = p.buf[i+1:]
-		out = append(out, classifyLine(string(line))...)
+		out = append(out, p.classify(string(line))...)
 	}
 	p.events = append(p.events, out...)
 	p.trim()
@@ -81,10 +84,20 @@ func (p *EventParser) Flush() []Event {
 	}
 	line := string(p.buf)
 	p.buf = nil
-	out := classifyLine(line)
+	out := p.classify(line)
 	p.events = append(p.events, out...)
 	p.trim()
 	return out
+}
+
+// classify 归类一行：Hook（插件解析）优先，ok=false 回退内置词表。
+func (p *EventParser) classify(line string) []Event {
+	if p.Hook != nil {
+		if evs, ok := p.Hook(line); ok {
+			return evs
+		}
+	}
+	return classifyLine(line)
 }
 
 // Events 返回留存事件快照（旧→新）。调用方负责并发保护。
