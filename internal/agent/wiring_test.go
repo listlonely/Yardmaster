@@ -110,7 +110,10 @@ func TestWireCodexTOMLAndDrift(t *testing.T) {
 		"model_provider = \"yardmaster\"",
 		"[model_providers.yardmaster]",
 		`base_url = "http://127.0.0.1:8317/v1"`,
-		`api_key = "gw-codex"`,
+		// 字段形状经 Magpie codex.go 交叉校准 [2026-11-03-M9-W2]：
+		// key 载体=experimental_bearer_token，协议=responses
+		`experimental_bearer_token = "gw-codex"`,
+		`wire_api = "responses"`,
 		"# codex 用户配置",
 		`model = "gpt-5.2-mini" # 用户注释`,
 	} {
@@ -177,26 +180,139 @@ func TestWireOpencodeCreatesAndUnsets(t *testing.T) {
 		t.Fatalf("内容异常\n%s", s)
 	}
 
-	// 断开：软件创建的文件 → 逆操作删除名下键
+	// 断开：软件创建的文件 → 逆操作删除名下键 → 变空移除（F4）
 	if err := m.Unwire(opencodeDef()); err != nil {
 		t.Fatal(err)
 	}
-	restored, err := os.ReadFile(cfgPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(restored), "yardmaster") {
-		t.Fatalf("名下键未删除\n%s", restored)
+	if _, err := os.Stat(cfgPath); !os.IsNotExist(err) {
+		t.Fatalf("软件创建且清空后的配置应被移除")
 	}
 }
 
 func TestSpecTBDRefused(t *testing.T) {
 	m := newManager(t)
-	if _, err := m.Wire(geminiDef(), "m"); !strings.Contains(err.Error(), "待核验") {
-		t.Fatalf("gemini-cli 应拒绝接线: %v", err)
+	def, _ := ByID("cline")
+	if _, err := m.Wire(def, "m"); !strings.Contains(err.Error(), "待核验") {
+		t.Fatalf("cline 应拒绝接线: %v", err)
 	}
-	if _, err := m.Preview(geminiDef(), "m"); err == nil {
+	if _, err := m.Preview(def, "m"); err == nil {
 		t.Fatal("preview 也应拒绝")
+	}
+}
+
+// userGeminiSettings/userGeminiEnv 是 Gemini CLI 用户已有配置（含自有
+// 键与注释，接线必须逐字节保留）。
+const userGeminiSettings = `{
+  // 用户自己的注释
+  "theme": "auto",
+  "model": {"name": "gemini-2.5-pro", "maxSessionTurns": 50}
+}`
+
+const userGeminiEnv = `# gemini 用户自己的注释
+CUSTOM_VAR=keep
+GEMINI_API_KEY=user-own-key
+`
+
+func TestWireGeminiTwoFiles(t *testing.T) {
+	m := newManager(t)
+	home, _ := os.UserHomeDir()
+	settingsPath := filepath.Join(home, ".gemini", "settings.json")
+	envPath := filepath.Join(home, ".gemini", ".env")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(userGeminiSettings), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(envPath, []byte(userGeminiEnv), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// 接线：settings.json 写 auth+model；.env 注入端点与 key（保留用户键）
+	if _, err := m.Wire(geminiDef(), "siliconflow/zai-org/GLM-5.3-Flash"); err != nil {
+		t.Fatalf("Wire: %v", err)
+	}
+	sOut, _ := os.ReadFile(settingsPath)
+	s := string(sOut)
+	for _, want := range []string{
+		`"selectedType": "gemini-api-key"`,
+		`"name": "siliconflow/zai-org/GLM-5.3-Flash"`,
+		`"maxSessionTurns": 50`, // 用户自有键保留
+		"// 用户自己的注释",
+	} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("settings.json 缺少 %q\n%s", want, s)
+		}
+	}
+	eOut, _ := os.ReadFile(envPath)
+	e := string(eOut)
+	for _, want := range []string{
+		"GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:8317",
+		"GEMINI_API_KEY=gw-gemini-cli",
+		"CUSTOM_VAR=keep", // 用户自有键保留
+		"# gemini 用户自己的注释",
+	} {
+		if !strings.Contains(e, want) {
+			t.Fatalf(".env 缺少 %q\n%s", want, e)
+		}
+	}
+	if strings.Contains(e, "user-own-key") {
+		t.Fatalf(".env 用户 key 应被接线值替换\n%s", e)
+	}
+
+	// 漂移：覆盖两文件（.env 的 key 被外部改动）
+	if err := os.WriteFile(envPath, []byte(strings.Replace(e, "GEMINI_API_KEY=gw-gemini-cli", "GEMINI_API_KEY=tampered", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := m.Drift(geminiDef())
+	if err != nil {
+		t.Fatal(err)
+	}
+	drifted := 0
+	for _, r := range rows {
+		if r.Drift {
+			drifted++
+		}
+	}
+	if drifted != 1 {
+		t.Fatalf("应恰好 1 处漂移: %+v", rows)
+	}
+
+	// 断开：两文件均逐字节还原
+	if err := m.Unwire(geminiDef()); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(settingsPath); string(got) != userGeminiSettings {
+		t.Fatalf("settings.json 未逐字节还原\n%s", got)
+	}
+	if got, _ := os.ReadFile(envPath); string(got) != userGeminiEnv {
+		t.Fatalf(".env 未逐字节还原\n%s", got)
+	}
+}
+
+func TestWireGeminiCreatesAndCleansUp(t *testing.T) {
+	m := newManager(t)
+	home, _ := os.UserHomeDir()
+	settingsPath := filepath.Join(home, ".gemini", "settings.json")
+	envPath := filepath.Join(home, ".gemini", ".env")
+
+	// 两文件均不存在：接线创建
+	if _, err := m.Wire(geminiDef(), "group/gem"); err != nil {
+		t.Fatalf("Wire: %v", err)
+	}
+	for _, p := range []string{settingsPath, envPath} {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("应创建 %s: %v", p, err)
+		}
+	}
+	// 断开：软件创建的文件 → 删名下键 → 变空则移除
+	if err := m.Unwire(geminiDef()); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{settingsPath, envPath} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("软件创建的文件应被移除: %s", p)
+		}
 	}
 }
 

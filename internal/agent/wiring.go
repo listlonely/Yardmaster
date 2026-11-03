@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -44,7 +45,9 @@ type DriftRow struct {
 
 type appliedFile struct {
 	Original string `json:"original"`
-	Stash    string `json:"stash,omitempty"` // 空=文件由本软件创建
+	Stash    string `json:"stash,omitempty"`  // 空=文件由本软件创建
+	Format   Format `json:"format,omitempty"` // 空=主文件（沿用 Def.Format，兼容旧记录）
+	Ops      []Op   `json:"ops,omitempty"`    // 该文件的键写入（空=旧记录，回退 rec.Ops）
 }
 
 // WiringRecord 是一次接入的审计记录（F10 改写审计）。
@@ -98,6 +101,30 @@ func targetPath(def Def) (string, error) {
 	return abs, nil
 }
 
+// fileSpec 是一次接线涉及的单个文件：主文件在前，Extras 按序跟随。
+type fileSpec struct {
+	path   string
+	format Format
+	ops    []Op
+}
+
+// fileSpecs 展开主文件与附属文件（含各自动态 Ops 求值）。
+func fileSpecs(def Def, addr, key, model string) ([]fileSpec, error) {
+	main, err := targetPath(def)
+	if err != nil {
+		return nil, err
+	}
+	specs := []fileSpec{{path: main, format: def.Format, ops: def.Ops(addr, key, model)}}
+	for _, ex := range def.Extras {
+		p, err := targetPath(ex)
+		if err != nil {
+			return nil, err
+		}
+		specs = append(specs, fileSpec{path: p, format: ex.Format, ops: ex.Ops(addr, key, model)})
+	}
+	return specs, nil
+}
+
 // StateOf 返回 Agent 当前接线状态（含漂移判定）。
 func (m *Manager) StateOf(def Def) (State, error) {
 	if def.SpecNote != "" {
@@ -132,98 +159,79 @@ func (m *Manager) StateOf(def Def) (State, error) {
 }
 
 // Preview 返回接线将产生的变更（diff 行）；不改任何文件（F4 预览）。
+// 覆盖主文件与附属文件。
 func (m *Manager) Preview(def Def, model string) ([]string, error) {
 	if def.SpecNote != "" {
 		return nil, fmt.Errorf("%w: %s", ErrSpecTBD, def.SpecNote)
 	}
-	path, err := targetPath(def)
+	specs, err := fileSpecs(def, m.Addr, "gw-"+def.ID, model)
 	if err != nil {
 		return nil, err
 	}
-	data, _ := os.ReadFile(path)
-	key := "gw-" + def.ID
 	var lines []string
-	for _, op := range def.Ops(m.Addr, key, model) {
-		old := "(未设置)"
-		if v, ok := getValue(data, def.Format, op); ok {
-			old = fmt.Sprint(v)
+	for _, spec := range specs {
+		data, _ := os.ReadFile(spec.path)
+		for _, op := range spec.ops {
+			old := "(未设置)"
+			if v, ok := getValue(data, spec.format, op); ok {
+				old = fmt.Sprint(v)
+			}
+			lines = append(lines,
+				fmt.Sprintf("- %s: %s", op.Desc, old),
+				fmt.Sprintf("+ %s: %s", op.Desc, fmt.Sprint(op.Value)),
+			)
 		}
-		lines = append(lines,
-			fmt.Sprintf("- %s: %s", op.Desc, old),
-			fmt.Sprintf("+ %s: %s", op.Desc, fmt.Sprint(op.Value)),
-		)
+		lines = append(lines, fmt.Sprintf("@ 文件: %s", spec.path))
 	}
-	lines = append(lines, fmt.Sprintf("@ 文件: %s", path))
 	return lines, nil
 }
 
 // Wire 执行接线：备份原文件 → 写入 → 记录审计。已接线时幂等更新。
+// 覆盖主文件与附属文件（Extras），同一份接线记录按 Files 序展开。
 func (m *Manager) Wire(def Def, model string) (WiringRecord, error) {
 	if def.SpecNote != "" {
 		return WiringRecord{}, fmt.Errorf("%w: %s", ErrSpecTBD, def.SpecNote)
 	}
-	path, err := targetPath(def)
+	key := "gw-" + def.ID
+	specs, err := fileSpecs(def, m.Addr, key, model)
 	if err != nil {
 		return WiringRecord{}, err
 	}
-	data, _ := os.ReadFile(path)
-	key := "gw-" + def.ID
-	ops := def.Ops(m.Addr, key, model)
 
-	// 备份栈：首次接线保存原始字节；已有备份不得覆盖（二次接线时
-	// 首次原始值优先，§4.3）
-	stashPath := ""
-	if data != nil {
-		stashPath = filepath.Join(m.Paths.StashDir(), def.ID, "0")
-		if err := os.MkdirAll(filepath.Dir(stashPath), 0o700); err != nil {
+	var files []appliedFile
+	for i, spec := range specs {
+		data, _ := os.ReadFile(spec.path)
+
+		// 备份栈：首次接线保存原始字节；已有备份不得覆盖（二次接线时
+		// 首次原始值优先，§4.3）。主文件 stash 序号 0，附属文件 1..n。
+		stashPath := ""
+		if data != nil {
+			stashPath = filepath.Join(m.Paths.StashDir(), def.ID, strconv.Itoa(i))
+			if err := os.MkdirAll(filepath.Dir(stashPath), 0o700); err != nil {
+				return WiringRecord{}, err
+			}
+			if _, statErr := os.Stat(stashPath); os.IsNotExist(statErr) {
+				if err := os.WriteFile(stashPath, data, 0o600); err != nil {
+					return WiringRecord{}, fmt.Errorf("备份原配置: %w", err)
+				}
+			}
+		}
+
+		out, err := applyOps(data, spec)
+		if err != nil {
+			return WiringRecord{}, fmt.Errorf("%s: %w", spec.path, err)
+		}
+		if err := edit.WriteAtomic(spec.path, out); err != nil {
 			return WiringRecord{}, err
 		}
-		if _, statErr := os.Stat(stashPath); os.IsNotExist(statErr) {
-			if err := os.WriteFile(stashPath, data, 0o600); err != nil {
-				return WiringRecord{}, fmt.Errorf("备份原配置: %w", err)
-			}
-		}
-	}
-
-	// 应用
-	var out []byte
-	switch def.Format {
-	case FormatJSONC:
-		out = []byte("{}")
-		if data != nil {
-			out = data
-		}
-		doc, perr := edit.ParseJSONC(out)
-		if perr != nil {
-			return WiringRecord{}, fmt.Errorf("解析 %s: %w", path, perr)
-		}
-		for _, op := range ops {
-			if err := doc.Set(op.JSONPath, op.Value); err != nil {
-				return WiringRecord{}, fmt.Errorf("%s: %w", op.Desc, err)
-			}
-		}
-		out = doc.Bytes()
-	case FormatTOML:
-		out = data
-		for _, op := range ops {
-			var err error
-			out, err = edit.SetTOML(out, op.TOMLTable, op.TOMLKey, op.Value)
-			if err != nil {
-				return WiringRecord{}, fmt.Errorf("%s: %w", op.Desc, err)
-			}
-		}
-	default:
-		return WiringRecord{}, fmt.Errorf("不支持的格式 %q", def.Format)
-	}
-	if err := edit.WriteAtomic(path, out); err != nil {
-		return WiringRecord{}, err
+		files = append(files, appliedFile{Original: spec.path, Stash: stashPath, Format: spec.format, Ops: spec.ops})
 	}
 
 	rec := WiringRecord{
 		Agent: def.ID, WiredAt: time.Now().Format(time.RFC3339),
 		Addr: m.Addr, Key: key, Model: model,
-		Files: []appliedFile{{Original: path, Stash: stashPath}},
-		Ops:   ops,
+		Files: files,
+		Ops:   specs[0].ops,
 	}
 	applied, err := m.loadApplied()
 	if err != nil {
@@ -236,8 +244,47 @@ func (m *Manager) Wire(def Def, model string) (WiringRecord, error) {
 	return rec, nil
 }
 
+// applyOps 对单个文件按其格式应用全部键写入。
+func applyOps(data []byte, spec fileSpec) ([]byte, error) {
+	switch spec.format {
+	case FormatJSONC:
+		out := []byte("{}")
+		if data != nil {
+			out = data
+		}
+		doc, perr := edit.ParseJSONC(out)
+		if perr != nil {
+			return nil, perr
+		}
+		for _, op := range spec.ops {
+			if err := doc.Set(op.JSONPath, op.Value); err != nil {
+				return nil, err
+			}
+		}
+		return doc.Bytes(), nil
+	case FormatTOML:
+		out := data
+		for _, op := range spec.ops {
+			var err error
+			out, err = edit.SetTOML(out, op.TOMLTable, op.TOMLKey, op.Value)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return out, nil
+	case FormatEnv:
+		out := data
+		for _, op := range spec.ops {
+			out = edit.SetEnv(out, op.EnvKey, fmt.Sprint(op.Value))
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("不支持的格式 %q", spec.format)
+	}
+}
+
 // Unwire 断开：有备份逐字节还原；软件创建的文件按逆操作删除名下键
-// （删除后为空对象则移除文件，F4）。
+// （删除后为空配置则移除文件，F4）。
 func (m *Manager) Unwire(def Def) error {
 	applied, err := m.loadApplied()
 	if err != nil {
@@ -248,6 +295,14 @@ func (m *Manager) Unwire(def Def) error {
 		return fmt.Errorf("%s 未接线", def.ID)
 	}
 	for _, f := range rec.Files {
+		format := f.Format
+		if format == "" {
+			format = def.Format // 旧记录无 per-file 格式：主文件回退
+		}
+		ops := rec.Ops
+		if len(f.Ops) > 0 {
+			ops = f.Ops // 附属文件有自己的键写入
+		}
 		if f.Stash != "" {
 			orig, err := os.ReadFile(f.Stash)
 			if err != nil {
@@ -264,26 +319,30 @@ func (m *Manager) Unwire(def Def) error {
 		if data == nil {
 			continue
 		}
-		switch def.Format {
+		switch format {
 		case FormatJSONC:
 			doc, perr := edit.ParseJSONC(data)
 			if perr != nil {
 				return perr
 			}
-			for _, op := range rec.Ops {
+			for _, op := range ops {
 				_ = doc.Unset(op.JSONPath)
 			}
 			data = pruneJSONDoc(doc.Bytes())
 		case FormatTOML:
-			for _, op := range rec.Ops {
+			for _, op := range ops {
 				var err error
 				data, err = edit.UnsetTOML(data, op.TOMLTable, op.TOMLKey)
 				if err != nil {
 					return err
 				}
 			}
+		case FormatEnv:
+			for _, op := range ops {
+				data = edit.UnsetEnv(data, op.EnvKey)
+			}
 		}
-		if isEmptyConfig(data) {
+		if isEmptyConfig(data, format) {
 			_ = os.Remove(f.Original)
 			continue
 		}
@@ -311,14 +370,22 @@ func (m *Manager) Drift(def Def) ([]DriftRow, error) {
 func (m *Manager) driftFor(def Def, rec WiringRecord) ([]DriftRow, error) {
 	var rows []DriftRow
 	for _, f := range rec.Files {
+		format := f.Format
+		if format == "" {
+			format = def.Format // 旧记录无 per-file 格式：主文件回退
+		}
+		ops := rec.Ops
+		if len(f.Ops) > 0 {
+			ops = f.Ops // 附属文件有自己的键写入
+		}
 		data, err := os.ReadFile(f.Original)
 		if err != nil {
 			rows = append(rows, DriftRow{Desc: "配置文件", Expected: "存在", Current: "不可读: " + err.Error(), Drift: true})
 			continue
 		}
-		for _, op := range rec.Ops {
+		for _, op := range ops {
 			cur := "(键已消失)"
-			if v, ok := getValue(data, def.Format, op); ok {
+			if v, ok := getValue(data, format, op); ok {
 				cur = fmt.Sprint(v)
 			}
 			want := fmt.Sprint(op.Value)
@@ -345,14 +412,23 @@ func getValue(data []byte, format Format, op Op) (any, bool) {
 		return v, ok
 	case FormatTOML:
 		return edit.GetTOML(data, op.TOMLTable, op.TOMLKey)
+	case FormatEnv:
+		v, ok := edit.GetEnv(data, op.EnvKey)
+		return v, ok
 	}
 	return nil, false
 }
 
-// isEmptyConfig 判断配置是否只剩空对象/空白（F4：新建文件删除条件）。
-func isEmptyConfig(data []byte) bool {
-	return len(strings.TrimSpace(string(data))) == 0 ||
-		strings.TrimSpace(string(data)) == "{}"
+// isEmptyConfig 判断配置是否只剩空对象/空白/纯注释（F4：新建文件
+// 删除条件，env 格式按只剩注释与空行计）。
+func isEmptyConfig(data []byte, format Format) bool {
+	switch format {
+	case FormatEnv:
+		return edit.IsEmptyEnv(data)
+	default:
+		return len(strings.TrimSpace(string(data))) == 0 ||
+			strings.TrimSpace(string(data)) == "{}"
+	}
 }
 
 // pruneJSONDoc 递归删除变为空对象的容器（仅用于本软件创建的文件——
@@ -366,6 +442,9 @@ func pruneJSONDoc(data []byte) []byte {
 		return data
 	}
 	pruned := pruneJSONValue(m)
+	if pruned == nil {
+		return []byte("{}") // 名下键全删：归一为空对象供 isEmptyConfig 判定
+	}
 	out, err := json.Marshal(pruned)
 	if err != nil {
 		return data

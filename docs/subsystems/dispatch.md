@@ -252,6 +252,17 @@ Claude Code 2.1.314 → 网关 → 硅基流动）[2026-11-02-v0.6.0发布]：
   降级留档（形状沿用官方文档口径）。
 - Linux 侧真实派发冒烟（无 WSL/实机；降级为 CI fake-agent 冒烟）。
 
+> [2026-11-03-M9-W2 终局标注] codex/gemini headless 形状**正式降级
+> 留档**（非悬置）：用户确认无两家订阅账户，真实登录校准条件不具备；
+> 参考实现（Magpie agent-wiring）只做 CLI 配置接线、不跑 headless
+> dispatch，无 stdout/jsonl 形状参考可借。CLI 本体已装（codex-cli
+> 0.166.0 / gemini 0.66.0），有账户后按 M6-W1 claude 同口径冒烟即可
+> 解除。同轮已完成的替代校准见 agent/registry.go——接线规格（写入
+> Agent 配置的字段名）经 Magpie 真实世界实现交叉核验（codex
+> `experimental_bearer_token`+`wire_api="responses"`；gemini-cli
+> settings.json `security.auth.selectedType`+`~/.gemini/.env` 注入），
+> 「Agent→网关」使用路径不受本次留档影响。
+
 ## 九、真实校准记录（M6-W1，2026-10-30）[2026-10-30-真实校准]
 
 - **Claude Code headless 真实冒烟**（claude-code 2.1.314，Windows 本机）：

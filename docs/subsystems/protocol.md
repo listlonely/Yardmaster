@@ -108,3 +108,12 @@ Gemini(W3)     枢纽翻译  枢纽翻译    枢纽翻译         透传
   evToolDone 同级的扩展位（gwEvent 七类之外新增需过矩阵回归），触发
   条件为真实凭证核实 reasoning item 形状且用户反馈跨轮 reasoning
   上下文丢失造成质量回归。
+
+**终局定稿 [2026-11-03-M9-W2]**：维持 (b) 为**正式终局**（非悬置）——
+M9 盘点确认本机无 Codex 订阅账户（用户实证），形状核实条件不具备；
+升级路径 (a) 的两项触发条件（真实凭证核实形状 + 用户反馈跨轮质量
+回归）留档生效，任一具备时重开。同轮接线校准（agent/registry.go）
+经 Magpie codex.go 交叉证实 Codex 走 Responses 原生协议
+（`wire_api="responses"`），Responses↔Responses 同协议透传路径即
+Codex 直连路径，reasoning 项不受翻译损耗——(b) 的实际影响面进一步
+收窄为仅跨协议场景。
