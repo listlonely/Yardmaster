@@ -22,32 +22,37 @@ import (
 )
 
 const (
-	batchSize   = 32          // 攒批上限
+	batchSize   = 32 // 攒批上限
 	flushEvery  = 5 * time.Second
 	maxRetries  = 3
 	maxBatchMem = 128 << 20 // 单批字节上限（防异常大批撑爆内存）
 )
 
 // Exporter 把 gateway.Trace 异步导出到 OTLP-HTTP 兼容后端
-// （Jaeger/Tempo/Langfuse 等）。
+// （Jaeger/Tempo/Langfuse 等）；同一观察流在导出器内聚合 metrics
+// （M9-W5，累积型快照周期推送 /v1/metrics，见 metrics.go）。
 type Exporter struct {
 	endpoint string // 剥掉尾部 /v1/traces 后的基础端点
 	headers  map[string]string
+	version  string // service.version 资源属性
 	client   *http.Client
 	ch       chan *gateway.Trace
 	done     chan struct{}
 	wg       sync.WaitGroup
+	agg      *metricsAgg
 }
 
 // NewExporter 创建并启动导出器；endpoint 为基础 URL（自动追加
-// /v1/traces）。Close 停止并冲刷剩余批次。
-func NewExporter(endpoint string, headers map[string]string) *Exporter {
+// /v1/traces 与 /v1/metrics）。Close 停止并冲刷剩余批次。
+func NewExporter(endpoint string, headers map[string]string, version string) *Exporter {
 	e := &Exporter{
 		endpoint: strings.TrimSuffix(strings.TrimRight(endpoint, "/"), "/v1/traces"),
 		headers:  headers,
+		version:  version,
 		client:   &http.Client{Timeout: 10 * time.Second},
 		ch:       make(chan *gateway.Trace, 256),
 		done:     make(chan struct{}),
+		agg:      newMetricsAgg(),
 	}
 	e.wg.Add(1)
 	go e.loop()
@@ -74,6 +79,8 @@ func (e *Exporter) loop() {
 	batch := make([]*gateway.Trace, 0, batchSize)
 	tick := time.NewTicker(flushEvery)
 	defer tick.Stop()
+	mtick := time.NewTicker(metricsFlushEvery)
+	defer mtick.Stop()
 	flush := func() {
 		if len(batch) == 0 {
 			return
@@ -81,19 +88,34 @@ func (e *Exporter) loop() {
 		e.send(batch)
 		batch = batch[:0]
 	}
+	flushMetrics := func() {
+		body, err := json.Marshal(e.agg.envelope(e.version))
+		if err != nil {
+			slog.Warn("otlp metrics 编码失败", "err", err)
+			return
+		}
+		// 累积型快照：失败保留聚合下次重发（幂等），不重试队列。
+		if err := e.post("/v1/metrics", body); err != nil {
+			slog.Warn("otlp metrics 推送失败（保留聚合下次重发）", "err", err)
+		}
+	}
 	for {
 		select {
 		case tr := <-e.ch:
+			e.agg.observe(tr)
 			batch = append(batch, tr)
 			if len(batch) >= batchSize {
 				flush()
 			}
 		case <-tick.C:
 			flush()
+		case <-mtick.C:
+			flushMetrics()
 		case <-e.done:
 			for {
 				select {
 				case tr := <-e.ch:
+					e.agg.observe(tr)
 					batch = append(batch, tr)
 					if len(batch) >= batchSize {
 						e.send(batch)
@@ -101,6 +123,7 @@ func (e *Exporter) loop() {
 					}
 				default:
 					flush()
+					flushMetrics()
 					return
 				}
 			}
@@ -108,19 +131,15 @@ func (e *Exporter) loop() {
 	}
 }
 
-// send POST 一批 traces（429/5xx 按 Retry-After 指数退避，最多 3 次）。
-func (e *Exporter) send(batch []*gateway.Trace) {
-	body, err := json.Marshal(envelope(batch))
-	if err != nil || len(body) > maxBatchMem {
-		slog.Warn("otlp 批次编码失败或超限，丢弃", "size", len(body), "err", err)
-		return
-	}
-	url := e.endpoint + "/v1/traces"
+// post 推送一帧 OTLP JSON 到 path（/v1/traces 或 /v1/metrics）；
+// 429/5xx 按 Retry-After 指数退避，最多 3 次。成功返回 nil。
+func (e *Exporter) post(path string, body []byte) error {
+	url := e.endpoint + path
 	backoff := time.Second
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		req, rerr := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 		if rerr != nil {
-			return
+			return rerr
 		}
 		req.Header.Set("Content-Type", "application/json")
 		for k, v := range e.headers {
@@ -134,7 +153,7 @@ func (e *Exporter) send(batch []*gateway.Trace) {
 			resp.Body.Close()
 			switch {
 			case resp.StatusCode >= 200 && resp.StatusCode < 300:
-				return // 成功（partialSuccess 中的丢弃计数不阻塞，日志可查）
+				return nil // 成功（partialSuccess 中的丢弃计数不阻塞，日志可查）
 			case resp.StatusCode == http.StatusTooManyRequests ||
 				resp.StatusCode == http.StatusBadGateway ||
 				resp.StatusCode == http.StatusServiceUnavailable ||
@@ -146,7 +165,7 @@ func (e *Exporter) send(batch []*gateway.Trace) {
 				}
 			default:
 				slog.Warn("otlp 后端拒绝，丢弃本批", "status", resp.StatusCode)
-				return
+				return nil // 后端明确拒绝：重试无意义，按丢弃处理
 			}
 		}
 		if attempt == maxRetries {
@@ -157,13 +176,25 @@ func (e *Exporter) send(batch []*gateway.Trace) {
 		time.Sleep(backoff)
 		backoff *= 2
 	}
-	slog.Warn("otlp 导出重试耗尽，丢弃本批", "batch", len(batch))
+	return fmt.Errorf("重试耗尽（%s）", url)
+}
+
+// send POST 一批 traces（429/5xx 按 Retry-After 指数退避，最多 3 次）。
+func (e *Exporter) send(batch []*gateway.Trace) {
+	body, err := json.Marshal(envelope(batch, e.version))
+	if err != nil || len(body) > maxBatchMem {
+		slog.Warn("otlp 批次编码失败或超限，丢弃", "size", len(body), "err", err)
+		return
+	}
+	if err := e.post("/v1/traces", body); err != nil {
+		slog.Warn("otlp 导出重试耗尽，丢弃本批", "batch", len(batch))
+	}
 }
 
 // ---------- Trace → OTLP span 映射 ----------
 
 // envelope 组装 OTLP/HTTP JSON 请求体（resourceSpans/scopeSpans/spans）。
-func envelope(batch []*gateway.Trace) map[string]any {
+func envelope(batch []*gateway.Trace, version string) map[string]any {
 	var spans []map[string]any
 	for i := range batch {
 		spans = append(spans, spansOf(batch[i])...)
@@ -176,7 +207,7 @@ func envelope(batch []*gateway.Trace) map[string]any {
 			"resource": map[string]any{
 				"attributes": []any{
 					kv("service.name", "yardmaster"),
-					kv("service.version", "v0.4.0"),
+					kv("service.version", version),
 				},
 			},
 			"scopeSpans": []any{map[string]any{
@@ -225,8 +256,8 @@ func spansOf(tr *gateway.Trace) []map[string]any {
 	}
 	root := map[string]any{
 		"traceId": traceID, "spanId": rootID,
-		"name": "gateway " + orEmpty(tr.Target),
-		"kind": 2, // SERVER
+		"name":              "gateway " + orEmpty(tr.Target),
+		"kind":              2, // SERVER
 		"startTimeUnixNano": u64(start.UnixNano()),
 		"endTimeUnixNano":   u64(start.UnixNano() + tr.TotalMS*int64(time.Millisecond)),
 		"status":            map[string]any{"code": statusCode},
@@ -236,12 +267,12 @@ func spansOf(tr *gateway.Trace) []map[string]any {
 	for i, c := range tr.Candidates {
 		child := map[string]any{
 			"traceId": traceID, "spanId": hexID(fmt.Sprintf("%s#c%d", tr.ID, i), 16),
-			"parentSpanId": rootID,
-			"name":         "try " + c.Provider + "/" + c.Account + " " + c.Model,
-			"kind":         3, // CLIENT
+			"parentSpanId":      rootID,
+			"name":              "try " + c.Provider + "/" + c.Account + " " + c.Model,
+			"kind":              3, // CLIENT
 			"startTimeUnixNano": u64(start.UnixNano()),
 			"endTimeUnixNano":   u64(start.UnixNano() + c.DurMS*int64(time.Millisecond)),
-			"status": map[string]any{"code": candStatus(c.Result)},
+			"status":            map[string]any{"code": candStatus(c.Result)},
 			"attributes": []any{
 				kv("yardmaster.candidate.result", c.Result),
 				kv("yardmaster.provider", c.Provider),

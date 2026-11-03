@@ -104,6 +104,8 @@ func runTUI(args []string, stdout, stderr io.Writer) error {
 			}
 		case "k", "keys":
 			v.name = "keys"
+		case "d", "dispatch": // M9-W5：派发会话视图
+			v.name = "dispatch"
 		case "switch":
 			err = c.switchKey(stdout, fields[1:])
 		case "reload":
@@ -114,7 +116,7 @@ func runTUI(args []string, stdout, stderr io.Writer) error {
 		case "refresh", "r":
 			// 仅重绘
 		case "h", "help", "?":
-			fmt.Fprintln(stdout, "命令：status | trace [n] | keys | switch <序号> <目标> | reload | refresh | help | quit")
+			fmt.Fprintln(stdout, "命令：status | trace [n] | keys | dispatch | switch <序号> <目标> | reload | refresh | help | quit")
 		default:
 			fmt.Fprintf(stdout, "未知命令 %q（help 查看可用命令）\n", fields[0])
 		}
@@ -148,6 +150,8 @@ func (c *tuiClient) draw(w io.Writer, view string, traceN int) {
 		c.drawTrace(w, traceN)
 	case "keys":
 		c.drawKeys(w)
+	case "dispatch":
+		c.drawDispatch(w)
 	default:
 		c.drawStatus(w, st)
 	}
@@ -183,6 +187,75 @@ func (c *tuiClient) drawStatus(w io.Writer, st *stateResp) {
 	if len(st.Exhausted) > 0 {
 		fmt.Fprintf(w, "  额度耗尽: %s\n", strings.Join(st.Exhausted, ", "))
 	}
+	// 派发汇总（M9-W5）：派发未启用/读取失败时静默省略
+	if ss, err := c.sessions(); err == nil && len(ss) > 0 {
+		running := 0
+		for _, s := range ss {
+			if s.Status == "running" {
+				running++
+			}
+		}
+		fmt.Fprintf(w, "  派发: %d 条会话 · %d 进行中（输入 dispatch 查看）\n", len(ss), running)
+	}
+}
+
+// dispSession 是派发会话列表行（/api/dispatch/sessions 投影子集）。
+type dispSession struct {
+	ID        string `json:"id"`
+	Agent     string `json:"agent"`
+	Task      string `json:"task"`
+	Status    string `json:"status"`
+	StartedAt string `json:"started_at"`
+	EndedAt   string `json:"ended_at"`
+}
+
+// drawDispatch 渲染派发会话视图（最近 15 条，时间降序；M9-W5）。
+func (c *tuiClient) drawDispatch(w io.Writer) {
+	ss, err := c.sessions()
+	if err != nil {
+		fmt.Fprintf(w, "\n[派发] 读取失败: %v\n（派发未启用？）\n", err)
+		return
+	}
+	running := 0
+	for _, s := range ss {
+		if s.Status == "running" {
+			running++
+		}
+	}
+	fmt.Fprintf(w, "\n[派发] 会话 %d 条 · 进行中 %d\n", len(ss), running)
+	tw := tabwriter.NewWriter(w, 2, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "  时间\tAgent\t状态\t耗时\t任务")
+	for i := len(ss) - 1; i >= 0 && i > len(ss)-16; i-- {
+		s := ss[i]
+		tm := strings.Replace(s.StartedAt, "T", " ", 1)
+		if len(tm) > 16 {
+			tm = tm[:16]
+		}
+		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\n", tm, tuiDash(s.Agent), s.Status, dispDur(s), firstRunes(s.Task, 24))
+	}
+	_ = tw.Flush()
+}
+
+// dispDur 会话耗时（running 显示 …；终态 = ended-started）。
+func dispDur(s dispSession) string {
+	st, err := time.Parse(time.RFC3339, s.StartedAt)
+	if err != nil {
+		return "-"
+	}
+	end := time.Now()
+	if s.EndedAt != "" {
+		if e, perr := time.Parse(time.RFC3339, s.EndedAt); perr == nil {
+			end = e
+		}
+	}
+	if s.Status == "running" {
+		return "…"
+	}
+	d := end.Sub(st)
+	if d < time.Minute {
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	}
+	return d.Round(time.Second).String()
 }
 
 func (c *tuiClient) drawTrace(w io.Writer, n int) {
@@ -336,6 +409,16 @@ func (c *tuiClient) traces(n int) ([]traceResp, error) {
 	}
 	err := c.get("/api/trace?limit="+strconv.Itoa(n), &out)
 	return out.Traces, err
+}
+
+// sessions 拉取派发会话列表（M9-W5；派发未启用时网关回非 200 → 原样
+// 返回错误，调用方 fail-soft）。
+func (c *tuiClient) sessions() ([]dispSession, error) {
+	var out struct {
+		Sessions []dispSession `json:"sessions"`
+	}
+	err := c.get("/api/dispatch/sessions", &out)
+	return out.Sessions, err
 }
 
 func (c *tuiClient) keys() (*keysResp, error) {

@@ -169,7 +169,7 @@ func setupGateway() (*serveSetup, error) {
 func (st *serveSetup) startHelpers(ctx context.Context) func() {
 	var stops []func()
 	if st.settings.OTel.Enabled && st.settings.OTel.Endpoint != "" {
-		exp := otlp.NewExporter(st.settings.OTel.Endpoint, st.settings.OTel.Headers)
+		exp := otlp.NewExporter(st.settings.OTel.Endpoint, st.settings.OTel.Headers, Version)
 		stops = append(stops, exp.Close)
 		st.srv.Traces.OnTrace = exp.Export
 		slog.Info("otlp traces 导出已开启", "endpoint", st.settings.OTel.Endpoint)

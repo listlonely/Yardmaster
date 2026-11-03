@@ -34,6 +34,10 @@ func TestExporterEnvelopeShape(t *testing.T) {
 	var mu sync.Mutex
 	var bodies []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/metrics" { // M9-W5：metrics 同族端点，形状见 TestMetricsAggObserve
+			w.WriteHeader(200)
+			return
+		}
 		if r.URL.Path != "/v1/traces" {
 			t.Errorf("路径 = %q", r.URL.Path)
 		}
@@ -51,7 +55,7 @@ func TestExporterEnvelopeShape(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	exp := NewExporter(srv.URL, map[string]string{"Authorization": "Bearer lk-test"})
+	exp := NewExporter(srv.URL, map[string]string{"Authorization": "Bearer lk-test"}, "test")
 	exp.Export(*sampleTrace())
 	exp.Close() // 关闭冲刷剩余
 
@@ -117,7 +121,7 @@ func TestExporterFlushesOnInterval(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	exp := NewExporter(srv.URL, nil)
+	exp := NewExporter(srv.URL, nil, "test")
 	defer exp.Close()
 	exp.Export(*sampleTrace())
 	select {
@@ -144,13 +148,71 @@ func TestExporterRetriesOnServerErrors(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	exp := NewExporter(srv.URL, nil)
+	exp := NewExporter(srv.URL, nil, "test")
 	exp.Export(*sampleTrace())
 	exp.Close()
 	mu.Lock()
 	defer mu.Unlock()
 	if n < 3 {
 		t.Fatalf("应重试到第 3 次，实际 %d", n)
+	}
+}
+
+// metrics 聚合：observe 提取 outcome/时长/usage，envelope 为累积型
+// 三指标形状（M9-W5）。
+func TestMetricsAggObserve(t *testing.T) {
+	m := newMetricsAgg()
+	m.observe(sampleTrace())
+	m.observe(sampleTrace())
+	m.observe(&gateway.Trace{ID: "t-fail", Time: "2026-10-30T12:00:01+08:00", Outcome: "fail", TotalMS: 3000})
+	raw, err := json.Marshal(m.envelope("test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	for _, want := range []string{
+		`"yardmaster.requests"`, `"yardmaster.request.duration"`, `"yardmaster.tokens"`,
+		`"aggregationTemporality":2`, `"isMonotonic":true`,
+		`{"key":"outcome","value":{"stringValue":"ok"}}`,
+		`"count":"3"`, // histogram 总数（2 ok + 1 fail）
+		`"bucketCounts":["0","2","0","0","0","1","0","0"]`, // 120ms→idx1(>100,<250)×2、3000ms→idx5(>2500,<5000)
+		`{"key":"kind","value":{"stringValue":"prompt"}}`,
+		`{"key":"service.version","value":{"stringValue":"test"}}`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("metrics envelope 缺少 %q:\n%s", want, s)
+		}
+	}
+	// 累积型：再次 observe 后计数递增（不重置）
+	m.observe(sampleTrace())
+	raw2, _ := json.Marshal(m.envelope("test"))
+	if !strings.Contains(string(raw2), `"count":"4"`) {
+		t.Fatalf("累积型应递增计数:\n%s", raw2)
+	}
+}
+
+// metrics 导出联动：Close 终刷推送 /v1/metrics。
+func TestMetricsExportedOnClose(t *testing.T) {
+	got := make(chan string, 8)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/metrics" {
+			b, _ := io.ReadAll(r.Body)
+			got <- string(b)
+		}
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	exp := NewExporter(srv.URL, nil, "test")
+	exp.Export(*sampleTrace())
+	exp.Close() // 终刷含 metrics
+	select {
+	case raw := <-got:
+		if !strings.Contains(raw, `"yardmaster.requests"`) {
+			t.Fatalf("metrics 导出内容异常:\n%s", raw)
+		}
+	case <-time.After(7 * time.Second):
+		t.Fatal("Close 未终刷 metrics")
 	}
 }
 
@@ -164,7 +226,7 @@ func TestTraceLogObserverFeedsExporter(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	exp := NewExporter(srv.URL, nil)
+	exp := NewExporter(srv.URL, nil, "test")
 	defer exp.Close()
 	tlog := gateway.NewTraceLog(t.TempDir())
 	defer tlog.Close()
