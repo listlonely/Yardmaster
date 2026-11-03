@@ -214,7 +214,7 @@ func (s *Server) handlePricingSync(w http.ResponseWriter, r *http.Request) {
 		writeAPIErr(w, err)
 		return
 	}
-	s.writeResultExtra(w, effectImmediate, map[string]any{"sync": res, "config": merged})
+	s.writeResultExtra(w, map[string]any{"sync": res, "config": merged})
 }
 
 // usedModels 从决策 trace 收集用量对 (本地 provider, 上游模型名)——

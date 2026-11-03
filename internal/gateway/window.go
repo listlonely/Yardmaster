@@ -189,6 +189,14 @@ func accountSpent(a provider.Account, now time.Time) bool {
 	return false
 }
 
+// probeResult 是单账号一次余额探测的结果（手动触发 API 返回用）。
+type probeResult struct {
+	Provider string  `json:"provider"`
+	Account  string  `json:"account"`
+	Balance  float64 `json:"balance,omitempty"`
+	Err      string  `json:"error,omitempty"`
+}
+
 // StartQuotaPoller 启动余额轮询后台任务（随 ctx 退出；30 分钟或
 // QuotaProbe.Interval）。
 func (s *Server) StartQuotaPoller(ctx context.Context) {
@@ -200,15 +208,17 @@ func (s *Server) StartQuotaPoller(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				s.pollQuotas(ctx)
+				s.pollQuotas(ctx) // 后台轮询：结果仅日志留痕
 			}
 		}
 	}()
 }
 
 // pollQuotas 轮询所有配置了 QuotaProbe 的 provider 的各账号余额。
-// 失败只记日志（保留上次值），不阻断、不改状态。
-func (s *Server) pollQuotas(ctx context.Context) {
+// 失败逐账号留痕（保留上次值），不阻断、不改状态；返回各账号结果
+// （手动触发 POST /api/quota/probe 用，后台 ticker 忽略返回值）。
+func (s *Server) pollQuotas(ctx context.Context) []probeResult {
+	var out []probeResult
 	for _, prov := range s.Planner.Providers() {
 		if prov.QuotaProbe == nil || prov.QuotaProbe.URL == "" {
 			continue
@@ -220,6 +230,7 @@ func (s *Server) pollQuotas(ctx context.Context) {
 			bal, err := s.probeBalance(ctx, &prov, acc)
 			if err != nil {
 				slog.Warn("余额轮询失败（保留上次值）", "provider", prov.ID, "account", acc.Name, "err", err)
+				out = append(out, probeResult{Provider: prov.ID, Account: acc.Name, Err: err.Error()})
 				continue
 			}
 			s.Planner.SetBalance(prov.ID+"/"+acc.Name, bal)
@@ -227,8 +238,10 @@ func (s *Server) pollQuotas(ctx context.Context) {
 				slog.Info("账号余额耗尽，休眠至次日重置（SwitchWhenSpent）",
 					"provider", prov.ID, "account", acc.Name, "balance", bal)
 			}
+			out = append(out, probeResult{Provider: prov.ID, Account: acc.Name, Balance: bal})
 		}
 	}
+	return out
 }
 
 // probeBalance 请求余额端点并解析数值。

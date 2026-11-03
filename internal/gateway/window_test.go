@@ -4,6 +4,8 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -153,6 +155,69 @@ func TestQuotaPollerFeedsRouting(t *testing.T) {
 	srv.pollQuotas(context.Background())
 	if acc2 := planner.Providers()[0].Accounts[0]; acc2.Balance != 0 || acc2.BalanceAt == 0 {
 		t.Fatalf("失败不应清除既有值: %+v", acc2)
+	}
+}
+
+// 手动触发余额探测 API（M9-W3）：与后台 ticker 同路径，响应携带
+// 各账号探测结果 + 写后 state（余额已落账）。
+func TestQuotaProbeAPI(t *testing.T) {
+	appDir := t.TempDir()
+	paths := newPaths(appDir)
+	balSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"code":200,"data":{"total_balance":"42.5"}}`))
+	}))
+	defer balSrv.Close()
+
+	prov := provider.Provider{ID: "glm", Protocol: provider.ProtocolChat, BaseURL: "http://up.invalid",
+		QuotaProbe: &provider.QuotaProbe{URL: balSrv.URL},
+		Accounts:   []provider.Account{{Name: "main", APIKey: "k", Status: provider.AccountAvailable}}}
+	srv := &Server{Planner: NewPlanner([]provider.Provider{prov}, nil), AppDir: appDir, ProvidersPath: paths.ProvidersPath()}
+	api := httptest.NewServer(srv.Handler())
+	defer api.Close()
+
+	resp, err := http.Post(api.URL+"/api/quota/probe", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("HTTP %d: %s", resp.StatusCode, b)
+	}
+	var out struct {
+		OK     bool `json:"ok"`
+		Probes []struct {
+			Provider string  `json:"provider"`
+			Account  string  `json:"account"`
+			Balance  float64 `json:"balance"`
+			Err      string  `json:"error"`
+		} `json:"probes"`
+		State struct {
+			Accounts []struct {
+				Key     string  `json:"key"`
+				Balance float64 `json:"balance"`
+			} `json:"accounts"`
+		} `json:"state"`
+	}
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("解析响应: %v\n%s", err, b)
+	}
+	if !out.OK || len(out.Probes) != 1 || out.Probes[0].Balance != 42.5 || out.Probes[0].Err != "" {
+		t.Fatalf("探测结果异常: %+v", out.Probes)
+	}
+	// 写后 state 携带余额（喂路由可观测；账号在顶层扁平 accounts）
+	found := false
+	for _, a := range out.State.Accounts {
+		if a.Key == "glm/main" && a.Balance == 42.5 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("state 应携带余额: %s", b)
+	}
+	// 内存态已更新（后续 Plan 直接可见）
+	if acc := srv.Planner.Providers()[0].Accounts[0]; acc.Balance != 42.5 || acc.BalanceAt == 0 {
+		t.Fatalf("Planner 应落账: %+v", acc)
 	}
 }
 

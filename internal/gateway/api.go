@@ -15,6 +15,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -323,6 +324,15 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, name st
 	}
 }
 
+// handleQuotaProbe 手动触发一次余额轮询（M9-W3）：与后台 30 分钟
+// ticker 同一 pollQuotas 路径，返回各账号探测结果（余额/错误逐账号
+// 留痕）+ 写后 state（账号 Balance/BalanceAt 已刷新）。非配置写路径：
+// 仅刷新内存余额，无备份语义。
+func (s *Server) handleQuotaProbe(w http.ResponseWriter, _ *http.Request) {
+	probes := s.pollQuotas(context.Background())
+	s.writeResultExtra(w, map[string]any{"probes": probes})
+}
+
 // handleReload 重读 providers.json 并热替换 Planner（providers.json
 // 解析失败时拒绝重载，保留旧快照——读不懂=未知）。响应为写响应包
 // （api.md）：携带写后全量 state；providers 计数字段增量保留。
@@ -331,7 +341,7 @@ func (s *Server) handleReload(w http.ResponseWriter, _ *http.Request) {
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			s.Planner.Reload(nil, nil)
-			s.writeResultExtra(w, effectImmediate, map[string]any{"providers": 0})
+			s.writeResultExtra(w, map[string]any{"providers": 0})
 			return
 		}
 		writeAPIErr(w, &apiError{status: http.StatusConflict,
@@ -340,15 +350,16 @@ func (s *Server) handleReload(w http.ResponseWriter, _ *http.Request) {
 	}
 	s.Planner.Reload(f.Providers, f.Groups)
 	slog.Info("providers.json 已重载", "providers", len(f.Providers), "groups", len(f.Groups))
-	s.writeResultExtra(w, effectImmediate, map[string]any{"providers": len(f.Providers)})
+	s.writeResultExtra(w, map[string]any{"providers": len(f.Providers)})
 }
 
 // writeResultExtra 是 writeResult 的扩展形态：在写响应包上附加
-// legacy 字段（reload 的 providers 计数），保持既有调用方不破坏。
-func (s *Server) writeResultExtra(w http.ResponseWriter, effect string, extra map[string]any) {
+// legacy 字段（reload 的 providers 计数/quota probe 的探测清单），保持
+// 既有调用方不破坏。effect 恒为 immediate（全部调用方均为即时生效）。
+func (s *Server) writeResultExtra(w http.ResponseWriter, extra map[string]any) {
 	resp := map[string]any{
 		"ok":     true,
-		"effect": effect,
+		"effect": effectImmediate,
 		"state":  s.stateView(),
 	}
 	for k, v := range extra {
