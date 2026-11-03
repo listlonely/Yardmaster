@@ -86,7 +86,7 @@ yardmaster plugin disable trace-logger   # 启停（写前备份；serve 运行�
 
 > **派发实测情况（v0.6.0 如实标注）**：Claude Code（2.1.314）headless 全链路已真实冒烟——`claude -p` → 网关 `/v1/messages` → openai-chat 上游 → 回翻，事件词表（system/assistant/user/result）与缓存命中对账经实机核实，v0.6.0 全链路冒烟（模板→派发→事件流→持久化→重派→导出）通过；codex（`codex exec --json`）/ gemini（`gemini -p`）本机无对应订阅/登录，形状沿用官方文档口径降级留档。OTLP 真实后端（Jaeger v2.22）与真实上游缓存命中对账已实测；Linux 侧真实派发冒烟仍为未实测项（无实机，CI fake-agent 冒烟覆盖）。
 
-> **桌面壳实测情况（v0.8.0 如实标注）**：Windows 原生窗口（Wails v3.0.0 + WebView2）全链路已真机冒烟——无参数启动、控制台写路径闭环（settings 同值回写经完整写路径）、关窗=隐藏到托盘（WM_CLOSE 实证）、窗口状态记忆落盘（`window-state.json`）、WebView2 缺失回退演练（`YARDMASTER_NO_NATIVE_WINDOW=1` → 回退浏览器 `--app` 窗口 + stdout 留痕）、侧栏信息架构与明暗双主题浏览器三轮核查（明暗 × app 态 × 六页遍历）。Linux 侧原生窗口为非目标（webkit2gtk cgo 破坏纯 Go 交叉编译矩阵），浏览器 `--app` 窗口路径行为等价 v0.7.0 由交叉构建+依赖链断言覆盖；Linux 真机托盘（D-Bus）冒烟与托盘菜单真机点击仍为未实测项（应急开关 `YARDMASTER_NO_NATIVE_WINDOW=1` 可随时禁用原生壳）。
+> **桌面壳实测情况（v0.8.0 如实标注）**：Windows 原生窗口（Wails v3.0.0 + WebView2）全链路已真机冒烟——无参数启动、控制台写路径闭环（settings 同值回写经完整写路径）、关窗=隐藏到托盘（WM_CLOSE 实证）、窗口状态记忆落盘（`window-state.json`）、WebView2 缺失回退演练（`YARDMASTER_NO_NATIVE_WINDOW=1` → 回退浏览器 `--app` 窗口 + stdout 留痕）、侧栏信息架构与明暗双主题浏览器三轮核查（明暗 × app 态 × 六页遍历）。双击/开始菜单启动自动收起终端黑窗（孤立启动 FreeConsole，日志落数据目录 `app.log`；从终端启动行为零变化）。Linux 侧原生窗口为非目标（webkit2gtk cgo 破坏纯 Go 交叉编译矩阵），浏览器 `--app` 窗口路径行为等价 v0.7.0 由交叉构建+依赖链断言覆盖；Linux 真机托盘（D-Bus）冒烟与托盘菜单真机点击仍为未实测项（应急开关 `YARDMASTER_NO_NATIVE_WINDOW=1` 可随时禁用原生壳）。
 
 数据目录：`~/.yardmaster`（providers/keys/rules/intents/pricing/settings 均为可 diff 的 JSON，写前自动备份到 `backup/`，原子写入）。
 

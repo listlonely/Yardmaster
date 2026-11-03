@@ -99,6 +99,18 @@
 > Linux 构建验证（W4 三目标交叉 + 零 wails 断言）与 race 全绿（CI 双
 > 平台）；④托盘菜单真机点击仍留档待日常确认。§十未实测项相应更新。
 
+> [2026-11-03-M8W6 后补丁：双击启动黑窗收起] 用户反馈「每次启动应用会
+> 打开终端」——console subsystem 的 exe 双击/开始菜单启动时 conhost 黑
+> 窗全程伴随（app 模式常驻=黑窗常驻）。方案：**保留 console subsystem**
+> （serve/CLI 终端体验零变化），app 模式检测孤立启动（父进程=
+> explorer.exe，Toolhelp32 纯 syscall）→ `FreeConsole` 收起黑窗 +
+> slog 落数据目录 `app.log`（>1MB 轮转 .1）保住崩溃/回退/托盘隔离留痕
+> ——此前这些留痕在双击场景随黑窗消失，属可观测性补强。终端启动零
+> 变化。实证：explorer 代理启动无 conhost 子进程 + app.log 生成 +
+> healthz 200（S1~S5）；Start-Process 启动 banner 正常 + app.log 不
+> 生成（非孤立不接管，S1~S3）。文件：console_windows.go /
+> console_other.go（!windows no-op）+ runApp 开头接线。
+
 ## 一、目标与边界
 
 兑现 2026-10-30 桌面壳两步走决策第二步：Windows app 模式以 Wails v3

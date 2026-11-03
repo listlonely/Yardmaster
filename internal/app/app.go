@@ -300,6 +300,15 @@ func runApp(args []string, stdout io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// 孤立启动（双击/开始菜单，父进程为 explorer）：收起 conhost 黑窗
+	// （console subsystem 的 exe 双击启动会带全程伴随的黑窗），slog 落
+	// app.log 保住崩溃/回退留痕；终端启动零变化（M8 收官后用户反馈）。
+	if hideConsoleIfDetached() {
+		if paths, perr := store.DefaultPaths(); perr == nil {
+			setupAppLog(paths.AppDir)
+		}
+	}
+
 	st, err := setupGateway()
 	if err != nil {
 		return err
