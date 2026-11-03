@@ -24,8 +24,8 @@ Agent ──▶ 127.0.0.1:8317 ──▶ Yardmaster ──▶ 按任务/额度/�
 - **决策追溯**：每次路由决策记录完整候选尝试链（谁调用、命中什么、试过谁、为何切换），落盘 30 天/200MB，`/api/trace`、控制台与 CLI 可查
 - **代理挂载**：全局 → Provider → 账号三级继承（http/https/socks5/socks5h/direct），HTTP/2 半死连接健康检查
 - **局域网共享**：`listen` + 强制令牌（token）；控制台/API/推断端点统一过闸，默认仅本机
-- **桌面应用（app 模式，v0.8.1 起 Windows 双入口零黑窗）**：桌面入口 `yardmaster-app.exe`（Windows GUI subsystem，双击/开始菜单零终端窗口零闪现，图标/版本/DPI 资源齐全）；命令行 `yardmaster.exe`（console subsystem，serve/CLI/headless 派发契约不变）。两者共享同一套逻辑与数据目录——进程内网关 + 系统托盘 + 原生窗口（WebView2；关窗=隐藏到托盘，尺寸/位置记忆；WebView2 缺失自动回退浏览器窗口）；Linux/其他为浏览器 `--app` 独立窗口（exec 纯 Go，交叉编译矩阵不变）。控制台为侧栏式信息架构（Magpie 同构）+ 明暗双主题（跟随系统，侧栏脚部三态切换）。窗口关闭后台仍运行，重开/退出走托盘菜单；无头场景用 `serve`，网页控制台按指令打开：`yardmaster console`（浏览器）或 app 窗口
-- **OTLP traces 导出（v0.4.0，默认关）**：settings.json `otel{enabled,endpoint,headers}` 开启后，决策 trace 映射 OTel span（gen_ai.* 语义约定）推送 OTLP-HTTP 兼容后端（Jaeger/Tempo/Langfuse），手写 JSON 零 SDK 依赖，失败只降级不阻断推理
+- **桌面应用（app 模式，v0.8.1 起 Windows 双入口零黑窗）**：桌面入口 `yardmaster-app.exe`（Windows GUI subsystem，双击/开始菜单零终端窗口零闪现，图标/版本/DPI 资源齐全）；命令行 `yardmaster.exe`（console subsystem，serve/CLI/headless 派发契约不变）。两者共享同一套逻辑与数据目录——进程内网关 + 系统托盘 + 原生窗口（WebView2；关窗=隐藏到托盘，尺寸/位置记忆；WebView2 缺失自动回退浏览器窗口）；**托盘气泡通知（v0.9.0）**：派发完成/失败、上游账号休眠（限频防刷屏，settings `notify` 可关）；**托盘菜单动态化（v0.9.0）**：版本行/「升级到 vX.Y.Z」动态入口/状态摘要行（休眠与派发进行中）；Linux/其他为浏览器 `--app` 独立窗口（exec 纯 Go，交叉编译矩阵不变）。控制台为侧栏式信息架构（Magpie 同构）+ 明暗双主题（跟随系统，侧栏脚部三态切换）。窗口关闭后台仍运行，重开/退出走托盘菜单；无头场景用 `serve`，网页控制台按指令打开：`yardmaster console`（浏览器）或 app 窗口
+- **OTLP traces/metrics 导出（v0.4.0 起，默认关；v0.9.0 增 metrics）**：settings.json `otel{enabled,endpoint,headers}` 开启后，决策 trace 映射 OTel span（gen_ai.* 语义约定）推送 OTLP-HTTP 兼容后端（Jaeger/Tempo/Langfuse），并同源聚合三指标（requests/请求时长直方图/tokens）以累积型快照推送 `/v1/metrics`；手写 JSON 零 SDK 依赖，失败只降级不阻断推理
 
 ## 安装
 
@@ -65,7 +65,7 @@ yardmaster trace list                 # 路由决策追溯
 yardmaster price sync                 # 从 models.dev 目录自动填充单价（人工价受保护，-force 覆盖）
 yardmaster price list                 # 单价表（来源列：models.dev / 人工）
 yardmaster cost --days 7              # 成本报告
-yardmaster tui                        # 终端面板：状态 / 追溯 / 绑定切换
+yardmaster tui                        # 终端面板：状态 / 追溯 / 派发 / 绑定切换
 yardmaster update check               # 升级提示
 
 # 6. 任务→Agent 派发（v0.5.0，v0.6.0 深化，可选）
@@ -87,6 +87,8 @@ yardmaster plugin disable trace-logger   # 启停（写前备份；serve 运行�
 > **派发实测情况（v0.6.0 如实标注）**：Claude Code（2.1.314）headless 全链路已真实冒烟——`claude -p` → 网关 `/v1/messages` → openai-chat 上游 → 回翻，事件词表（system/assistant/user/result）与缓存命中对账经实机核实，v0.6.0 全链路冒烟（模板→派发→事件流→持久化→重派→导出）通过；codex（`codex exec --json`）/ gemini（`gemini -p`）本机无对应订阅/登录，形状沿用官方文档口径降级留档。OTLP 真实后端（Jaeger v2.22）与真实上游缓存命中对账已实测；Linux 侧真实派发冒烟仍为未实测项（无实机，CI fake-agent 冒烟覆盖）。
 
 > **桌面壳实测情况（v0.8.0 如实标注）**：Windows 原生窗口（Wails v3.0.0 + WebView2）全链路已真机冒烟——无参数启动、控制台写路径闭环（settings 同值回写经完整写路径）、关窗=隐藏到托盘（WM_CLOSE 实证）、窗口状态记忆落盘（`window-state.json`）、WebView2 缺失回退演练（`YARDMASTER_NO_NATIVE_WINDOW=1` → 回退浏览器 `--app` 窗口 + stdout 留痕）、侧栏信息架构与明暗双主题浏览器三轮核查（明暗 × app 态 × 六页遍历）。双击/开始菜单启动自动收起终端黑窗（孤立启动 FreeConsole，日志落数据目录 `app.log`；从终端启动行为零变化）。Linux 侧原生窗口为非目标（webkit2gtk cgo 破坏纯 Go 交叉编译矩阵），浏览器 `--app` 窗口路径行为等价 v0.7.0 由交叉构建+依赖链断言覆盖；Linux 真机托盘（D-Bus）冒烟与托盘菜单真机点击仍为未实测项（应急开关 `YARDMASTER_NO_NATIVE_WINDOW=1` 可随时禁用原生壳）。
+
+> **M9 真实化增量（v0.9.0 如实标注）**：托盘气泡通知真机实证（smoke 派发 done → 「派发完成」气泡弹出，beeep 走 WinRT COM）；托盘菜单动态化真机在位（版本行/状态摘要/升级入口）；GLM Coding Plan 真实用量端点 `/api/monitor/usage/quota/limit` 真机采样并接入余额轮询（`finance/balance` 对 Coding Plan key 为 404，按量 key 专属）；GLM 1113 纠偏经直连复核确认上游行为漂移（按量端点现放行 Coding Plan key），保留为兜底；agent 接线规格（codex/gemini-cli）经 Magpie 真实世界实现交叉校准；sealed reasoning 维持 (b) 边界标注（无 Codex 凭证）；OAuth 续期全链路无凭证源正式留档。未实测项完整定稿见 `docs/subsystems/app.md` §十（无悬置项）。
 
 数据目录：`~/.yardmaster`（providers/keys/rules/intents/pricing/settings 均为可 diff 的 JSON，写前自动备份到 `backup/`，原子写入）。
 
