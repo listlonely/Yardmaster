@@ -150,7 +150,16 @@ func runWailsShell(st *serveSetup, ctx context.Context, stop context.CancelFunc,
 		app.Quit()
 	}()
 
-	runErr := app.Run()
+	// 壳层 panic 隔离（M8-W5，语义同插件纪律）：wails 主循环 panic 转
+	// 为 error，走与 runErr 相同的浏览器回退路径——壳崩溃不带倒网关进程。
+	runErr := func() (err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("wails 主循环 panic: %v", r)
+			}
+		}()
+		return app.Run()
+	}()
 	nativeWindow.Store(nil)
 	if runErr != nil {
 		// 原生壳启动后故障（如 WebView2 环境创建失败）：网关不陪葬，

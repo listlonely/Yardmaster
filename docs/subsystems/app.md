@@ -66,6 +66,27 @@
 >   日常使用覆盖）、主题切换的 WebView2 背景色运行时联动（仅初始值，
 >   运行中切换由页面自身背景承接）。
 
+> [2026-11-03-M8W5 打磨分发交付] §9.9 W5 全项落地。实测与偏差：
+> - **exe 资源嵌入**：tools/genwinres（tc-hib/winres v0.3.1 纯 Go，wails
+>   同源依赖）预生成 `cmd/yardmaster/rsrc_windows_amd64.syso` 入库——
+>   图标（trayIcon 同款矢量按 32 网格放大，256/64/48/32/16）、版本信息
+>   （v0.8.0，中文 FileDescription UTF-16 正常）、per-monitor-v2 DPI
+>   manifest（进程启动即 aware，wails 运行时检测另有兜底）。`go generate
+>   ./cmd/yardmaster` 再生成；发版更新 genwinres 里 appVersion 常量。
+>   实证：exe 属性 ProductName/FileVersion/中文描述/MIT 齐全、图标
+>   ExtractAssociatedIcon 32x32、Linux 交叉构建按文件名忽略 syso。
+> - **壳层 panic 隔离（语义同插件纪律）**：托盘 goroutine
+>   runTrayIsolated（recover 后网关继续运行，失去托盘入口 Ctrl-C 退出，
+>   stderr 留痕）；wails 主循环 panic 转 error 走既有浏览器回退路径。
+>   recover 路径无法注入真实 panic——代码审查+正常路径冒烟覆盖，如实
+>   标注。
+> - **install/package 复核零改动**：package.sh 打包三平台二进制+README
+>   （.syso 已链接进二进制，打包层无感知）；install.ps1 下载解压加
+>   PATH——与壳层改动零耦合；产物清单形态不变（2 tar.gz + 1 zip +
+>   SHA256SUMS + 2 install 脚本）。
+> - 资源版本（0.8.0）与运行时版本（-ldflags 注入）互不依赖，如实
+>   记录。TUI/CLI 对齐小项按可砍清单砍除。
+
 ## 一、目标与边界
 
 兑现 2026-10-30 桌面壳两步走决策第二步：Windows app 模式以 Wails v3

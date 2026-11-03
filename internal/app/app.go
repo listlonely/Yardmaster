@@ -276,7 +276,7 @@ func runServe(args []string, stdout io.Writer) error {
 	defer st.startHelpers(ctx)()
 	st.banner(stdout)
 	if *tray {
-		go runTray(func() { _ = openBrowser("http://" + st.listen + "/") }, func() {
+		go runTrayIsolated(func() { _ = openBrowser("http://" + st.listen + "/") }, func() {
 			slog.Info("托盘请求退出")
 			stop()
 			systray.Quit()
@@ -313,7 +313,7 @@ func runApp(args []string, stdout io.Writer) error {
 		onOpen = func() { nativeReopen(consoleURL) }
 	}
 	if !*noTray {
-		go runTray(onOpen, func() {
+		go runTrayIsolated(onOpen, func() {
 			slog.Info("托盘请求退出")
 			stop()
 			systray.Quit()

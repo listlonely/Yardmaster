@@ -10,6 +10,7 @@ import (
 	"image/color"
 	"image/draw"
 	"image/png"
+	"log/slog"
 	"os/exec"
 	"runtime"
 
@@ -49,6 +50,18 @@ func openBrowser(url string) error {
 	default:
 		return exec.Command("xdg-open", url).Start()
 	}
+}
+
+// runTrayIsolated 托盘崩溃隔离（M8-W5，语义同插件纪律）：托盘在独立
+// goroutine 运行，任何 panic 不带倒网关进程——recover 后网关继续运行
+// （失去托盘入口，Ctrl-C/信号退出），stderr 留痕可观测。
+func runTrayIsolated(onOpen, onExit func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("托盘崩溃（已隔离，网关继续运行；Ctrl-C 退出）", "panic", r)
+		}
+	}()
+	runTray(onOpen, onExit)
 }
 
 // runTray 启动托盘（阻塞 systray.Run 内部循环，调用方以 goroutine 包装）。
