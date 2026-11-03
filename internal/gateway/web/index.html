@@ -8,203 +8,256 @@
   <link rel="stylesheet" href="/web/app.css">
 </head>
 <body>
-  <!-- 侧栏（M8-W3，Magpie 同构信息架构）：常暗、分组导航、脚部主题切换；
-       data-tab 机制与 JS 切页逻辑不变，仅导航从顶栏平移至此。 -->
+  <!-- 侧栏（2026-11-03 深度重构：Magpie 同底色构造）——与内容区共用 --bg，
+       选中项 = 卡片浮起（--card + seg-edge 描边阴影），单一滑动高亮形状
+       .nav-hl 在行与行之间移动。data-tab/hash 路由机制不变。 -->
   <aside class="sidebar">
-    <div class="brand"><span class="logo" aria-hidden="true">Y</span>yardmaster</div>
-    <nav id="tabs" aria-label="主导航">
-      <span class="nav-gl">运行</span>
-      <a href="#overview" data-tab="overview" class="active" data-title="总览">
-        <svg class="nav-ic" viewBox="0 0 20 20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="5.5" height="5.5" rx="1.2"/><rect x="11.5" y="3" width="5.5" height="5.5" rx="1.2"/><rect x="3" y="11.5" width="5.5" height="5.5" rx="1.2"/><rect x="11.5" y="11.5" width="5.5" height="5.5" rx="1.2"/></g></svg>
-        <span>总览</span></a>
-      <span class="nav-gl">路由</span>
-      <a href="#providers" data-tab="providers" data-title="Provider">
-        <svg class="nav-ic" viewBox="0 0 20 20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3.5" width="14" height="5.5" rx="1.5"/><rect x="3" y="11" width="14" height="5.5" rx="1.5"/><path d="M6 6.2h.01M6 13.8h.01"/></g></svg>
-        <span>Provider</span></a>
-      <a href="#routing" data-tab="routing" data-title="路由">
-        <svg class="nav-ic" viewBox="0 0 20 20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10h5l4-5h5M8 10l4 5h5M14.5 3l2.5 2-2.5 2M14.5 13l2.5 2-2.5 2"/></g></svg>
-        <span>路由</span></a>
-      <span class="nav-gl">观测</span>
-      <a href="#observe" data-tab="observe" data-title="观测">
-        <svg class="nav-ic" viewBox="0 0 20 20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 11h3l2-6 3.5 10 2.5-7 1.5 3h3"/></g></svg>
-        <span>观测</span></a>
-      <span class="nav-gl">自动化</span>
-      <a href="#dispatch" data-tab="dispatch" data-title="派发">
-        <svg class="nav-ic" viewBox="0 0 20 20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3L9.5 10.5M17 3l-5 14-2.5-6.5L3 8l14-5z"/></g></svg>
-        <span>派发</span></a>
-      <a href="#plugins" data-tab="plugins" data-title="插件">
-        <svg class="nav-ic" viewBox="0 0 20 20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3.5h4V6a1.5 1.5 0 0 0 3 0V3.5h1.5v13H4v-4h2.5a1.5 1.5 0 0 0 0-3H4v-6h4z"/></g></svg>
-        <span>插件</span></a>
-    </nav>
+    <div class="side-top">
+      <div class="brand"><span class="logo" aria-hidden="true">Y</span><span class="side-l">yardmaster</span></div>
+    </div>
+    <div class="side-scroll">
+      <nav id="tabs" aria-label="主导航">
+        <span class="nav-gl">运行</span>
+        <button type="button" class="nav-it" data-tab="overview" data-title="总览">
+          <svg class="nav-ic" viewBox="0 0 20 20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="5.5" height="5.5" rx="1.2"/><rect x="11.5" y="3" width="5.5" height="5.5" rx="1.2"/><rect x="3" y="11.5" width="5.5" height="5.5" rx="1.2"/><rect x="11.5" y="11.5" width="5.5" height="5.5" rx="1.2"/></g></svg>
+          <span>总览</span></button>
+        <span class="nav-gl">路由</span>
+        <button type="button" class="nav-it" data-tab="providers" data-title="Provider">
+          <svg class="nav-ic" viewBox="0 0 20 20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3.5" width="14" height="5.5" rx="1.5"/><rect x="3" y="11" width="14" height="5.5" rx="1.5"/><path d="M6 6.2h.01M6 13.8h.01"/></g></svg>
+          <span>Provider</span></button>
+        <button type="button" class="nav-it" data-tab="routing" data-title="路由">
+          <svg class="nav-ic" viewBox="0 0 20 20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10h5l4-5h5M8 10l4 5h5M14.5 3l2.5 2-2.5 2M14.5 13l2.5 2-2.5 2"/></g></svg>
+          <span>路由</span></button>
+        <span class="nav-gl">观测</span>
+        <button type="button" class="nav-it" data-tab="observe" data-title="观测">
+          <svg class="nav-ic" viewBox="0 0 20 20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 11h3l2-6 3.5 10 2.5-7 1.5 3h3"/></g></svg>
+          <span>观测</span></button>
+        <span class="nav-gl">自动化</span>
+        <button type="button" class="nav-it" data-tab="dispatch" data-title="派发">
+          <svg class="nav-ic" viewBox="0 0 20 20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3L9.5 10.5M17 3l-5 14-2.5-6.5L3 8l14-5z"/></g></svg>
+          <span>派发</span></button>
+        <button type="button" class="nav-it" data-tab="plugins" data-title="插件">
+          <svg class="nav-ic" viewBox="0 0 20 20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3.5h4V6a1.5 1.5 0 0 0 3 0V3.5h1.5v13H4v-4h2.5a1.5 1.5 0 0 0 0-3H4v-6h4z"/></g></svg>
+          <span>插件</span></button>
+      </nav>
+    </div>
     <div class="side-foot">
-      <button id="btn-theme" title="主题：跟随系统 → 亮 → 暗 循环">◐ 跟随系统</button>
+      <button type="button" class="side-gw" id="side-gw" hidden>
+        <i aria-hidden="true"></i><span id="side-gw-text"></span>
+      </button>
+      <button type="button" class="side-gw" id="btn-theme" title="主题：跟随系统 → 亮 → 暗 循环">
+        <svg class="nav-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.2a5.8 5.8 0 1 0 0 11.6z" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r="5.8" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>
+        <span id="theme-text">跟随系统</span>
+      </button>
     </div>
   </aside>
 
-  <!-- 瘦顶栏：页面上下文 + 状态 + 动作（导航已入侧栏） -->
-  <header>
-    <h1><span id="page-title">总览</span> <span class="pill" id="status">连接中…</span></h1>
-    <div class="spacer"></div>
-    <button id="btn-reload" title="重读 providers.json 并热替换路由快照">重载配置</button>
+  <!-- 瘦顶栏：页面上下文 + 状态行 + 图标动作（Magpie：动作只给会动的东西） -->
+  <header class="top">
+    <h1 id="page-title">总览</h1>
+    <span class="grow"></span>
+    <span id="status" class="status" role="status"></span>
+    <button type="button" class="icon" id="btn-reload" title="重读 providers.json 并热替换路由快照" aria-label="重载配置">
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2v3h-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
   </header>
 
-  <main>
+  <!-- 应用壳：body 不滚，各视图独立滚动（Magpie 构造） -->
+  <main id="view-root">
     <!-- 总览 -->
-    <section id="page-overview" class="page active">
+    <section id="page-overview" class="view" hidden>
       <div id="stat-cards" class="cards"></div>
-      <div class="card">
-        <b>运行状态</b>
-        <div id="ov-state" class="muted">…</div>
-      </div>
-      <div class="card">
-        <b>代理链（F3 继承：账号 → Provider → 全局 → 系统）</b>
-        <div id="ov-proxy" class="muted">…</div>
-      </div>
-      <div class="card">
-        <b>休眠中的账号</b>
-        <div id="ov-resting" class="muted">无</div>
-        <div style="height:6px"></div>
-        <b>额度耗尽（休眠至次日重置）</b>
-        <div id="ov-exhausted" class="muted">无</div>
-      </div>
-      <div class="card">
-        <b>设置</b>
-        <p class="muted">保存后写入 settings.json；监听地址与令牌等装配期字段需重启 serve 完全生效。</p>
-        <label>全局代理 <input id="set-proxy" placeholder="留空=系统代理；direct=显式直连；http(s)/socks5://…"></label>
-        <label>L1 分类器模型 <input id="set-l1" placeholder="provider/model 或 group/&lt;id&gt;；留空=关闭 L1"></label>
-        <label>L1 超时 (ms) <input id="set-l1-timeout" type="number" min="0" step="100"></label>
-        <label>监听地址 <input id="set-listen" placeholder="默认 127.0.0.1:8317；局域网共享填 0.0.0.0:8317（强制令牌）"></label>
-        <label>访问令牌 <input id="set-token" type="password" placeholder="留空=保留现有；仅本机使用可留空"></label>
+      <div class="label">运行状态</div>
+      <div class="list">
         <div class="row">
-          <button id="btn-save-settings" class="primary">保存设置</button>
-          <span id="settings-msg" class="muted"></span>
+          <div class="who">
+            <div class="name">网关</div>
+            <div class="sub" id="ov-state">读取中…</div>
+          </div>
+          <span class="pill" id="ov-pill">连接中…</span>
         </div>
       </div>
+      <div class="label">代理链 <span class="label-note">F3 继承：账号 → Provider → 全局 → 系统</span></div>
+      <div class="list" id="ov-proxy"><div class="row"><div class="who"><div class="name muted2">读取中…</div></div></div></div>
+      <div class="label">休眠与额度</div>
+      <div class="list" id="ov-rest"></div>
+      <div class="label">设置</div>
+      <div class="list prefs">
+        <div class="row pref">
+          <div class="who"><div class="name">全局代理</div><div class="sub">留空=系统代理；direct=显式直连；http(s)/socks5://…</div></div>
+          <input id="set-proxy" class="set-field" spellcheck="false" autocomplete="off">
+        </div>
+        <div class="row pref">
+          <div class="who"><div class="name">L1 分类器模型</div><div class="sub">provider/model 或 group/&lt;id&gt;；留空=关闭 L1</div></div>
+          <input id="set-l1" class="set-field" spellcheck="false" autocomplete="off">
+        </div>
+        <div class="row pref">
+          <div class="who"><div class="name">L1 超时</div><div class="sub">毫秒</div></div>
+          <input id="set-l1-timeout" class="set-field num" type="number" min="0" step="100">
+        </div>
+        <div class="row pref">
+          <div class="who"><div class="name">监听地址</div><div class="sub">默认 127.0.0.1:8317；局域网共享填 0.0.0.0:8317（强制令牌）</div></div>
+          <input id="set-listen" class="set-field" spellcheck="false" autocomplete="off">
+        </div>
+        <div class="row pref">
+          <div class="who"><div class="name">访问令牌</div><div class="sub" id="set-token-sub">留空=保留现有；仅本机使用可留空</div></div>
+          <input id="set-token" class="set-field" type="password" autocomplete="new-password">
+        </div>
+      </div>
+      <div class="after-list">
+        <button type="button" class="btn-primary" id="btn-save-settings">保存设置</button>
+        <span class="sub" id="settings-msg"></span>
+      </div>
+      <p class="foot-note">保存后写入 settings.json；监听地址与令牌等装配期字段需重启 serve 完全生效。所有写路径经备份栈 + 审计。</p>
     </section>
 
     <!-- Provider -->
-    <section id="page-providers" class="page">
+    <section id="page-providers" class="view" hidden>
+      <div class="view-head">
+        <div class="search">
+          <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.5 10.5 3 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          <input id="pv-q" type="search" spellcheck="false" autocomplete="off" placeholder="查找 Provider 或账号" aria-label="查找 Provider">
+        </div>
+        <span class="sub" id="pv-count"></span>
+      </div>
       <div id="prov-list"></div>
+      <div class="after-list">
+        <button type="button" class="text add" id="btn-add-provider">＋ 添加 Provider</button>
+        <span class="sub">OAuth 订阅类请用 CLI：<code>yardmaster provider add-oauth</code></span>
+      </div>
+      <div class="empty-state" id="prov-none" hidden><b>尚未配置 Provider</b>点击上方「＋ 添加 Provider」，从厂商预设开始（或用 CLI <code>yardmaster provider add</code>）</div>
     </section>
 
     <!-- 路由 -->
-    <section id="page-routing" class="page">
-      <div class="card">
-        <div class="row"><b>路由组</b><span class="spacer"></span><button class="mini" id="btn-add-group">＋ 新建组</button></div>
-        <table id="tbl-groups"><thead><tr><th>ID</th><th>策略</th><th>成员</th><th></th></tr></thead><tbody></tbody></table>
-      </div>
-      <div class="card">
-        <div class="row"><b>任务规则</b><span class="spacer"></span><button class="mini" id="btn-add-rule">＋ 新建规则</button></div>
-        <table id="tbl-rules"><thead><tr><th>ID</th><th>说明</th><th>条件</th><th>目标</th><th>命中</th><th></th></tr></thead><tbody></tbody></table>
-      </div>
-      <div class="card">
-        <b>调用方默认模型绑定</b>
-        <table id="tbl-keys"><thead><tr><th>Key</th><th>默认模型</th></tr></thead><tbody></tbody></table>
-      </div>
-      <div class="card">
-        <div class="row"><b>自定义意图词表</b><span class="spacer"></span><button class="mini" id="btn-add-intent">＋ 新建意图</button></div>
-        <p class="muted">求值顺序：自定义（优先级降序）→ 内置 L0 → L1 → 默认组；正则对原文匹配。</p>
-        <table id="tbl-intents"><thead><tr><th>ID</th><th>展示名</th><th>关键词</th><th>正则</th><th>示例句</th><th>优先级</th><th></th></tr></thead><tbody></tbody></table>
-      </div>
-      <p class="muted">所有写操作经管理 API：严格校验、写前备份（backup/ 目录）、审计日志；校验失败不落盘。</p>
+    <section id="page-routing" class="view" hidden>
+      <div class="label">路由组 <span class="label-note">策略决定组内账号的选取顺序</span></div>
+      <div class="list" id="list-groups"></div>
+      <div class="after-list"><button type="button" class="text add" id="btn-add-group">＋ 新建组</button></div>
+
+      <div class="label">任务规则 <span class="label-note">意图/正则/token 上限/调用方 → 目标</span></div>
+      <div class="list" id="list-rules"></div>
+      <div class="after-list"><button type="button" class="text add" id="btn-add-rule">＋ 新建规则</button></div>
+
+      <div class="label">调用方默认模型绑定</div>
+      <div class="list" id="list-keys"></div>
+
+      <div class="label">自定义意图词表 <span class="label-note">求值顺序：自定义（优先级降序）→ 内置 L0 → L1 → 默认组；正则对原文匹配</span></div>
+      <div class="list" id="list-intents"></div>
+      <div class="after-list"><button type="button" class="text add" id="btn-add-intent">＋ 新建意图</button></div>
+      <p class="foot-note">所有写操作经管理 API：严格校验、写前备份（backup/ 目录）、审计日志；校验失败不落盘。</p>
     </section>
 
     <!-- 观测 -->
-    <section id="page-observe" class="page">
-      <div class="card">
-        <div class="row">
-          <b>决策追溯</b>
-          <label class="inline">调用方 <input id="trace-agent" placeholder="如 claude-code" size="12"></label>
-          <label class="inline">结果 <select id="trace-result"><option value="">全部</option><option value="ok">ok</option><option value="fail">fail</option></select></label>
-          <label class="inline">条数 <select id="trace-limit"><option>50</option><option selected>100</option><option>200</option></select></label>
-          <label class="inline"><input type="checkbox" id="trace-auto"> 自动刷新(30s)</label>
-          <button id="btn-trace-refresh">刷新</button>
+    <section id="page-observe" class="view" hidden>
+      <div class="view-head">
+        <div class="search slim">
+          <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.5 10.5 3 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          <input id="trace-agent" type="search" spellcheck="false" autocomplete="off" placeholder="调用方，如 claude-code" aria-label="按调用方过滤">
         </div>
-        <table id="tbl-trace">
-          <thead><tr><th></th><th>时间</th><th>调用方</th><th>请求模型</th><th>路径</th><th>目标</th><th>结果</th><th>候选</th><th>总耗时</th></tr></thead>
-          <tbody></tbody>
-        </table>
+        <select id="trace-result" class="sel" aria-label="按结果过滤">
+          <option value="">全部结果</option><option value="ok">ok</option><option value="fail">fail</option>
+        </select>
+        <select id="trace-limit" class="sel" aria-label="条数">
+          <option>50</option><option selected>100</option><option>200</option>
+        </select>
+        <label class="switch-line"><button type="button" class="lib-switch" id="trace-auto" role="switch" aria-checked="false" aria-label="自动刷新"><i></i></button><span>自动刷新 30s</span></label>
+        <span class="grow"></span>
+        <button type="button" class="icon" id="btn-trace-refresh" title="刷新决策追溯" aria-label="刷新">
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2v3h-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
       </div>
-      <div class="card">
-        <div class="row">
-          <b>成本报告（单价表 × trace 聚合）</b>
-          <label class="inline">天数 <select id="cost-days"><option>1</option><option selected>7</option><option>30</option></select></label>
-          <button id="btn-cost-refresh">刷新</button>
-        </div>
-        <div id="cost-body" class="muted">…</div>
+      <div class="list" id="list-trace"></div>
+
+      <div class="label">成本报告 <span class="label-note">单价表 × trace 聚合</span>
+        <select id="cost-days" class="sel" aria-label="统计天数"><option>1</option><option selected>7</option><option>30</option></select>
       </div>
-      <div class="card">
-        <div class="row"><b>模型单价表</b><span class="spacer"></span>
-          <button class="mini" id="btn-price-sync">同步 models.dev 单价</button>
-          <button class="mini" id="btn-add-price">＋ 新建单价</button></div>
-        <p class="muted">单位：美元 / 1M tokens；价格键 provider/model（精确）优先于裸 model；同步缺省只填充用量内模型（同名模型按本地供应商写精确键，供应商单价可不同），人工价不被覆盖（覆盖用 CLI price sync -force）；CLI settings set fx-usd-cny 配汇率后价格旁显示 ≈¥。</p>
-        <table id="tbl-pricing"><thead><tr><th>价格键</th><th>输入 $/1M</th><th>输出 $/1M</th><th></th></tr></thead><tbody></tbody></table>
+      <div id="cost-body"></div>
+
+      <div class="label">模型单价表 <span class="label-note">美元 / 1M tokens；provider/model 精确键优先于裸 model；人工价不被同步覆盖</span></div>
+      <div class="list" id="list-pricing"></div>
+      <div class="after-list">
+        <button type="button" class="text add" id="btn-add-price">＋ 新建单价</button>
+        <button type="button" class="text add" id="btn-price-sync">⟳ 同步 models.dev 单价</button>
       </div>
-    </section>
-    <!-- 派发（M5-W5：任务→Agent headless 派发） -->
-    <section id="page-dispatch" class="page">
-      <div class="card">
-        <b>提交任务</b>
-        <p class="muted">任务文本经 stdin 交给本机已安装的 Agent（headless）；选择规则见 dispatch.json（意图→Agent 匹配，无匹配走 default 兜底）。ToS 边界：不代装、不代登录。</p>
-        <textarea id="disp-task" rows="3" placeholder="例：把 src 下的 TODO 注释整理成清单"></textarea>
-        <div class="row" id="disp-tmplrow" hidden>
-          <label class="inline">模板 <select id="disp-template"><option value="">自由任务（直接填写上方文本）</option></select></label>
-        </div>
-        <div class="row" id="disp-params" hidden></div>
-        <div class="row">
-          <label class="inline">Agent <select id="disp-agent"><option value="">自动（按匹配规则）</option></select></label>
-          <label class="inline">模型占位 <input id="disp-model" placeholder="{model} 替换值（可选）" size="14"></label>
-          <span class="spacer"></span>
-          <button id="btn-dispatch-run" class="primary">派发</button>
-        </div>
-      </div>
-      <div class="card">
-        <div class="row"><b>会话</b><span class="spacer"></span>
-          <label class="inline"><input type="checkbox" id="disp-auto" checked> 自动刷新(5s)</label>
-          <button id="btn-disp-refresh">刷新</button></div>
-        <div class="row" id="disp-filterrow">
-          <label class="inline">Agent <select id="disp-f-agent"><option value="">全部</option></select></label>
-          <label class="inline">状态 <select id="disp-f-status">
-            <option value="">全部</option><option>running</option><option>done</option>
-            <option>failed</option><option>cancelled</option></select></label>
-          <label class="inline">时间 <select id="disp-f-time">
-            <option value="">全部</option><option value="1h">近 1 小时</option>
-            <option value="24h">近 24 小时</option><option value="7d">近 7 天</option></select></label>
-        </div>
-        <table id="tbl-dispatch">
-          <thead><tr><th>会话</th><th>Agent</th><th>任务</th><th>状态</th><th>耗时</th><th></th></tr></thead>
-          <tbody></tbody>
-        </table>
-        <div class="row" id="disp-viewbar" hidden>
-          <span class="muted" id="disp-viewhint">事件视图</span><span class="spacer"></span>
-          <button class="mini" id="disp-copy">复制</button>
-          <button class="mini" id="disp-export">导出</button>
-          <button class="mini" id="disp-evtoggle">切换原文</button>
-        </div>
-        <pre id="disp-output" class="disp-output" hidden></pre>
-      </div>
-      <p class="muted">派发配置经管理 API（PUT /api/config/dispatch：严格校验、写前备份、审计）；会话终态写入观测页 trace（RoutePath=dispatch）。</p>
     </section>
 
-    <!-- 插件（M7-W5：子进程插件管理面） -->
-    <section id="page-plugins" class="page">
-      <div class="card">
-        <div class="row"><b>插件</b><span class="spacer"></span><button id="btn-plugins-refresh">刷新</button></div>
-        <p class="muted">清单源 plugins.json（写路径严格校验+备份+审计）；启停即时热生效。子进程协议：握手授予 granted=配置∩声明；事件队列满丢最旧；崩溃退避重启（1 小时 &gt;10 次标 failed，改配置或重载恢复）。</p>
-        <table id="tbl-plugins">
-          <thead><tr><th>ID</th><th>状态</th><th>启用</th><th>授予能力</th><th>崩溃(1h)</th><th>丢事件</th><th></th></tr></thead>
-          <tbody></tbody>
-        </table>
+    <!-- 派发 -->
+    <section id="page-dispatch" class="view" hidden>
+      <div class="label">提交任务</div>
+      <div class="list">
+        <div class="row pref top">
+          <div class="who"><div class="name">任务</div><div class="sub">经 stdin 交给本机已安装的 Agent（headless）；意图→Agent 匹配，无匹配走 default 兜底。不代装、不代登录。</div></div>
+        </div>
+        <div class="pad"><textarea id="disp-task" rows="3" placeholder="例：把 src 下的 TODO 注释整理成清单" spellcheck="false"></textarea></div>
+        <div class="row pref" id="disp-tmplrow" hidden>
+          <div class="who"><div class="name">模板</div></div>
+          <select id="disp-template" class="sel grow-sel"><option value="">自由任务（直接填写上方文本）</option></select>
+        </div>
+        <div class="row pref" id="disp-params" hidden></div>
+        <div class="row pref">
+          <div class="who"><div class="name">Agent</div></div>
+          <select id="disp-agent" class="sel"><option value="">自动（按匹配规则）</option></select>
+        </div>
+        <div class="row pref">
+          <div class="who"><div class="name">模型占位</div><div class="sub">{model} 替换值，可选</div></div>
+          <input id="disp-model" class="set-field" spellcheck="false">
+        </div>
       </div>
-      <div class="card" id="card-plugin-log" hidden>
-        <div class="row"><b>日志（stderr 尾部 50 行）</b><span class="spacer"></span><span class="muted" id="plugin-log-id"></span></div>
+      <div class="after-list"><button type="button" class="btn-primary" id="btn-dispatch-run">派发</button></div>
+
+      <div class="view-head">
+        <div class="label inline">会话</div>
+        <select id="disp-f-agent" class="sel" aria-label="按 Agent 过滤"><option value="">全部 Agent</option></select>
+        <select id="disp-f-status" class="sel" aria-label="按状态过滤">
+          <option value="">全部状态</option><option>running</option><option>done</option>
+          <option>failed</option><option>cancelled</option>
+        </select>
+        <select id="disp-f-time" class="sel" aria-label="按时间过滤">
+          <option value="">全部时间</option><option value="1h">近 1 小时</option>
+          <option value="24h">近 24 小时</option><option value="7d">近 7 天</option>
+        </select>
+        <label class="switch-line"><button type="button" class="lib-switch on" id="disp-auto" role="switch" aria-checked="true" aria-label="自动刷新"><i></i></button><span>自动刷新 5s</span></label>
+        <span class="grow"></span>
+        <button type="button" class="icon" id="btn-disp-refresh" title="刷新会话" aria-label="刷新">
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2v3h-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+      <div class="list" id="list-dispatch"></div>
+      <div class="list term" id="card-disp-output" hidden>
+        <div class="row head">
+          <div class="who"><div class="name" id="disp-viewhint">事件视图</div><div class="sub" id="disp-viewid"></div></div>
+          <button type="button" class="text" id="disp-copy">复制</button>
+          <button type="button" class="text" id="disp-export">导出</button>
+          <button type="button" class="text" id="disp-evtoggle">切换原文</button>
+        </div>
+        <pre id="disp-output" class="disp-output"></pre>
+      </div>
+      <p class="foot-note">派发配置经管理 API（PUT /api/config/dispatch：严格校验、写前备份、审计）；会话终态写入观测页 trace（RoutePath=dispatch）。</p>
+    </section>
+
+    <!-- 插件 -->
+    <section id="page-plugins" class="view" hidden>
+      <div class="view-head">
+        <div class="label inline">插件</div>
+        <span class="grow"></span>
+        <button type="button" class="icon" id="btn-plugins-refresh" title="刷新插件清单" aria-label="刷新">
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2v3h-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+      <div class="list" id="list-plugins"></div>
+      <div class="list term" id="card-plugin-log" hidden>
+        <div class="row head">
+          <div class="who"><div class="name">日志 <span class="muted2">stderr 尾部 50 行</span></div><div class="sub" id="plugin-log-id"></div></div>
+          <button type="button" class="icon" id="plugin-log-close" title="收起" aria-label="收起日志">
+            <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </div>
         <pre id="plugin-log" class="disp-output"></pre>
       </div>
-      <p class="muted">能力词表：events.trace（决策 trace 订阅）/ dispatch.parse（Agent 输出行解析，agent 条目 parser 字段指向插件 id）/ classify.intent（意图兜底，词表外拒收）/ vendor.verdict（200 伪装拒绝长尾特判）。示例见仓库 examples/。</p>
+      <p class="foot-note">清单源 plugins.json（写路径严格校验+备份+审计）；启停即时热生效。能力词表：events.trace / dispatch.parse / classify.intent / vendor.verdict。示例见仓库 examples/。</p>
     </section>
   </main>
 
-  <div id="toast" class="toast"></div>
   <div id="modal-root"></div>
   <script src="/web/app.js"></script>
 </body>

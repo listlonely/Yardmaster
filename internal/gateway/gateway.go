@@ -110,6 +110,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/cost", s.handleCost)
 	mux.HandleFunc("POST /api/pricing/sync", s.handlePricingSync) // M7-W1：models.dev 单价同步
 	mux.HandleFunc("POST /api/quota/probe", s.handleQuotaProbe)   // M9-W3：手动触发余额轮询
+	mux.HandleFunc("GET /api/provider-presets", s.handleProviderPresets) // M9：前端「添加 Provider」预填数据源（只读）
 	mux.HandleFunc("GET /api/plugins", s.handlePluginsView)       // M7-W5：插件状态视图
 	mux.HandleFunc("POST /api/plugins/{id}/enable", func(w http.ResponseWriter, r *http.Request) {
 		s.handlePluginToggle(w, r.PathValue("id"), "enable")

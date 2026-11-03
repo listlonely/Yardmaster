@@ -322,6 +322,61 @@ internal/app/
 - 窄窗折叠回顶栏 tabs（手机/极窄场景）：可砍——桌面窗口 min-width
   900px 不需要。
 
+### 七·乙、控制台深度重构：Magpie 构造与交互全面对齐（2026-11-03 用户定向）
+
+> 用户指令「参照 magpie 的界面构造与交互，大幅度修改前端」——在本节
+> 布局采纳之上再做一轮深度重构。**两项旧决策被推翻并留痕**：①侧栏
+> 「常暗工业风锚点」（七·甲）改为 **Magpie 同底色侧栏**（与内容区共用
+> `--bg`，选中项 = `--card` 卡片浮起 + seg-edge 描边，单一滑动高亮形状
+> `.nav-hl`）；②通用 `.card`+`<table>` 构造改为 **全面行卡片化**
+> （`.list`/`.row`/`.who`/`.name`/`.sub`，全站无 `<table>`）。对比分析
+> 全文见工作区《Magpie前端对比与重构方案.md》。
+
+**构造**：应用壳（body 不滚、各视图独立滚动，替代 sticky 顶栏补丁）；
+Magpie 令牌体系整体替换（四层文字灰阶 fg/fg-2/muted/faint、两档线
+line/line-2、card-2 次级表面、accent 靛色 `#4f46e5`、pill 家族 999px）；
+`.label` 分区头 + `.empty-state` 空状态 + 骨架屏；模态统一 `.dialog`
+（大柔影+入场动画），`confirm()` 全部替换为 `confirmModal()`。
+
+**交互**：`status()` 顶栏状态行（ok 3.5s/err 8s 自动消）全面替代
+toast；`show(tab)` 激活即懒加载 + `document.hidden` 轮询守卫（15s 总览
+/30s trace/5s 派发不变）；HTTP 错误码→中文可操作文案映射；Provider
+客户端查找过滤；胶囊开关（`.lib-switch`）用于 trace/派发自动刷新与插件
+启停（乐观更新，失败回弹）；prefers-reduced-motion 全局尊重。
+
+**不变**：全部管理 API 面与写路径五铁律、令牌 401 单飞重试、
+data-tab/hash 路由机制、`?app=1` 密度语义、主题三态循环（localStorage）、
+外链拦截、`win` 字体栈。**留档不做**：命令面板、i18n、插件 iframe、侧
+栏拖宽、crumb、View Transitions、X-Magpie-Delta 增量协议。
+
+许可纪律延续：色板值/字体栈/几何参数逐字复用处已在 app.css 头部标注
+（magpie，MIT © yetone）；结构与命名自主。验证：Node mock 伺服 +
+浏览器三轮实测（六页遍历 × 明暗双主题 × 模态/过滤/展开/开关交互 ×
+F5 恢复）全过、控制台零 JS 错误；`$('id')` 70 处引用与 HTML 全匹配。
+~~未实测：真实 serve 全链路~~ **已实测（2026-11-03 真机冒烟核销）**：
+隔离数据目录（USERPROFILE 覆写，不碰真实 ~/.yardmaster）起真实 serve
+——go:embed 产物带全部重构标记（nav-hl/`.dialog`/lib-switch）；管理
+API 12 端点全 200（含新 `GET /api/provider-presets` 13 预设形状吻合）；
+写路径闭环——settings 同值回写（200 + effect=restart + 写响应含
+state/config）、providers 追加（新明文 key 落盘 + API 回显 `***` 脱敏）
+与整行移除均过，`backup/` 留 3 份审计快照 + reload/probe 200；浏览器
+六页对照真实 serve 复测（总览/Provider/路由/观测/派发 × 明暗主题 ×
+添加模态预设 tile 预填）全过、控制台零 JS 错误。go vet + go test ./...
+全绿。
+
+**七·乙追记（同日）：Provider 实体编辑补齐。** 此前前端仅只读 + 额度
+（CLI 注释「UI 向导后续接入」的历史边界），本轮补齐：①新只读端点
+`GET /api/provider-presets`（与 CLI `-preset` 同一 `provider.Presets`
+事实源，api.md 已记）；②「＋ 添加 Provider」模态——预设 tile 预填
+（id/名/协议/base_url，显式改动不覆盖，CLI add 同语义）→ 表单（密钥
+type=password、账号代理/Provider 代理/最大并发）→ `putProvidersDoc`
+提交；id 已存在=追加账号（账号名冲突拒绝，指向 CLI `-replace`），新
+明文 key 经服务端 `keepProviderKeys` 采纳；③账号行 hover「删除」→
+`confirmModal` → 整行移除（服务端语义：空 key=保留，移除=删除）。
+OAuth 订阅类不在前端（授权流在浏览器外，仍 CLI add-oauth）。测试：
+`provider_presets_test.go`（端点形状漂移即失败）；浏览器实测 tile 预填/
+落盘持久化/掩码回显/删除确认全过。
+
 ### 可采纳项（W3 落地，按价值排序）
 
 | # | 项 | Magpie 做法（出处 app.css/index.html） | 我方落点 |

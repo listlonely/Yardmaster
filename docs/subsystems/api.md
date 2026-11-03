@@ -26,6 +26,7 @@
 | `PUT /api/config/{name}` | 整文件写（键级编辑器的提交端点） | **写响应包**（见下） |
 | `POST /api/reload` | 重读 providers.json 并热替换 Planner | **写响应包** |
 | `POST /api/quota/probe` | 手动触发一次余额轮询（M9-W3；与后台 30min ticker 同 `pollQuotas` 路径） | **写响应包** + `probes` 数组 |
+| `GET /api/provider-presets` | 内置厂商预设表（M9：前端「添加 Provider」表单预填；与 CLI `provider add -preset` 同一 `provider.Presets` 事实源，只读） | `Preset[]` |
 
 管理面非回环监听时全部路由强制 token（M2-W5 三口基线，不变）。
 

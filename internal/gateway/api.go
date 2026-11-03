@@ -338,6 +338,14 @@ func (s *Server) handleQuotaProbe(w http.ResponseWriter, _ *http.Request) {
 	s.writeResultExtra(w, map[string]any{"probes": probes})
 }
 
+// handleProviderPresets 返回内置厂商预设表（只读）：前端「添加
+// Provider」表单的预填数据源，与 CLI `provider add -preset` 消费同一
+// provider.Presets（单一事实源）。预设含 base_url 等公开文档值，无敏
+// 感数据；在 /api/ 下受令牌闸保护。
+func (s *Server) handleProviderPresets(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, provider.Presets)
+}
+
 // handleReload 重读 providers.json 并热替换 Planner（providers.json
 // 解析失败时拒绝重载，保留旧快照——读不懂=未知）。响应为写响应包
 // （api.md）：携带写后全量 state；providers 计数字段增量保留。
