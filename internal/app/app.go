@@ -32,6 +32,11 @@ import (
 // 开发态为 dev（开发文档 §8.2）。
 var Version = "dev"
 
+// guiSubsystem 由 yardmaster-app.exe 构建注入（-ldflags -X …guiSubsystem=1，
+// Windows GUI subsystem 桌面入口）：无控制台，app 模式恒走 app.log 留痕；
+// console 版（yardmaster.exe）保持空值，孤立启动语义见 hideConsoleIfDetached。
+var guiSubsystem = ""
+
 // ErrUsage 表示命令行用法错误（区别于运行时故障）。
 var ErrUsage = errors.New("usage")
 
@@ -300,10 +305,10 @@ func runApp(args []string, stdout io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// 孤立启动（双击/开始菜单，父进程为 explorer）：收起 conhost 黑窗
-	// （console subsystem 的 exe 双击启动会带全程伴随的黑窗），slog 落
-	// app.log 保住崩溃/回退留痕；终端启动零变化（M8 收官后用户反馈）。
-	if hideConsoleIfDetached() {
+	// 桌面入口留痕：GUI 版（无控制台）恒落 app.log；console 版孤立启动
+	//（双击/开始菜单，父进程为 explorer）FreeConsole 收起黑窗后同落
+	// app.log。终端启动的 console 版零变化（M8 收官后用户反馈）。
+	if guiSubsystem == "1" || hideConsoleIfDetached() {
 		if paths, perr := store.DefaultPaths(); perr == nil {
 			setupAppLog(paths.AppDir)
 		}

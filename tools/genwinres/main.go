@@ -22,9 +22,13 @@ import (
 // appVersion 嵌入 exe 属性的资源版本（三段，第四位补 0）。
 const appVersion = "0.8.0"
 
-// outPath 输出对象文件（相对 go generate 的包目录 cmd/yardmaster；带
-// GOOS/GOARCH 后缀，仅 windows/amd64 构建链接）。
-const outPath = "rsrc_windows_amd64.syso"
+// outPaths 输出对象文件（相对 go generate 的包目录 cmd/yardmaster；带
+// GOOS/GOARCH 后缀，仅 windows/amd64 构建链接）。两份：console 入口与
+// GUI 入口（Go 只链接 main 包目录下的 syso）。
+var outPaths = []string{
+	"rsrc_windows_amd64.syso",
+	"../yardmaster-app/rsrc_windows_amd64.syso",
+}
 
 // drawLogo 画应用图标：调车长意象（深蓝底 + 双轨横线 + 岔轨斜线），
 // 与 internal/app 的 trayIcon 同款矢量、同款 32 网格坐标，按目标尺寸
@@ -103,10 +107,16 @@ func run() error {
 		UseCommonControlsV6: true,
 	})
 
-	out, err := os.Create(outPath)
-	if err != nil {
-		return err
+	for _, outPath := range outPaths {
+		out, err := os.Create(outPath)
+		if err != nil {
+			return err
+		}
+		werr := rs.WriteObject(out, winres.ArchAMD64)
+		_ = out.Close()
+		if werr != nil {
+			return werr
+		}
 	}
-	defer func() { _ = out.Close() }() // WriteObject 错误已返回，Close 仅释放句柄
-	return rs.WriteObject(out, winres.ArchAMD64)
+	return nil
 }

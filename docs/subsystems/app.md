@@ -111,6 +111,21 @@
 > 生成（非孤立不接管，S1~S3）。文件：console_windows.go /
 > console_other.go（!windows no-op）+ runApp 开头接线。
 
+> [2026-11-03-黑窗根治：GUI 桌面双入口] 用户二轮反馈「启动时还会弹出
+> 终端再关闭」——FreeConsole 方案的固有局限：conhost 在进程创建瞬间
+> 弹出，收起只能事后（闪现 1~2s 不可消除）。根治=桌面入口换 **Windows
+> GUI subsystem**：新增 `cmd/yardmaster-app`（与 cmd/yardmaster 共享
+> internal/app 全部逻辑，仅链接期 `-H=windowsgui` + `guiSubsystem=1`
+> 注入不同）——双击/开始菜单**零终端窗口零闪现**（GUI 进程不创建
+> console，机制性）；console 版保留（serve/CLI 不变、`dispatch run`/
+> `run` 的 headless 同步等待+退出码契约为硬功能，GUI subsystem 无法
+> 满足，故不分体替换）。资源：genwinres 输出两份 syso（Go 只链接 main
+> 包目录下的 syso——初版 app exe 属性为空即此坑）；GUI 版无控制台，
+> `guiSubsystem=1` 恒走 app.log。发布链：release.yml 增 GUI 构建、
+> package.sh 并入 windows zip（产物文件数不变）。实证：explorer 代理
+> 启动零 conhost + app.log + healthz 200 + exe 属性/图标齐全（S1~S5）。
+> 单实例/数据目录/配置语义两入口完全一致。
+
 ## 一、目标与边界
 
 兑现 2026-10-30 桌面壳两步走决策第二步：Windows app 模式以 Wails v3

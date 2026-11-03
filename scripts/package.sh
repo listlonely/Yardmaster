@@ -4,11 +4,16 @@
 set -x
 cd "$(dirname "$0")/../pack" || exit 9
 
-for p in yardmaster_linux-amd64 yardmaster_linux-arm64 yardmaster_windows-amd64.exe; do
-  base=${p%.exe}; base=${base#yardmaster_} # linux-amd64 / windows-amd64
+for p in yardmaster_linux-amd64 yardmaster_linux-arm64 yardmaster_windows-amd64.exe yardmaster_windows-app.exe; do
+  base=${p%.exe}; base=${base#yardmaster_} # linux-amd64 / windows-amd64 / windows-app
   dir="yardmaster-$base" # 目录名用连字符：避免与二进制文件重名（mkdir File exists）
   mkdir -p "$dir" || exit 1
-  cp "$p" "$dir/yardmaster${p#yardmaster_$base}" || exit 1
+  if [ "$base" = "windows-app" ]; then
+    # GUI 桌面入口并入 windows zip（双击零黑窗；CLI 仍为 yardmaster.exe）
+    cp "$p" yardmaster-windows-amd64/yardmaster-app.exe || exit 1
+  else
+    cp "$p" "$dir/yardmaster${p#yardmaster_$base}" || exit 1
+  fi
   cp ../README.md "$dir/" || exit 1
 done
 

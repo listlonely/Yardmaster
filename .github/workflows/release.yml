@@ -27,6 +27,12 @@ jobs:
               go build -trimpath -ldflags "-s -w -X yardmaster/internal/app.Version=$ver" \
               -o "pack/yardmaster_$os-$arch$ext" ./cmd/yardmaster
           done
+          # GUI 桌面入口（v0.8.1+）：Windows GUI subsystem，双击/开始菜单
+          # 零终端黑窗（console 版 serve/CLI/headless 契约不变，见
+          # docs/subsystems/app.md 五·甲）。
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
+            go build -trimpath -ldflags "-s -w -H=windowsgui -X yardmaster/internal/app.Version=$ver -X yardmaster/internal/app.guiSubsystem=1" \
+            -o "pack/yardmaster_windows-app.exe" ./cmd/yardmaster-app
       - name: Package
         shell: bash
         run: |

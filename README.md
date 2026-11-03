@@ -24,7 +24,7 @@ Agent ──▶ 127.0.0.1:8317 ──▶ Yardmaster ──▶ 按任务/额度/�
 - **决策追溯**：每次路由决策记录完整候选尝试链（谁调用、命中什么、试过谁、为何切换），落盘 30 天/200MB，`/api/trace`、控制台与 CLI 可查
 - **代理挂载**：全局 → Provider → 账号三级继承（http/https/socks5/socks5h/direct），HTTP/2 半死连接健康检查
 - **局域网共享**：`listen` + 强制令牌（token）；控制台/API/推断端点统一过闸，默认仅本机
-- **桌面应用（app 模式，v0.8.0 起 Windows 原生窗口）**：`yardmaster` 直接运行即有应用界面——进程内网关 + 系统托盘 + 独立应用窗口。Windows 走 Wails v3 原生窗口（WebView2，零 cgo；关窗=隐藏到托盘，尺寸/位置记忆；WebView2 缺失自动回退浏览器窗口）；Linux/其他为浏览器 `--app` 独立窗口（无地址栏/标签页，exec 纯 Go，交叉编译矩阵不变）。控制台为侧栏式信息架构（Magpie 同构）+ 明暗双主题（跟随系统，侧栏脚部三态切换）。窗口关闭后台仍运行，重开/退出走托盘菜单；无头场景用 `serve`（不再自动开网页），网页控制台按指令打开：`yardmaster console`（浏览器）或 app 窗口
+- **桌面应用（app 模式，v0.8.1 起 Windows 双入口零黑窗）**：桌面入口 `yardmaster-app.exe`（Windows GUI subsystem，双击/开始菜单零终端窗口零闪现，图标/版本/DPI 资源齐全）；命令行 `yardmaster.exe`（console subsystem，serve/CLI/headless 派发契约不变）。两者共享同一套逻辑与数据目录——进程内网关 + 系统托盘 + 原生窗口（WebView2；关窗=隐藏到托盘，尺寸/位置记忆；WebView2 缺失自动回退浏览器窗口）；Linux/其他为浏览器 `--app` 独立窗口（exec 纯 Go，交叉编译矩阵不变）。控制台为侧栏式信息架构（Magpie 同构）+ 明暗双主题（跟随系统，侧栏脚部三态切换）。窗口关闭后台仍运行，重开/退出走托盘菜单；无头场景用 `serve`，网页控制台按指令打开：`yardmaster console`（浏览器）或 app 窗口
 - **OTLP traces 导出（v0.4.0，默认关）**：settings.json `otel{enabled,endpoint,headers}` 开启后，决策 trace 映射 OTel span（gen_ai.* 语义约定）推送 OTLP-HTTP 兼容后端（Jaeger/Tempo/Langfuse），手写 JSON 零 SDK 依赖，失败只降级不阻断推理
 
 ## 安装
