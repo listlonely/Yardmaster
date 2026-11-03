@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"sync/atomic"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -60,6 +61,11 @@ var nativeWindow atomic.Pointer[application.WebviewWindow]
 
 func init() {
 	nativeShellProbe = func() error {
+		// 应急开关/回退演练钩子（W6）：置位即跳过原生窗口——模拟 WebView2
+		// 缺失的完整回退路径，也为受控环境提供禁用出口（留痕可观测）。
+		if os.Getenv("YARDMASTER_NO_NATIVE_WINDOW") != "" {
+			return errors.New("YARDMASTER_NO_NATIVE_WINDOW 置位（跳过原生窗口）")
+		}
 		if !webview2RuntimePresent() {
 			return errors.New("WebView2 运行时未安装")
 		}
