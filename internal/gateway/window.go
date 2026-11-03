@@ -117,11 +117,12 @@ func numOf(raw any) (float64, bool) {
 // 额度（SwitchWhenSpent 的 Balance<=0 休眠语义天然对齐）；无 limits/
 // remaining 返回 false 走通用余额解析。真机样本（2026-11-03，pro 档）：
 // {"code":200,"success":true,"data":{"level":"pro","limits":[
-//   {"type":"CREDIT_LIMIT","unit":3,"number":5,"usage":12000,
-//    "currentValue":945,"remaining":11054,"percentage":7,
-//    "nextResetTime":1793690514565},
-//   {"type":"CREDIT_LIMIT","unit":6,"number":1,...,"remaining":45668,
-//    "percentage":23,...}]}}
+//
+//	{"type":"CREDIT_LIMIT","unit":3,"number":5,"usage":12000,
+//	 "currentValue":945,"remaining":11054,"percentage":7,
+//	 "nextResetTime":1793690514565},
+//	{"type":"CREDIT_LIMIT","unit":6,"number":1,...,"remaining":45668,
+//	 "percentage":23,...}]}}
 func extractPlanQuota(body []byte) (float64, bool) {
 	var r struct {
 		Success *bool `json:"success"`
@@ -279,11 +280,19 @@ func (s *Server) pollQuotas(ctx context.Context) []probeResult {
 			if bal <= 0 {
 				slog.Info("账号余额耗尽，休眠至次日重置（SwitchWhenSpent）",
 					"provider", prov.ID, "account", acc.Name, "balance", bal)
+				s.notifyAccountRest(prov.ID+"/"+acc.Name, "余额耗尽，次日重置")
 			}
 			out = append(out, probeResult{Provider: prov.ID, Account: acc.Name, Balance: bal})
 		}
 	}
 	return out
+}
+
+// notifyAccountRest 上游账号休眠事件（M9-W4）：nil 钩子=无订阅者空操作。
+func (s *Server) notifyAccountRest(accountKey, reason string) {
+	if s.OnAccountRest != nil {
+		s.OnAccountRest(accountKey, reason)
+	}
 }
 
 // probeBalance 请求余额端点并解析数值。

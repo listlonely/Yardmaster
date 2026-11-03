@@ -99,6 +99,24 @@
 > Linux 构建验证（W4 三目标交叉 + 零 wails 断言）与 race 全绿（CI 双
 > 平台）；④托盘菜单真机点击仍留档待日常确认。§十未实测项相应更新。
 
+> [2026-11-03-M9W4 托盘通知与菜单动态化] M6 砍项回收落地：①**桌面
+> 气泡通知**（internal/app/notify.go）——beeep v0.11.3（W1 探针定稿
+> 方案：Win10/11 原生 WinRT COM + PowerShell 兜底，Linux godbus），
+> 图标=trayIcon 同款字节；事件两类：派发终态（`Engine.OnFinish` 链式
+> 接在派发 trace 观察者后，语义不破坏）+ 上游账号休眠（`Server.
+> OnAccountRest` 钩子：429 精准/默认、402、余额轮询耗尽三处；网络失败
+> 不回调）；同 key 10 分钟限频（休眠事件随请求重复触发，防刷屏）；
+> settings `notify` 指针语义（nil=缺省开，显式 false 关；cfgSettings
+> nil 保留现值与 otel 同规）；失败 debug 留痕降级不阻断。真机冒烟：
+> smoke 派发 done → 「派发完成 · smoke · 任务摘要」气泡弹出（用户确认）。
+> ②**托盘菜单动态化**（Magpie traymenu 同构）：版本行（禁用态；dev 态
+> 显示「dev（开发态）」避免 vdev）+「升级到 vX.Y.Z」（15s 首查 + 每
+> 1h，有新版才显示，点击开 releases 页；查询失败静默；dev 态跳过）+
+> 状态摘要行（休眠 N · 派发 M 进行中，30s 刷新；禁用态）。TrayOptions
+> 取代固定双回调签名，app/serve -tray 两模式共用 wireDesktopHooks。
+> beeep 依赖仅 internal/app 壳层引入（网关核心零感知，OnAccountRest
+> 弱钩子解耦）。
+
 > [2026-11-03-M8W6 后补丁：双击启动黑窗收起] 用户反馈「每次启动应用会
 > 打开终端」——console subsystem 的 exe 双击/开始菜单启动时 conhost 黑
 > 窗全程伴随（app 模式常驻=黑窗常驻）。方案：**保留 console subsystem**

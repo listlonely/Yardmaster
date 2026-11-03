@@ -71,7 +71,11 @@ type Server struct {
 	Creds         *credential.Store // OAuth 凭证库（M3-W3）；nil=无 OAuth 能力
 	Dispatch      *dispatch.Engine  // 任务→Agent 派发引擎（M5-W4）；nil=未挂载
 	Plugins       *plugin.Registry  // 插件注册表（M7-W3）；nil=未挂载
-	oauth         oauthRuntime      // OAuth 运行态（token 缓存/single-flight）
+	// OnAccountRest 上游账号休眠事件钩子（M9-W4）：429/402/余额耗尽时
+	// 回调（网络失败不回调——频繁且自动恢复）。nil=无订阅者；壳层用于
+	// 桌面气泡通知，网关核心不感知通知实现。
+	OnAccountRest func(accountKey, reason string)
+	oauth         oauthRuntime // OAuth 运行态（token 缓存/single-flight）
 	started       time.Time
 }
 
@@ -459,8 +463,10 @@ func (s *Server) serveWithFailover(w http.ResponseWriter, r *http.Request,
 				s.Planner.SetWindow(cand.Key(), "restricted", until.Unix())
 				slog.Info("上游限频含重置时间，精准休眠", "provider", cand.Provider.ID,
 					"account", cand.Account.Name, "reset_at", until.Format(time.RFC3339))
+				s.notifyAccountRest(cand.Key(), fmt.Sprintf("限频，%s 重置", until.Local().Format("15:04")))
 			} else {
 				s.Planner.Rest(cand, restQuota)
+				s.notifyAccountRest(cand.Key(), "限频，默认短休眠")
 			}
 			last = res
 			continue
@@ -468,6 +474,7 @@ func (s *Server) serveWithFailover(w http.ResponseWriter, r *http.Request,
 			// 余额/额度（含 200 伪装拒绝识别映射，M3-W4）：与额度耗尽
 			// 同等休眠，切下一候选
 			s.Planner.Rest(cand, restQuota)
+			s.notifyAccountRest(cand.Key(), "余额/额度拒绝（402）")
 			last = res
 			continue
 		case res.status >= 500:

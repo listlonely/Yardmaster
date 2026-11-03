@@ -31,6 +31,17 @@ type Settings struct {
 	// 美元→人民币汇率（M7-W1 增量）：>0 时成本报告/单价表显示 ≈¥ 换算
 	// 列；0=仅美元。纯展示换算，不参与计费（计费恒以美元单价计算）。
 	FxUsdCNY float64 `json:"fx_usd_cny,omitempty"`
+
+	// 桌面气泡通知（M9-W4）：派发终态/上游账号休眠时弹系统通知。
+	// 指针语义：nil（配置缺省/未提供）=开启——桌面壳默认有通知，显式
+	// false 才关闭；指针而非 bool 是为管理 API PUT 的空值保留语义
+	//（nil=未提供保留现值，与 otel 等字段的保留逻辑同规）。
+	Notify *bool `json:"notify,omitempty"`
+}
+
+// NotifyEnabled 返回桌面气泡通知是否开启（nil=缺省开启）。
+func (s Settings) NotifyEnabled() bool {
+	return s.Notify == nil || *s.Notify
 }
 
 // OTelSettings 是 OTLP 导出配置。

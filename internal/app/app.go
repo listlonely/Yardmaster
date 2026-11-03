@@ -99,6 +99,7 @@ type serveSetup struct {
 	paths    store.Paths
 	settings store.Settings
 	listen   string
+	disp     *dispatch.Engine // 派发引擎（dispatch.json 不可用时 nil）
 }
 
 // setupGateway 完成网关装配（配置读取、安全基线、Server 构造、派发挂载）。
@@ -160,7 +161,7 @@ func setupGateway() (*serveSetup, error) {
 		}
 		srv.AttachDispatch(dispEngine)
 	}
-	return &serveSetup{srv: srv, planner: planner, paths: paths, settings: settings, listen: listen}, nil
+	return &serveSetup{srv: srv, planner: planner, paths: paths, settings: settings, listen: listen, disp: dispEngine}, nil
 }
 
 // startHelpers 启动后台辅助（OTLP 导出、OAuth 刷新、余额轮询、用量落盘
@@ -240,6 +241,71 @@ func (st *serveSetup) banner(stdout io.Writer) {
 	}
 }
 
+// wireDesktopHooks 装配桌面壳事件（M9-W4）：派发终态气泡（链式接在
+// 派发 trace 观察者之后，观察者语义不破坏）+ 上游账号休眠气泡。n 为
+// 通知器（settings.notify 关闭时为禁用态 notifier，send 空操作）。
+func (st *serveSetup) wireDesktopHooks(n *notifier) {
+	if st.disp != nil {
+		prev := st.disp.OnFinish
+		st.disp.OnFinish = func(s *dispatch.Session) {
+			if prev != nil {
+				prev(s)
+			}
+			title := "派发完成"
+			if s.Status != "done" {
+				title = "派发" + s.Status
+			}
+			n.send("dispatch/"+s.ID, title, s.Agent+" · "+firstRunes(s.Task, 48))
+		}
+	}
+	st.srv.OnAccountRest = func(key, reason string) {
+		n.send("rest/"+key, "上游账号休眠", key+" · "+reason)
+	}
+}
+
+// firstRunes 截取前 n 个 rune（通知正文摘要；超长加省略号）。
+func firstRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
+
+// trayStatus 托盘状态摘要行（30s 刷新）：休眠账号数 + 派发进行中。
+func (st *serveSetup) trayStatus() string {
+	resting := len(st.srv.Planner.Resting())
+	running := 0
+	if st.disp != nil {
+		for _, s := range st.disp.Sessions() {
+			if s.Status == "running" {
+				running++
+			}
+		}
+	}
+	if resting == 0 && running == 0 {
+		return "网关正常 · 无休眠账号"
+	}
+	return fmt.Sprintf("休眠 %d · 派发 %d 进行中", resting, running)
+}
+
+// trayUpdateLabel 托盘升级菜单项文本（M9-W4）：有新版本返回「升级到
+// vX.Y.Z」，已是最新/查询失败/dev 态返回 ""（菜单隐藏）。查询失败
+// 静默——升级提示是增强信息，不打扰。
+func trayUpdateLabel() string {
+	if Version == "dev" {
+		return ""
+	}
+	tag, _, err := latestRelease()
+	if err != nil {
+		return ""
+	}
+	if compareVersions(Version, strings.TrimPrefix(tag, "v")) < 0 {
+		return "升级到 " + tag
+	}
+	return ""
+}
+
 // 原生窗口壳挂点（M8-W2）：支持的平台在各自 build tag 文件里接线
 // （window_wails.go=Windows/Wails v3，全仓库唯一 wails import 点）；
 // 其余平台保持 nil=浏览器窗口路径（行为同 v0.7.0）。依赖边界铁律：
@@ -281,10 +347,17 @@ func runServe(args []string, stdout io.Writer) error {
 	defer st.startHelpers(ctx)()
 	st.banner(stdout)
 	if *tray {
-		go runTrayIsolated(func() { _ = openBrowser("http://" + st.listen + "/") }, func() {
-			slog.Info("托盘请求退出")
-			stop()
-			systray.Quit()
+		n := newNotifier(st.settings.NotifyEnabled())
+		st.wireDesktopHooks(n)
+		go runTrayIsolated(TrayOptions{
+			OnOpen: func() { _ = openBrowser("http://" + st.listen + "/") },
+			OnExit: func() {
+				slog.Info("托盘请求退出")
+				stop()
+				systray.Quit()
+			},
+			Status: st.trayStatus,
+			Update: trayUpdateLabel,
 		})
 		fmt.Fprintln(stdout, "  托盘: 已启用（系统托盘区图标）")
 	}
@@ -327,10 +400,17 @@ func runApp(args []string, stdout io.Writer) error {
 		onOpen = func() { nativeReopen(consoleURL) }
 	}
 	if !*noTray {
-		go runTrayIsolated(onOpen, func() {
-			slog.Info("托盘请求退出")
-			stop()
-			systray.Quit()
+		n := newNotifier(st.settings.NotifyEnabled())
+		st.wireDesktopHooks(n)
+		go runTrayIsolated(TrayOptions{
+			OnOpen: onOpen,
+			OnExit: func() {
+				slog.Info("托盘请求退出")
+				stop()
+				systray.Quit()
+			},
+			Status: st.trayStatus,
+			Update: trayUpdateLabel,
 		})
 		fmt.Fprintln(stdout, "  托盘: 已启用（系统托盘区图标；退出请走托盘菜单）")
 	}

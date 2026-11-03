@@ -188,6 +188,11 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, name st
 		if !f.OTel.Enabled && f.OTel.Endpoint == "" && len(f.OTel.Headers) == 0 {
 			f.OTel = cur.OTel
 		}
+		// 桌面通知开关（M9-W4）：指针 nil=控制台表单未提供，保留现值
+		//（显式 true/false 才采纳）。
+		if f.Notify == nil {
+			f.Notify = cur.Notify
+		}
 		// 安全基线（F10）：非回环监听必须带令牌；非法地址拒绝落盘。
 		if f.Listen != "" {
 			if _, _, err := net.SplitHostPort(f.Listen); err != nil {
