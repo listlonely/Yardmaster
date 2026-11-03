@@ -23,9 +23,18 @@
 
 ## 约束与失效行为
 
-- **规格待核验拒绝**（§4.2）：gemini-cli（端点依赖环境变量注入）、cline
-  （VS Code globalState 存储层）的写入规格未对照官方实现核验前，wire/preview
-  一律拒绝并说明原因——不写猜出来的键。
+- **规格待核验拒绝**（§4.2）：cline（VS Code globalState 存储层）的写入
+  规格未对照官方实现核验前，wire/preview 一律拒绝并说明原因——不写
+  猜出来的键。
+- **字段形状经真实世界参考实现交叉校准 [2026-11-03-M9-W2]**：codex 与
+  gemini-cli 的写入规格按 Magpie agent-wiring（codex.go/gemini.go，
+  数千用户桌面应用的真实核实）定稿——codex 走 `experimental_bearer_token`
+  + `wire_api="responses"`（`api_key` 非 Codex 字段）；gemini-cli 写
+  settings.json `security.auth.selectedType="gemini-api-key"`+`model.name`，
+  端点/key 经 CLI 自动加载的 `~/.gemini/.env` 注入。
+- **多文件接线 [M9-W2]**：`Def.Extras` 支持附属文件（gemini 的 .env），
+  同一接线记录按 Files 序展开（per-file Format+Ops，旧记录兼容回退）；
+  软件创建的附属文件清空后随主文件语义一并移除。
 - 只写名下键；断开还原后 `applied.json` 移除记录；stash 保留（供再次接入对照）。
 - TOML 已知边界：多行数组/内嵌表不做行内匹配（目标键均为单行标量）；
   同名键多表按表头定位；行内多成员删除可能残留合法 JSONC 尾逗号。

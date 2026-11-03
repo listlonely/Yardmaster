@@ -110,6 +110,48 @@ func numOf(raw any) (float64, bool) {
 	return 0, false
 }
 
+// extractPlanQuota 解析订阅窗口用量端点响应（GLM/Zai
+// /api/monitor/usage/quota/limit；形状经 Magpie readZhipuPlan 交叉与
+// 真机采样核实 [M9-W3]——真实响应比 Magpie 形状多 usage/currentValue/
+// remaining 字段）。取 limits[] 中最小 remaining = 最紧额度窗口的剩余
+// 额度（SwitchWhenSpent 的 Balance<=0 休眠语义天然对齐）；无 limits/
+// remaining 返回 false 走通用余额解析。真机样本（2026-11-03，pro 档）：
+// {"code":200,"success":true,"data":{"level":"pro","limits":[
+//   {"type":"CREDIT_LIMIT","unit":3,"number":5,"usage":12000,
+//    "currentValue":945,"remaining":11054,"percentage":7,
+//    "nextResetTime":1793690514565},
+//   {"type":"CREDIT_LIMIT","unit":6,"number":1,...,"remaining":45668,
+//    "percentage":23,...}]}}
+func extractPlanQuota(body []byte) (float64, bool) {
+	var r struct {
+		Success *bool `json:"success"`
+		Data    *struct {
+			Limits []struct {
+				Remaining *float64 `json:"remaining"`
+			} `json:"limits"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &r); err != nil {
+		return 0, false
+	}
+	if r.Data == nil || len(r.Data.Limits) == 0 {
+		return 0, false
+	}
+	min := -1.0
+	for _, l := range r.Data.Limits {
+		if l.Remaining == nil {
+			continue
+		}
+		if min < 0 || *l.Remaining < min {
+			min = *l.Remaining
+		}
+	}
+	if min < 0 {
+		return 0, false
+	}
+	return min, true
+}
+
 // SetWindow 记录账号订阅窗口状态（响应头学习）。
 func (p *Planner) SetWindow(key, status string, resetAt int64) {
 	p.mu.Lock()
@@ -271,7 +313,10 @@ func (s *Server) probeBalance(ctx context.Context, prov *provider.Provider, acc 
 	if err != nil {
 		return 0, err
 	}
-	bal, ok := extractBalance(b)
+	bal, ok := extractPlanQuota(b) // 订阅窗口形态优先（确定性最小 remaining）
+	if !ok {
+		bal, ok = extractBalance(b) // 回退通用余额形态
+	}
 	if !ok {
 		return 0, fmt.Errorf("余额响应无数值字段")
 	}

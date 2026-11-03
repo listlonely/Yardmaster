@@ -60,6 +60,34 @@ func TestExtractBalance(t *testing.T) {
 	}
 }
 
+// 订阅窗口形态（GLM /api/monitor/usage/quota/limit，真机采样样本
+// [M9-W3]）：取 limits[] 最小 remaining，与数组顺序无关。
+func TestExtractPlanQuota(t *testing.T) {
+	realSample := `{"code":200,"msg":"操作成功","success":true,"data":{"level":"pro","limits":[
+		{"type":"CREDIT_LIMIT","unit":3,"number":5,"usage":12000,"currentValue":945,
+		 "remaining":11054,"percentage":7,"nextResetTime":1793690514565},
+		{"type":"CREDIT_LIMIT","unit":6,"number":1,"usage":60000,"currentValue":14331,
+		 "remaining":45668,"percentage":23,"nextResetTime":1793933920971}]}}`
+	got, ok := extractPlanQuota([]byte(realSample))
+	if !ok || got != 11054 {
+		t.Fatalf("真机样本应取最小 remaining 11054: %v %v", got, ok)
+	}
+	// 顺序翻转：仍取最紧窗口（不依赖数组顺序——通用 extractBalance 的
+	// "remaining" 键命中会取数组首个，语义错误）
+	reversed := `{"success":true,"data":{"limits":[
+		{"remaining":45668,"percentage":23},{"remaining":11054,"percentage":7}]}}`
+	if got, ok := extractPlanQuota([]byte(reversed)); !ok || got != 11054 {
+		t.Fatalf("顺序无关: %v %v", got, ok)
+	}
+	// 通用余额形态不应被 plan 解析器吞掉（probeBalance 回退路径）
+	if _, ok := extractPlanQuota([]byte(`{"code":200,"data":{"total_balance":"123.45"}}`)); ok {
+		t.Fatal("余额形态应返回 false 走回退")
+	}
+	if _, ok := extractPlanQuota([]byte(`{"success":false,"msg":"denied"}`)); ok {
+		t.Fatal("无 limits 应返回 false")
+	}
+}
+
 // SwitchWhenSpent：窗口 restricted 的候选排末段，健康候选接管服务。
 func TestWindowRestrictedFailsOver(t *testing.T) {
 	appDir := t.TempDir()

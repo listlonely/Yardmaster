@@ -25,6 +25,7 @@
 | `GET /api/config/{name}` | 配置脱敏视图（`providers \| settings \| rules \| keys \| intents \| pricing`） | 该配置的脱敏 JSON |
 | `PUT /api/config/{name}` | 整文件写（键级编辑器的提交端点） | **写响应包**（见下） |
 | `POST /api/reload` | 重读 providers.json 并热替换 Planner | **写响应包** |
+| `POST /api/quota/probe` | 手动触发一次余额轮询（M9-W3；与后台 30min ticker 同 `pollQuotas` 路径） | **写响应包** + `probes` 数组 |
 
 管理面非回环监听时全部路由强制 token（M2-W5 三口基线，不变）。
 
@@ -52,6 +53,9 @@
   看到同一形状、同一时刻语义。`effect=restart` 的写也返回 state，
   反映「已写入、待重启」的真实中间态。
 - `POST /api/reload` 现有的 `providers` 计数字段保留（增量兼容）。
+- `POST /api/quota/probe` 附加 `probes`：逐账号探测结果
+  `[{provider, account, balance?, error?}]`（失败账号 error 留痕、
+  保留上次余额）；仅刷新内存余额，无配置写语义。
 
 ### 错误响应（现状不变）
 
