@@ -588,3 +588,56 @@ MIT（Copyright (c) 2026 yetone）：设计模式借鉴无义务；若逐字复�
 >   最终走「守卫测试+资产 URL 按发布命名规则构造+环境代理」，与
 >   API 解耦。**启示**：W3 自动更新网络路径须接 netproxy 全局代理
 >   （settings global_proxy），纯环境代理在中国网络环境不可依赖。
+
+> [2026-11-04-M11W3W4 自替换引擎与收官交付] §9.13 W3/W4 全项落地，
+> **v0.11.0 发布（CI+release 双绿 6 产物）**。提交链 ad79fa6（W3 引擎）
+> →a8b8f67（off 静默）→0299aa4（app-only 修复，真机演练实证缺陷）
+> →286d001（版本资源）→tag v0.11.0。实测与偏差：
+> - **引擎形态**（internal/app/update_install.go）：installStaged（锁
+>   单飞 O_EXCL+pid 存活复核/版本闸防降级重装/swapAside 换侧核心/
+>   spawn 接力）+ relayInit（等旧 pid 退出端口让位——**relayEnv=
+>   YM_UPDATE_RELAY_PID 环境变量而非 argv 标志**，W1 方案 --update-
+>   relay 的等价落地：不侵入 flag 解析、serve/app 两入口统一）+
+>   relayFinalize（healthz 自探 30s deadline→清 .old+暂存）+
+>   rollbackRelay（exe→.new-failed、.old→原位、spawn 旧版无循环）；
+>   waitForPID 分平台（Windows WaitForSingleObject——**x/sys 新版事件
+>   码返回 syscall.Errno，WAIT_TIMEOUT 常量是 uint32 不能直接 switch，
+>   用数值常量 0/258**/Unix kill0 轮询）。
+> - **三入口联动**：POST /api/update/install（OnUpdateInstall 钩子，
+>   503 未装配/409 失败；重启延迟 800ms 保响应送回——实测响应完整）
+>   + 托盘升级项点击应用内安装（nil 回退 releases 页）+ 控制台 B1
+>   pill POST 安装；auto 态双端自动触发（托盘 trayUpdateQuery 15s
+>   首查命中即装+1h 重试；前端 offerUpdate settings 预拉后自动 POST，
+>   每标签页至多一次）；**网络路径接 netproxy 全局代理**（W2 启示落
+>   实）。空闲保护砍项留档（本地网关重启<2s）。
+> - **真机演练四场景全绿**（隔离 USERPROFILE+端口 18517+ldflags 注入
+>   0.10.99/0.11.0/0.11.1 三版本）：①serve 闭环换代——POST install→
+>   **2 秒**healthz 0.11.0、原位 exe 字节级=新版、.old/暂存全清、旧
+>   进程退出、日志链完整（就位→接力→重启→完成）；②坏包 A（垃圾字节）
+>   拒装——409+网关不断服（uptime 连续）+原位 hash 不变+无 .old；③
+>   坏包 B（装配必败配置）回滚链——relay 启动失败留痕→exe→.new-failed
+>   （hash=坏新版）+.old→原位（hash=旧版）+旧版 spawn 重启，三重字节
+>   级验证；④app 模式闭环——GUI 双 exe 换代 2 秒、app.log 链、**app-
+>   only 安装（原位无 console exe）首发失败抓真缺陷**：无条件 aside
+>   对缺失文件 rename 报错→修为「原位缺失直接落位不产 .old」。
+> - **三态矩阵**（真 v0.11.0 release 环境）：off=22s 无查询无下载无
+>   升级（彻底静默）✓；check=22s 不自动装（只提示）✓；auto=托盘
+>   15s 首查命中→自动触发→**GitHub API 403（代理出口 IP 匿名限流，
+>   一小时窗口未恢复）→WARN「auto 安装失败 1h 后重试」留痕** ✓——
+>   触发链与失败重试语义实证；**下载段被网络环境阻断，分段留档**：
+>   真包下载 W2 守卫测试已核销（v0.10.0 12MB 流式 SHA256+双 exe）、
+>   安装段四场景已核销，完整一键真 release 升级留待网络通畅环境复核。
+> - **演练方法论留档**：Shell 工具命令结束后子进程树被清（job object）
+>   ——演练进程生命周期=命令生命周期，「起+触发+验证」必须单命令内
+>   完成；跨命令存活进程用 WMI Win32_Process（注意其不经 shell 解释，
+>   重定向语法会变成 exe 参数）。
+> - **servedAnew 联动**：升级换代=/api/state version 变化，M10-B1 的
+>   servedAnew 机制（boot 版本≠应答版本自动 reload）同构覆盖，不重复
+>   实测。前端 pill 点击为同一 OnUpdateInstall 路径（API 端点已实测
+>   200/409/503 三态）；浏览器端点击交互留用户日常确认。
+> - **未实测项（如实标注）**：Linux 真机替换路径（无实机——引擎代码
+>   跨平台编译+单测双平台覆盖，aside/rename 语义 Linux 同构，验证
+>   指引：下载 zip 解包双 exe 后手动模拟 aside/moveIn）；托盘「更新
+>   失败（点击重试）」菜单恢复路径（依赖真实点击序列）；.new-failed
+>   文件的自动清理（当前留档供诊断，下次安装 aside 前不删——收尾清
+>   理仅 .old）。

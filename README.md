@@ -67,6 +67,8 @@ yardmaster price list                 # 单价表（来源列：models.dev / 人
 yardmaster cost --days 7              # 成本报告
 yardmaster tui                        # 终端面板：状态 / 追溯 / 派发 / 绑定切换
 yardmaster update check               # 升级提示
+yardmaster update download            # 下载最新版并校验暂存（SHA256 边下边验）
+yardmaster update install             # 自动更新安装（换侧+接力重启，失败自动回滚）
 
 # 6. 任务→Agent 派发（v0.5.0，v0.6.0 深化，可选）
 yardmaster dispatch init              # 预览三家建议配置（claude-code 已实测核实；按本机安装修改 command）
