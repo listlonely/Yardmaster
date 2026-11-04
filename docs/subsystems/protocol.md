@@ -208,3 +208,33 @@ Magpie 参考的自研增量（Magpie 不服务 GLM chat 思考场景）。
 | thinking（响应侧） | GLM 上游 × {messages, responses, gemini} 客户端（chat 客户端按 D5 不输出）；非 GLM 上游零变化 |
 
 透传路径（同协议）字节保真语义不回归为全程红线。
+
+### 落地锚点（M10 执行记录）
+
+- **[2026-11-04-W2]** 请求侧多模态落地（2a236dc→4499df8→2b6a92e）：parts.go
+  （IRPart + 四入站解码/四上游编码，校准对齐 Magpie 四适配器）+ 六构建器
+  接线 + D6 留痕机制（Ignored 随四请求类型 json:"-"，translateRequest
+  汇总 slog.Warn）+ m10w2_test.go（8 形态 × 4 上游全组合）。决策留档：
+  tool_result 内图片不支持（砍项候选）；gemini 出站仅 inlineData（URL
+  图丢弃，fileData 需上传）。
+- **[2026-11-04-W3/W4]** 响应侧 thinking 流出 + C3（4cb3089）：gwEvent
+  第八类 evThinking（三来源：chat Delta.Reasoning / messages
+  thinking_delta / gemini thought）→ 三客户端编码器（messages thinking
+  块 D3 无 signature / responses reasoning item summary_text + 动态
+  output_index / gemini thought part）；reasoning_tokens 入账三槽位
+  （chat usage / responses output_tokens_details / gemini
+  thoughtsTokenCount，D4）；chat 客户端零输出（D5）；C3 中途 system
+  `<system-reminder>` 包装。m10w3_test.go 全覆盖。
+- **[2026-11-04-W5]** C2 504/524 语义分级（c2ff8fa）：upstreamErrNote
+  → trace 候选摘要前缀 + 全败结构化文案（原始体原样回传语义不变，
+  重试判定零改动）。真机链路验证（glm-4.7 经网关，trace 留证）：
+  ①thinking→claude 客户端可见（messages 客户端 blocks=2：thinking+text，
+  跨协议 anthropic-messages→openai-chat outcome=ok）；②多轮 thinking
+  历史跨协议不破坏（D2 丢弃+留痕生效，slog WARN `blocks=thinking`
+  实录，对话正常续答）；③贴图到达上游铁证=glm-coding 1210
+  「content.type 取值范围 ['text']」（图片翻译穿透到达 Coding Plan
+  端点参数层，端点能力边界拒绝）+ siliconflow 20041（非 VLM 模型明确
+  拒绝）；**VLM 端到端确认正式留档**（本机配置无 VLM 上游模型——
+  glm-coding Coding Plan 端点仅 text、siliconflow 现配模型均非视觉；
+  验证指引：配置任一 VLM 上游后重放同款 /v1/messages 贴图请求）。
+- **[2026-11-04-W6]** 矩阵全量回归 + 发布 v0.10.0（本提交）。

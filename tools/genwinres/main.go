@@ -20,7 +20,7 @@ import (
 )
 
 // appVersion 嵌入 exe 属性的资源版本（三段，第四位补 0）。
-const appVersion = "0.9.0"
+const appVersion = "0.10.0"
 
 // outPaths 输出对象文件（相对 go generate 的包目录 cmd/yardmaster；带
 // GOOS/GOARCH 后缀，仅 windows/amd64 构建链接）。两份：console 入口与

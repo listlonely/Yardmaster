@@ -8,7 +8,7 @@ Agent ──▶ 127.0.0.1:8317 ──▶ Yardmaster ──▶ 按任务/额度/�
 
 ## 核心能力
 
-- **四协议网关（v0.4.0）**：OpenAI Chat / OpenAI Responses / Anthropic Messages / Google Gemini 四协议任一入站可路由至任意协议上游（4×4 互转矩阵，文本 + 工具调用，流式/非流式）；流式经内存事件层（七类 gwEvent，四协议各一对 decoder/encoder，v0.5.0）逐事件翻译，无中间 JSON round-trip
+- **四协议网关（v0.4.0）**：OpenAI Chat / OpenAI Responses / Anthropic Messages / Google Gemini 四协议任一入站可路由至任意协议上游（4×4 互转矩阵，流式/非流式）；流式经内存事件层（四协议各一对 decoder/encoder，v0.5.0）逐事件翻译，无中间 JSON round-trip；**多模态与 thinking 跨协议透传（v0.10.0，IR v2）**：图片输入四协议互译（messages image / chat image_url / responses input_image / gemini inlineData，不可携带场景 fail-closed 留痕不静默）、思考流出三通道（GLM `reasoning_content` / anthropic thinking 块 / gemini thought part，chat 客户端按协议形状不产出）、reasoning_tokens 细分入账、中途 system 消息 `<system-reminder>` 包装（Claude Code 兼容）、504/524 超时语义分级
 - **任务→Agent 派发（v0.5.0，v0.6.0 深化）**：把任务文本交给本机已安装的 Agent（Claude Code / Codex / Gemini CLI 的 headless 模式）执行——意图→Agent 匹配（dispatch.json，fail-closed 校验）、headless 会话管理（stdin/stdout 协议、超时/取消、每 Agent 并发上限）、stdout 实时回传、终态记入决策 trace；v0.6.0：jsonl 事件级实时（六类事件解析，控制台事件视图着色/工具折叠/终态高亮，CLI `run -events`）、任务模板（`templates[]` + `dispatch run -t` + 控制台模板下拉）、会话持久化（跨重启可见）、失败一键重派、结果导出/复制、会话筛选；控制台「派发」页提交/实时输出/取消，CLI `dispatch agents|init|run`；ToS 边界：仅启动已安装的 Agent，不代装不代登录
 - **成本缓存扣除（v0.5.0）**：usage 捕获缓存命中细分（openai `cached_tokens` / gemini `cachedContentTokenCount` / anthropic `cache_read_input_tokens` 折叠统一语义），命中部分按 `cached_input_per_m` 计价（缺省 0=扣除），报告桶单列缓存命中数
 - **Agent 接线**：声明式改写 Agent 配置指向网关（预览 diff、备份栈、一键还原、漂移检测）
