@@ -18,6 +18,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -137,7 +138,9 @@ func stageUpdate(ctx context.Context, client *http.Client, rel *releaseInfo, sta
 		return nil, fmt.Errorf("创建暂存目录失败: %w", err)
 	}
 	fail := func(err error) (*stagedUpdate, error) {
-		os.RemoveAll(stageDir) // 绝不留半成品
+		if rerr := os.RemoveAll(stageDir); rerr != nil { // 绝不留半成品——清理失败至少留痕
+			slog.Warn("更新暂存清理失败（可能残留半成品，下次下载会先清除）", "dir", stageDir, "err", rerr)
+		}
 		return nil, err
 	}
 
@@ -165,7 +168,10 @@ func stageUpdate(ctx context.Context, client *http.Client, rel *releaseInfo, sta
 	if st.GatewayExe, st.AppExe, err = unzipExes(zipPath, stageDir); err != nil {
 		return fail(err)
 	}
-	os.Remove(zipPath) // zip 本体解包后即弃（暂存只留可执行产物+标记）
+	// zip 本体解包后即弃（暂存只留可执行产物+标记）——删除失败非致命
+	if rerr := os.Remove(zipPath); rerr != nil {
+		slog.Warn("删除已解包 zip 暂存失败（非致命）", "path", zipPath, "err", rerr)
+	}
 	if err := os.WriteFile(filepath.Join(stageDir, "VERSION"), []byte(st.Tag+"\n"), 0o644); err != nil {
 		return fail(err)
 	}
@@ -194,7 +200,9 @@ func fetchAssetBytes(ctx context.Context, client *http.Client, a *releaseAsset, 
 // 删除文件报错。返回实际字节数。
 func downloadVerified(ctx context.Context, client *http.Client, a *releaseAsset, want, dst string, progress func(done, total int64)) (int64, error) {
 	abort := func(err error) error {
-		os.Remove(dst)
+		if rerr := os.Remove(dst); rerr != nil { // 清理失败至少留痕（半成品 .part 可能残留）
+			slog.Warn("下载失败清理暂存文件失败", "path", dst, "err", rerr)
+		}
 		return err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.BrowserDownloadURL, nil)
@@ -222,13 +230,13 @@ func downloadVerified(ctx context.Context, client *http.Client, a *releaseAsset,
 	buf := make([]byte, 64<<10)
 	for {
 		if err := ctx.Err(); err != nil {
-			f.Close()
+			_ = f.Close()
 			return 0, abort(fmt.Errorf("下载 %s 取消: %w", a.Name, err))
 		}
 		nr, rerr := resp.Body.Read(buf)
 		if nr > 0 {
 			if _, werr := f.Write(buf[:nr]); werr != nil {
-				f.Close()
+				_ = f.Close()
 				return 0, abort(fmt.Errorf("写暂存文件失败: %w", werr))
 			}
 			h.Write(buf[:nr])
@@ -241,7 +249,7 @@ func downloadVerified(ctx context.Context, client *http.Client, a *releaseAsset,
 			break
 		}
 		if rerr != nil {
-			f.Close()
+			_ = f.Close()
 			return 0, abort(fmt.Errorf("下载 %s 中断（已收 %d/%d 字节）: %w", a.Name, n, total, rerr))
 		}
 	}
@@ -267,7 +275,7 @@ func unzipExes(zipPath, stageDir string) (gatewayExe, appExe string, err error) 
 	if err != nil {
 		return "", "", fmt.Errorf("打开 zip 失败: %w", err)
 	}
-	defer zr.Close()
+	defer func() { _ = zr.Close() }()
 	for _, f := range zr.File {
 		if f.FileInfo().IsDir() {
 			continue
@@ -306,8 +314,8 @@ func writeExeFile(r io.Reader, dst string) error {
 		return fmt.Errorf("写 %s 失败: %w", dst, err)
 	}
 	if _, err := io.Copy(out, r); err != nil {
-		out.Close()
-		os.Remove(dst)
+		_ = out.Close()
+		_ = os.Remove(dst)
 		return fmt.Errorf("解包 %s 失败: %w", dst, err)
 	}
 	if err := out.Close(); err != nil {
