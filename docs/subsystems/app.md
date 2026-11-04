@@ -492,3 +492,59 @@ MIT（Copyright (c) 2026 yetone）：设计模式借鉴无义务；若逐字复�
   与 v0.7.0 行为等价由 W4 回归验证；**Linux 真机 D-Bus 托盘冒烟正式
   留档**（无 Linux 桌面）：验证指引=Linux 桌面机器安装 release 产物，
   运行 app/serve -tray，确认托盘图标出现且菜单（打开控制台/退出）可点。
+
+## 十一、自动更新（M11-W1 方案定稿）[2026-11-04]
+
+> 开发文档 §9.13 排期（四周，目标 v0.11.0）。现状基线：update 仅检测
+> （CLI updateCheck / 托盘动态入口 / 控制台 B1 pill 均只开 releases 页）；
+> release 产物 `pack/*.zip + SHA256SUMS` 复用。
+
+### Magpie updater 交叉参考（internal/update + internal/gui，v0.1.2890）
+
+- **状态机**：checking → found/latest → downloading → ready →（重启）；
+  error / blocked（Smart App Control 拦截试启动）/ source（无包可装，
+  指引 release 页）。
+- **Windows 自替换**（InstallBinaryAside）：运行中 exe 不可覆盖但**可
+  rename** → move-aside（asideWaits 退避 100ms~1500ms×5 + heldFor 30s
+  兜底：杀软/OneDrive 短暂占用句柄）→ moveIn staged → moveIn 失败即时
+  还原 aside。**试启动拦截检测**（canStart + trialled 按 path/size/
+  modtime 去重）：被杀软拦的下载不就位，BlockedError。
+- **重启**（runAfterExit + relaunch.log >64KB 轮转）：等本进程退出后
+  拉起；**update_wait**：重启前等网关空闲（in-flight 推理请求保护，
+  waitMost 上限，超时则安装推迟到退出/下次重启）。
+- **版本跟随**（6673171，已吸收 servedAnew 于 B1）：页面/旁路进程版本
+  漂移自动跟上——Yardmaster 单进程无旁路场景，servedAnew 已覆盖。
+
+### Yardmaster 方案定稿（差异与取舍）
+
+1. **aside 换侧 + 接力进程**（与 Magpie runAfterExit 等价的纯 Go 方案）：
+   ①旧进程 rename 自身 → `yardmaster.exe.old`（先 RemoveOld 清上次残留，
+   同名不覆盖——上次 aside 可能仍在运行）②staged 新 exe（双 exe：主 +
+   yardmaster-app）moveIn 原位，失败即时还原 ③旧进程 spawn **接力进程**
+   = 新 exe `--update-relay <oldPid>`：WaitForSingleObject 等旧 pid 退出
+   → 拉起原路径主程序 → **healthz HTTP 探活**（网关自带，优于 Magpie 的
+   进程存活判断）→ 超时/秒退 → 回滚（exe→`.new-failed`，`.old`→原位，
+   拉起旧版）。`--update-relay` 标记防循环（接力进程自身不触发更新）。
+2. **资产管线**：latestRelease 扩展资产枚举（windows-amd64 zip +
+   SHA256SUMS 定位本平台行）→ 流式下载（进度回调→托盘气泡节流）+
+   SHA256 边下边验（不匹配即弃+留痕）→ 解包暂存数据目录 update/
+   子目录（磁盘空间预检；失败清理）→ 双 exe 就位。
+3. **settings `update` 三态**：off（完全静默）/ **check（默认，现状
+   行为：只提示）** / auto（发现即下载安装重启）——cfgSettings 键级
+   编辑器兼容；自动替换 exe 高敏，auto 默认关。
+4. **联动**：托盘菜单「检查更新/立即安装」+ 气泡进度（复用 M9-W4 通知
+   限频）+ 控制台 B1 pill 点击触发 `POST /api/update/install`（管理
+   API 写路径纪律：令牌强制 + 审计 + 单飞防并发）；CLI `update
+   -install`（headless 手动全管线）。
+5. **范围砍项**：断点续传 / 增量更新 / GUI 安装向导 / macOS 产物。
+   Linux：zip/校验逻辑跨平台，自替换路径按 GOOS 分支（无实机，留档
+   附验证指引）。
+
+### 探针实证（%TEMP%\ym-relay-probe，双 exe 三场景）
+
+- **运行中 exe rename**（moved-aside ok）+ **staged moveIn**（ok）+
+  **接力等 pid 退出后拉起新版**（healthy：原位=new 字节，`.old`=旧
+  字节）+ **健康检查失败回滚**（坏包秒退 → exe→`.new-failed`、
+  `.old`→原位、旧版重启成功）。五机制全实证，方案可行（探针简化点：
+  waitPID 用 tasklist 轮询、探活为进程存活——真实实现
+  WaitForSingleObject + healthz，见上）。
