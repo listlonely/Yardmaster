@@ -548,3 +548,43 @@ MIT（Copyright (c) 2026 yetone）：设计模式借鉴无义务；若逐字复�
   `.old`→原位、旧版重启成功）。五机制全实证，方案可行（探针简化点：
   waitPID 用 tasklist 轮询、探活为进程存活——真实实现
   WaitForSingleObject + healthz，见上）。
+
+> [2026-11-04-M11W2 下载与校验管线交付] §9.13 W2 全项落地（提交
+> df15171）。实测与偏差：
+> - **管线形态**（internal/app/update_download.go）：
+>   fetchRelease（含资产清单）→ 平台 zip 匹配
+>   （`yardmaster-<GOOS>-<GOARCH>.zip`，package.sh 实证命名；非 zip
+>   平台真 release 查无此资产自然报错，不做硬编码拦截）→
+>   SHA256SUMS 解析（两空格/`*` 二进制标记/CRLF/杂行容错，64 位
+>   十六进制行才收）→ 磁盘预检（zip×3：本体+解包+替换余量；
+>   diskFree 按 GOOS 分文件——Windows GetDiskFreeSpaceEx（x/sys，
+>   标准库 syscall 无此函数）、Unix Statfs Bavail×Bsize；探测失败
+>   不阻断，交给真实写错误兜底）→ 流式下载 Tee 语义边下边校验
+>   （读一次磁盘都不多；进度回调逐 64KB 块触发，W3 托盘气泡经此
+>   节流）→ 白名单解包（basename 匹配 `yardmaster.exe` /
+>   `yardmaster-app.exe`，目录前缀任意；输出名取自固定白名单，
+>   zip-slip 无面；README 不入暂存）+ VERSION 标记；zip 本体解包
+>   后即弃。**任何一步失败整体清理暂存目录——绝不留半成品**。
+> - **latestRelease 收敛**：M9-W4 抽取的 check/托盘共用路径委托
+>   fetchRelease，单一 GitHub 查询实现（此前 check 与管线各持一份
+>   HTTP 解析）。
+> - **CLI**：`yardmaster update download`（-dir 覆盖暂存目录缺省
+>   exe 同级 update/、-force 重下同版）；只交付已校验暂存产物，
+>   输出尾行明示安装接力是 W3（update install）。
+> - **settings update 三态接线**：store 常量+UpdateMode()（空/未知
+>   回落 check）+ValidUpdateMode()；管理 API PUT 空值保留现值（表单
+>   未提供）、非法 400 fail-closed；CLI settings get 三态展开/set
+>   校验，用法行与 default 支持列表同步。
+> - **测试**：httptest 假 release 四场景（happy：双 exe+VERSION+3
+>   文件恰量+进度收尾对齐；三降级：校验失败/断流/缺资产——均断言
+>   报错文案与暂存整体清理）+ SHA256SUMS 变体 + CLI 三态（testenv
+>   沙箱）+ API 三态（webapi_test）；**真机守卫测试**
+>   TestRealReleaseStageUpdate（YM_REAL_RELEASE=vX.Y.Z 才跑，CI 恒
+>   Skip）：对 v0.10.0 真资产全管线核销通过——12MB zip 流式 SHA256
+>   （146d6330d943…）+ 双 exe（>10MB 断言）+ VERSION。
+> - **网络环境偏差（如实留档）**：本机 api.github.com 直连可通但
+>   objects.githubusercontent.com 阻断（release 资产 CDN）；挂本地
+>   代理 7890 后 API 匿名限额又超（代理出口 IP 共享限流）。真机核销
+>   最终走「守卫测试+资产 URL 按发布命名规则构造+环境代理」，与
+>   API 解耦。**启示**：W3 自动更新网络路径须接 netproxy 全局代理
+>   （settings global_proxy），纯环境代理在中国网络环境不可依赖。
