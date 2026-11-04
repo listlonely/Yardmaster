@@ -36,7 +36,7 @@ function applyTheme(t) {
   $('theme-text').textContent = { auto: '跟随系统', light: '亮色', dark: '暗色' }[t] || '跟随系统';
 }
 applyTheme(localStorage.getItem(THEME_KEY) || 'auto');
-$('btn-theme').addEventListener('click', () => {
+function cycleTheme() {
   const cur = localStorage.getItem(THEME_KEY) || 'auto';
   const next = { auto: 'light', light: 'dark', dark: 'auto' }[cur] || 'auto';
   localStorage.setItem(THEME_KEY, next);
@@ -46,7 +46,8 @@ $('btn-theme').addEventListener('click', () => {
   clearTimeout(applyTheme.t);
   applyTheme.t = setTimeout(() => root.classList.remove('theming'), 340);
   applyTheme(next);
-});
+}
+$('btn-theme').addEventListener('click', cycleTheme);
 
 // 外链守卫（M8-W3）：原生窗口不追外部导航。
 document.addEventListener('click', (e) => {
@@ -308,8 +309,20 @@ const cache = { state: null, providers: null, settings: null, rules: null };
 
 async function refreshState() {
   cache.state = await api('/api/state');
+  // servedAnew（Magpie 6673171 增量吸收）：页面由旧二进制伺服、服务端已
+  // 换新（用户升级并重启 serve）→ 自动重载一次跟上。页面由同一 serve
+  // 伺服，重载后 boot 即新版本，无循环风险；dev 态两侧同名不触发。
+  if (bootVersion === null) bootVersion = cache.state.version || '';
+  else if (!servedReloaded && cache.state.version && cache.state.version !== bootVersion) {
+    servedReloaded = true;
+    location.reload();
+  }
+  if (!updInited) { updInited = true; checkUpdate(); } // B1：首次 state 到手即查一次
   return cache.state;
 }
+let bootVersion = null; // 首次 state 应答的版本（页面伺服版本）
+let servedReloaded = false;
+let updInited = false;
 
 // ---------- 侧栏网关状态灯 ----------
 function renderSideGw(ok) {
@@ -321,6 +334,59 @@ function renderSideGw(ok) {
     ? '网关运行中' + (cache.settings?.listen ? ' · ' + cache.settings.listen : '')
     : '网关不可达';
 }
+
+// ---------- 升级提示（B1：Magpie .update 可隐藏角标同构） ----------
+// 浏览器端直查 GitHub latest release（CORS 开放；1h localStorage 缓存；
+// 失败静默——升级提示是增强信息，不打扰）。dev 态不检查（同托盘
+// trayUpdateLabel 语义）。页面伺服版本漂移的自动重载见 refreshState 的
+// servedAnew。
+const UPD_KEY = 'ym-upd-check'; // {tag, at}：1h TTL
+const UPD_DISMISS = 'ym-upd-dismiss'; // 已忽略的 tag（下一个新版才再提示）
+const UPD_API = 'https://api.github.com/repos/listlonely/Yardmaster/releases/latest';
+
+// verNewer：分段数值比较（语义化版本三段，忽略前缀 v）。
+function verNewer(a, b) {
+  const p = (s) => String(s).replace(/^v/, '').split('.').map((x) => parseInt(x, 10) || 0);
+  const pa = p(a), pb = p(b);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d) return d > 0;
+  }
+  return false;
+}
+
+async function checkUpdate() {
+  const cur = cache.state?.version || '';
+  if (!cur || cur === 'dev') return;
+  const cached = JSON.parse(localStorage.getItem(UPD_KEY) || 'null');
+  if (cached && Date.now() - cached.at < 3600e3) { offerUpdate(cached.tag, cur); return; }
+  try {
+    const r = await fetch(UPD_API, { headers: { Accept: 'application/vnd.github+json' } });
+    if (!r.ok) return;
+    const tag = String((await r.json()).tag_name || '').trim();
+    if (!tag) return;
+    localStorage.setItem(UPD_KEY, JSON.stringify({ tag, at: Date.now() }));
+    offerUpdate(tag, cur);
+  } catch { /* 网络失败静默 */ }
+}
+
+function offerUpdate(tag, cur) {
+  const pill = $('upd-pill');
+  if (!pill) return;
+  if (!verNewer(tag, cur) || localStorage.getItem(UPD_DISMISS) === tag) { pill.hidden = true; return; }
+  $('upd-link-text').textContent = '升级到 ' + tag;
+  pill.hidden = false;
+}
+
+$('upd-x').addEventListener('click', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  localStorage.setItem(UPD_DISMISS, $('upd-link-text').textContent.replace('升级到 ', ''));
+  $('upd-pill').hidden = true;
+  status('已忽略该版本提示（下个新版才会再提示）', 'ok');
+});
+// 1h 复查（页面可见才算；Magpie renderUpdateBadge 同纪律）
+setInterval(() => { if (!document.hidden) checkUpdate(); }, 3600e3);
 
 // ---------- 总览 ----------
 
@@ -466,16 +532,20 @@ $('btn-save-settings').addEventListener('click', async () => {
   }
 });
 
+// reloadConfig：重读 providers.json 并热替换路由快照（顶栏按钮与命令面板共用）。
+async function reloadConfig() {
+  const r = await api('/api/reload', { method: 'POST' });
+  cache.providers = null; // 重载后强制重新拉取配置
+  status(`已重载：${r.providers} 个 provider`, 'ok');
+  if (!q('#page-overview').hidden) loadOverview();
+  if (!q('#page-providers').hidden) loadProviders();
+  if (!q('#page-routing').hidden) loadRouting();
+}
 $('btn-reload').addEventListener('click', async () => {
   const b = $('btn-reload');
   b.classList.add('spin');
   try {
-    const r = await api('/api/reload', { method: 'POST' });
-    cache.providers = null; // 重载后强制重新拉取配置
-    status(`已重载：${r.providers} 个 provider`, 'ok');
-    if (!q('#page-overview').hidden) loadOverview();
-    if (!q('#page-providers').hidden) loadProviders();
-    if (!q('#page-routing').hidden) loadRouting();
+    await reloadConfig();
   } catch (e) {
     status('重载失败: ' + e.message, 'err');
   } finally {
@@ -1761,6 +1831,150 @@ document.addEventListener('click', (e) => {
   const btn = e.target.closest('[data-retry]');
   if (!btn) return;
   (RETRY_MAP[btn.dataset.retry] || (() => {}))();
+});
+
+// ---------- 命令面板（A1：Ctrl+K；Magpie .pop 构造裁剪版） ----------
+// 视图跳转 + 高频动作；↑↓ 选择 / Enter 执行 / Esc 关闭。零新增 API 面
+// （动作全部复用既有处理器）。
+async function probeQuotas() {
+  status('余额探测中…');
+  try {
+    const r = await api('/api/quota/probe', { method: 'POST' });
+    const ps = r.probes || [];
+    if (!ps.length) { status('无账号配置余额探测（quota_probe）', '', 5000); return; }
+    const fail = ps.filter((p) => p.error);
+    status(`余额探测完成：${ps.length - fail.length}/${ps.length} 成功` +
+      (fail.length ? `（失败：${fail.map((p) => p.provider + '/' + p.account).join('、')}）` : ''),
+      fail.length ? 'warn' : 'ok', 6000);
+    if (!q('#page-overview').hidden) loadOverview();
+  } catch (e) {
+    status('余额探测失败: ' + e.message, 'err');
+  }
+}
+
+const cmdk = { open: false, items: [], filtered: [], active: 0, back: null, cleanup: null };
+
+function cmdkRegistry() {
+  const views = [...document.querySelectorAll('#tabs .nav-it')].map((b) => ({
+    label: b.dataset.title, hint: '切换视图', kw: 'view ' + b.dataset.tab,
+    run: () => show(b.dataset.tab),
+  }));
+  return views.concat([
+    { label: '切换主题', hint: '跟随系统 → 亮 → 暗 循环', kw: 'theme 主题 亮色 暗色',
+      run: cycleTheme },
+    { label: '重载配置', hint: '重读 providers.json 并热替换路由快照', kw: 'reload 配置 重载 provider',
+      run: reloadConfig },
+    { label: '余额探测', hint: '立即轮询全部账号余额/额度', kw: 'probe quota 余额 额度 探测',
+      run: probeQuotas },
+    { label: '添加 Provider', hint: '从厂商预设新建上游（或追加账号）', kw: 'add provider 新增 供应商 预设',
+      run: () => { show('providers'); addProviderModal(); } },
+  ]);
+}
+
+function openCmdk() {
+  if (cmdk.open || q('.modal-back')) return; // 已开或表单模态在前时不叠加
+  cmdk.open = true;
+  const back = document.createElement('div');
+  back.className = 'modal-back cmdk-back';
+  back.innerHTML = `<div class="dialog cmdk" role="dialog" aria-modal="true" aria-label="命令面板">
+    <div class="cmdk-head">
+      <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.5 10.5 3 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <input id="cmdk-q" type="text" placeholder="输入命令或视图名…" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="cmdk-list" id="cmdk-list" role="listbox" aria-label="命令列表"></div>
+    <div class="cmdk-foot"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>Enter</kbd> 执行</span><span><kbd>Esc</kbd> 关闭</span></div>
+  </div>`;
+  $('modal-root').appendChild(back);
+  cmdk.back = back;
+  cmdk.items = cmdkRegistry();
+  cmdk.filtered = cmdk.items;
+  cmdk.active = 0;
+  renderCmdk();
+  const input = back.querySelector('#cmdk-q');
+  input.addEventListener('input', () => {
+    const s = input.value.trim().toLowerCase();
+    cmdk.filtered = !s ? cmdk.items.slice() : cmdk.items.filter((it) =>
+      (it.label + ' ' + it.kw + ' ' + it.hint).toLowerCase().includes(s));
+    cmdk.active = 0;
+    renderCmdk();
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      cmdk.active = Math.min(cmdk.active + 1, cmdk.filtered.length - 1);
+      renderCmdk();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      cmdk.active = Math.max(cmdk.active - 1, 0);
+      renderCmdk();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      runCmdk();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      closeCmdk();
+    }
+  });
+  // 焦点移出输入框后 Esc 仍可关闭（document 级，关闭时清理）
+  const onKey = (e) => {
+    if (e.key === 'Escape' && document.activeElement !== input) { e.preventDefault(); closeCmdk(); }
+  };
+  document.addEventListener('keydown', onKey);
+  cmdk.cleanup = () => document.removeEventListener('keydown', onKey);
+  back.addEventListener('mousedown', (e) => { if (e.target === back) closeCmdk(); });
+  // 鼠标 hover 同步高亮行（键盘/指针共用同一 active 态）
+  back.querySelector('#cmdk-list').addEventListener('mousemove', (e) => {
+    const it = e.target.closest('.cmdk-it');
+    if (!it) return;
+    const i = Number(it.dataset.i);
+    if (i !== cmdk.active) { cmdk.active = i; renderCmdk(); }
+  });
+  input.focus();
+}
+
+function renderCmdk() {
+  const list = $('cmdk-list');
+  if (!list) return;
+  if (!cmdk.filtered.length) {
+    list.innerHTML = '<div class="cmdk-empty">无匹配命令</div>';
+    return;
+  }
+  list.innerHTML = cmdk.filtered.map((it, i) =>
+    `<div class="cmdk-it${i === cmdk.active ? ' on' : ''}" role="option" aria-selected="${i === cmdk.active}" data-i="${i}">
+      <div class="who"><div class="name">${esc(it.label)}</div><div class="sub">${esc(it.hint)}</div></div>
+    </div>`).join('');
+  list.querySelector('.cmdk-it.on')?.scrollIntoView({ block: 'nearest' });
+}
+
+function runCmdk() {
+  const it = cmdk.filtered[cmdk.active];
+  if (!it) return;
+  closeCmdk();
+  it.run();
+}
+
+function closeCmdk() {
+  if (!cmdk.open) return;
+  cmdk.open = false;
+  cmdk.cleanup?.();
+  cmdk.back?.remove();
+  cmdk.back = null;
+}
+
+$('modal-root').addEventListener('click', (e) => {
+  if (!cmdk.open) return;
+  const it = e.target.closest('.cmdk-it');
+  if (!it) return;
+  cmdk.active = Number(it.dataset.i);
+  renderCmdk();
+  runCmdk();
+});
+$('btn-cmdk').addEventListener('click', openCmdk);
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === 'k' || e.key === 'K')) {
+    e.preventDefault();
+    if (cmdk.open) closeCmdk(); else openCmdk();
+  }
 });
 
 // ---------- `/` 聚焦当前视图的查找框（Magpie 键盘文化） ----------

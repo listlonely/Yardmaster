@@ -377,6 +377,27 @@ OAuth 订阅类不在前端（授权流在浏览器外，仍 CLI add-oauth）。
 `provider_presets_test.go`（端点形状漂移即失败）；浏览器实测 tile 预填/
 落盘持久化/掩码回显/删除确认全过。
 
+**七·乙追记之二（2026-11-04）：M10 候选第一梯队 B1+A1 落地。** 开跑前按
+基线铁律比对 Magpie 上游增量（v0.1.2699→v0.1.2890，255 提交：命令面板
+无改动参考仍有效；升级提示**吸收其 servedAnew 增量**——页面伺服版本与
+服务端应答版本漂移时自动重载，6673171）。①**控制台升级提示（B1）**——
+侧栏脚部 accent 软底胶囊（Magpie `.update` 可隐藏角标同构）：浏览器端
+直查 GitHub latest release（CORS 开放、1h localStorage TTL、失败静默
+不扰），版本比较分段数值（dev 态不检查，同托盘 trayUpdateLabel 语义）；
+× 忽略按 tag 记忆（下个新版才再提示），点击开 releases 页（原生窗口
+外链守卫语义不变）；**servedAnew 同步吸收**：refreshState 检测 boot
+版本≠应答版本 → 自动重载一次（页面由同一 serve 伺服自身前端，无循环
+风险；dev 态两侧同名不触发）。②**命令面板（A1）**——Ctrl+K / 顶栏
+K 形图标打开（Magpie `.pop` 构造裁剪版，复用 .dialog 弹层体系）：6 视图
+跳转 + 4 动作（切换主题/重载配置/余额探测/添加 Provider，全部复用既有
+处理器**零新增 API 面**）；↑↓/Enter/Esc 键盘流 + hover 高亮跟随 +
+输入过滤；表单模态在前时不叠加；余额探测为 POST /api/quota/probe
+（M9-W3 端点）首次进前端。真机冒烟（隔离 USERPROFILE + 版本号注入双
+二进制）：升级 pill 真实 GitHub 数据触发（0.8.1 → 提示 v0.9.0）+
+忽略记忆 F5 保持；**servedAnew 全链路实证**（0.8.1 页面 + 0.9.0 serve
+→ 15s 轮询内无手动刷新自动跟上，pill 正确隐藏）；命令面板键盘/指针/
+过滤/执行/关闭全过，控制台零 JS 错误；go vet + gateway/app 包测试绿。
+
 ### 可采纳项（W3 落地，按价值排序）
 
 | # | 项 | Magpie 做法（出处 app.css/index.html） | 我方落点 |
