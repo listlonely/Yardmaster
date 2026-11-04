@@ -75,8 +75,13 @@ type Server struct {
 	// 回调（网络失败不回调——频繁且自动恢复）。nil=无订阅者；壳层用于
 	// 桌面气泡通知，网关核心不感知通知实现。
 	OnAccountRest func(accountKey, reason string)
-	oauth         oauthRuntime // OAuth 运行态（token 缓存/single-flight）
-	started       time.Time
+	// OnUpdateInstall 自动更新安装钩子（M11-W3）：由桌面壳装配（下载
+	// 暂存→aside 换侧→spawn 接力→触发重启），POST /api/update/install
+	// 的执行体。nil=未装配更新引擎（纯 CLI 场景管理 API 返回 503）；
+	// 网关核心不感知 exe 替换细节（依赖方向：app→gateway 单向）。
+	OnUpdateInstall func() error
+	oauth           oauthRuntime // OAuth 运行态（token 缓存/single-flight）
+	started         time.Time
 }
 
 // Handler 返回网关路由表。
@@ -107,11 +112,12 @@ func (s *Server) routes() http.Handler {
 		s.handleConfigPut(w, r, r.PathValue("name"))
 	})
 	mux.HandleFunc("POST /api/reload", s.handleReload)
+	mux.HandleFunc("POST /api/update/install", s.handleUpdateInstall) // M11-W3：应用内自动更新
 	mux.HandleFunc("GET /api/cost", s.handleCost)
-	mux.HandleFunc("POST /api/pricing/sync", s.handlePricingSync) // M7-W1：models.dev 单价同步
-	mux.HandleFunc("POST /api/quota/probe", s.handleQuotaProbe)   // M9-W3：手动触发余额轮询
+	mux.HandleFunc("POST /api/pricing/sync", s.handlePricingSync)        // M7-W1：models.dev 单价同步
+	mux.HandleFunc("POST /api/quota/probe", s.handleQuotaProbe)          // M9-W3：手动触发余额轮询
 	mux.HandleFunc("GET /api/provider-presets", s.handleProviderPresets) // M9：前端「添加 Provider」预填数据源（只读）
-	mux.HandleFunc("GET /api/plugins", s.handlePluginsView)       // M7-W5：插件状态视图
+	mux.HandleFunc("GET /api/plugins", s.handlePluginsView)              // M7-W5：插件状态视图
 	mux.HandleFunc("POST /api/plugins/{id}/enable", func(w http.ResponseWriter, r *http.Request) {
 		s.handlePluginToggle(w, r.PathValue("id"), "enable")
 	})

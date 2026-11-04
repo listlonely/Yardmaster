@@ -71,6 +71,10 @@ type TrayOptions struct {
 	// Update 查询新版本：返回「升级到 v0.10.0」或 ""（15s 首查 + 每
 	// 1h；查询失败静默隐藏）。
 	Update func() string
+	// OnUpdateInstall 点击升级菜单项的应用内安装回调（M11-W3）：非
+	// nil=走自替换引擎（下载→换侧→接力重启），nil=回退打开 releases
+	// 页（无桌面壳装配的场景）。
+	OnUpdateInstall func() error
 }
 
 // runTrayIsolated 托盘崩溃隔离（M8-W5，语义同插件纪律）：托盘在独立
@@ -117,7 +121,23 @@ func runTray(opts TrayOptions) {
 						opts.OnOpen()
 					}
 				case <-mUpdate.ClickedCh:
-					_ = openBrowser(releasesURL)
+					if opts.OnUpdateInstall == nil {
+						_ = openBrowser(releasesURL)
+						continue
+					}
+					// 应用内安装（M11-W3）：菜单转「更新中…」禁用态；
+					// 失败恢复可重试，成功后网关重启托盘随之消失。
+					mUpdate.SetTitle("更新中…")
+					mUpdate.Disable()
+					go func() {
+						if err := opts.OnUpdateInstall(); err != nil {
+							slog.Warn("托盘触发更新失败", "err", err)
+							mUpdate.SetTitle("更新失败（点击重试，详情见日志）")
+							mUpdate.Enable()
+							return
+						}
+						mUpdate.SetTitle("已更新，正在重启…")
+					}()
 				case <-mQuit.ClickedCh:
 					if opts.OnExit != nil {
 						opts.OnExit()

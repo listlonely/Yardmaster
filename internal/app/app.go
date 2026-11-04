@@ -42,15 +42,19 @@ var ErrUsage = errors.New("usage")
 
 // Run 解析并执行一条子命令。无参数缺省 app（桌面应用模式：网关 +
 // 托盘 + 应用窗口——「二进制直接运行即有界面」）；无头场景显式 serve。
+// M11-W3 起 Run 入口先检接力环境（relayEnv）：更新换代的新进程在此等
+// 旧进程退出（端口让位），随后按普通路径启动并在 serve 起来后收尾
+// （healthz 自探/回滚，见 attachUpdateHooks 与 relayFinalize）。
 func Run(args []string, stdout, stderr io.Writer) error {
+	relay := relayInit()
 	if len(args) == 0 {
 		args = []string{"app"}
 	}
 	switch args[0] {
 	case "serve":
-		return runServe(args[1:], stdout)
+		return runServe(args[1:], stdout, relay)
 	case "app": // 桌面应用模式（M5.5：零 cgo 应用窗口 + 托盘 + 进程内网关）
-		return runApp(args[1:], stdout)
+		return runApp(args[1:], stdout, relay)
 	case "console": // 显式打开网页控制台（serve/app 不再自动开网页）
 		return runConsole(args[1:], stdout)
 	case "version":
@@ -306,6 +310,24 @@ func trayUpdateLabel() string {
 	return ""
 }
 
+// trayUpdateQuery 托盘升级查询入口（M11-W3，trayUpdateLabel 的 auto 态
+// 演进）：auto 模式命中新版即自动触发安装（每轮查询至多一次；失败
+// 静默留痕，1h 后下轮重试）。check/off 态只出菜单文本（off 由调用方
+// 语义保证——off 不查更新时本函数仍会被周期调用，但 UpdateMode 不会
+// 是 auto，行为即只提示）。
+func (st *serveSetup) trayUpdateQuery() string {
+	label := trayUpdateLabel()
+	if label == "" || st.srv.OnUpdateInstall == nil || st.settings.UpdateMode() != store.UpdateAuto {
+		return label
+	}
+	go func() {
+		if err := st.srv.OnUpdateInstall(); err != nil {
+			slog.Warn("auto 自动更新安装失败（1h 后重试）", "err", err)
+		}
+	}()
+	return label
+}
+
 // 原生窗口壳挂点（M8-W2）：支持的平台在各自 build tag 文件里接线
 // （window_wails.go=Windows/Wails v3，全仓库唯一 wails import 点）；
 // 其余平台保持 nil=浏览器窗口路径（行为同 v0.7.0）。依赖边界铁律：
@@ -328,9 +350,70 @@ func serveUntilDone(st *serveSetup, ctx context.Context) error {
 	return nil
 }
 
+// attachUpdateHooks 装配自动更新安装入口（M11-W3）：管理 API
+// /api/update/install、托盘「升级到 x.y.z」、控制台 B1 pill 三入口同
+// 走 Server.OnUpdateInstall——暂存缺失先下载校验（网络路径接 netproxy
+// 全局代理，W2 真机实证：release CDN 直连不可达）、锁单飞、aside 换侧
+// +spawn 接力，spawn 成功后延迟触发网关退出（响应送回余量）。auto 态
+// 托盘每轮版本查询命中新版即自动走此入口（无空闲保护，砍项留档）。
+func attachUpdateHooks(st *serveSetup, stop context.CancelFunc) {
+	st.srv.OnUpdateInstall = func() error {
+		dir, err := defaultStageDir()
+		if err != nil {
+			return err
+		}
+		client := &http.Client{}
+		if tr, terr := netproxy.Transport(netproxy.Ref(st.settings.GlobalProxy)); terr != nil {
+			slog.Warn("更新代理传输构造失败，回退直连", "err", terr)
+		} else if tr != nil {
+			client.Transport = tr
+		}
+		if _, _, _, serr := stagePaths(dir); serr != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer cancel()
+			rel, ferr := fetchRelease(ctx, client, repoAPI)
+			if ferr != nil {
+				return ferr
+			}
+			slog.Info("自动更新：开始下载", "tag", rel.Tag)
+			if _, ferr = stageUpdate(ctx, client, rel, dir, nil); ferr != nil {
+				return ferr
+			}
+		}
+		if err := installStaged(dir, func() {}, false); err != nil {
+			return err
+		}
+		go func() {
+			time.Sleep(800 * time.Millisecond) // 响应送回余量
+			slog.Info("自动更新已安装，网关重启")
+			stop()
+		}()
+		return nil
+	}
+}
+
+// serveRelayWrap 接力态的 serve 收尾包装：启动失败回滚（新版退出、旧版
+// 原位重启）；正常退出（用户 Ctrl-C/托盘）不回滚——.old 留待下轮安装
+// 前清除，暂存同理（换代成功语义见 relayFinalize）。
+func serveRelayWrap(relay relayState, serveErr error) error {
+	if relay.oldPid != 0 && serveErr != nil {
+		relayServeFailed(serveErr)
+	}
+	return serveErr
+}
+
+// serveUpdatePath 是 serve/app 两模式共用的更新装配+接力序列：hook 装配
+// 在 setup 成功后，finalize 探活 goroutine 在 banner 后启动。
+func serveUpdatePath(st *serveSetup, relay relayState, stop context.CancelFunc) {
+	attachUpdateHooks(st, stop)
+	if relay.oldPid != 0 {
+		go relayFinalize(st, relay)
+	}
+}
+
 // runServe 无头启动网关（不打开任何界面——网页控制台经 `yardmaster
 // console` 或 app 模式窗口显式打开）。-tray 启用托盘常驻。
-func runServe(args []string, stdout io.Writer) error {
+func runServe(args []string, stdout io.Writer, relay relayState) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	tray := fs.Bool("tray", false, "启用系统托盘常驻（打开控制台/退出）")
 	if err := fs.Parse(args); err != nil {
@@ -341,11 +424,12 @@ func runServe(args []string, stdout io.Writer) error {
 
 	st, err := setupGateway()
 	if err != nil {
-		return err
+		return serveRelayWrap(relay, err)
 	}
 	defer st.srv.Traces.Close()
 	defer st.startHelpers(ctx)()
 	st.banner(stdout)
+	serveUpdatePath(st, relay, stop)
 	if *tray {
 		n := newNotifier(st.settings.NotifyEnabled())
 		st.wireDesktopHooks(n)
@@ -356,19 +440,20 @@ func runServe(args []string, stdout io.Writer) error {
 				stop()
 				systray.Quit()
 			},
-			Status: st.trayStatus,
-			Update: trayUpdateLabel,
+			Status:          st.trayStatus,
+			Update:          st.trayUpdateQuery,
+			OnUpdateInstall: st.srv.OnUpdateInstall,
 		})
 		fmt.Fprintln(stdout, "  托盘: 已启用（系统托盘区图标）")
 	}
-	return serveUntilDone(st, ctx)
+	return serveRelayWrap(relay, serveUntilDone(st, ctx))
 }
 
 // runApp 桌面应用模式（无参数缺省）：进程内网关 + 托盘常驻 + 应用窗口。
 // M8-W2 起 Windows 走 Wails v3 原生窗口（关窗=隐藏到托盘，app.md §六），
 // 不可用/其他平台回退浏览器 --app 窗口（M5.5 零依赖方案，exec 纯 Go）。
 // 退出走托盘。
-func runApp(args []string, stdout io.Writer) error {
+func runApp(args []string, stdout io.Writer, relay relayState) error {
 	fs := flag.NewFlagSet("app", flag.ContinueOnError)
 	noTray := fs.Bool("no-tray", false, "不启动系统托盘（窗口关闭后 Ctrl-C 退出）")
 	noWindow := fs.Bool("no-window", false, "不打开应用窗口（等同 serve -tray）")
@@ -389,11 +474,12 @@ func runApp(args []string, stdout io.Writer) error {
 
 	st, err := setupGateway()
 	if err != nil {
-		return err
+		return serveRelayWrap(relay, err)
 	}
 	defer st.srv.Traces.Close()
 	defer st.startHelpers(ctx)()
 	st.banner(stdout)
+	serveUpdatePath(st, relay, stop)
 	consoleURL := "http://" + st.listen + "/?app=1"
 	onOpen := func() { _ = openAppWindow(consoleURL) }
 	if nativeReopen != nil {
@@ -409,8 +495,9 @@ func runApp(args []string, stdout io.Writer) error {
 				stop()
 				systray.Quit()
 			},
-			Status: st.trayStatus,
-			Update: trayUpdateLabel,
+			Status:          st.trayStatus,
+			Update:          st.trayUpdateQuery,
+			OnUpdateInstall: st.srv.OnUpdateInstall,
 		})
 		fmt.Fprintln(stdout, "  托盘: 已启用（系统托盘区图标；退出请走托盘菜单）")
 	}

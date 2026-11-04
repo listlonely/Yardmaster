@@ -18,12 +18,14 @@ const repoAPI = "https://api.github.com/repos/listlonely/Yardmaster/releases/lat
 
 // updateCheck 查询 GitHub 最新 release 并与当前版本比较（升级提示）。
 func updateCheck(args []string, stdout, stderr io.Writer) error {
-	// 子命令分发（M11-W2）：check/无参=比较提示（现状）；download=
-	// 下载校验暂存（安装与接力重启是 W3）。
+	// 子命令分发（M11-W2/W3）：check/无参=比较提示（现状）；download=
+	// 下载校验暂存；install=安装+接力重启。
 	if len(args) > 0 {
 		switch args[0] {
 		case "download":
 			return updateDownloadCmd(args[1:], stdout, stderr)
+		case "install":
+			return updateInstallCmd(args[1:], stdout, stderr)
 		case "check":
 			args = args[1:]
 		}

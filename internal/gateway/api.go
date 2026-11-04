@@ -347,6 +347,26 @@ func (s *Server) handleQuotaProbe(w http.ResponseWriter, _ *http.Request) {
 	s.writeResultExtra(w, map[string]any{"probes": probes})
 }
 
+// handleUpdateInstall POST /api/update/install（M11-W3）：触发自替换
+// 安装引擎（桌面壳装配的 OnUpdateInstall——暂存缺失先下载校验，aside
+// 换侧+spawn 接力，网关随后重启）。/api/* 令牌闸如常；同步段返回安装
+// 结果（409=单飞冲突/版本闸/下载失败等），重启由钩子层延迟执行（保证
+// 本响应先送回客户端）。exe 写路径审计=slog 结构化留痕（换侧/回滚/
+// 接力全过程，见 internal/app/update_install.go）。
+func (s *Server) handleUpdateInstall(w http.ResponseWriter, _ *http.Request) {
+	if s.OnUpdateInstall == nil {
+		writeAPIErr(w, &apiError{status: http.StatusServiceUnavailable,
+			Msg: "更新引擎未装配（桌面壳 serve/app 模式才提供 /api/update/install；CLI 场景请用 yardmaster update install）"})
+		return
+	}
+	slog.Info("管理 API 触发自动更新安装", "version", s.Version)
+	if err := s.OnUpdateInstall(); err != nil {
+		writeAPIErr(w, &apiError{status: http.StatusConflict, Msg: "更新安装失败: " + err.Error()})
+		return
+	}
+	s.writeResultExtra(w, map[string]any{"update": "installed", "action": "网关正在重启，控制台将自动重连"})
+}
+
 // handleProviderPresets 返回内置厂商预设表（只读）：前端「添加
 // Provider」表单的预填数据源，与 CLI `provider add -preset` 消费同一
 // provider.Presets（单一事实源）。预设含 base_url 等公开文档值，无敏

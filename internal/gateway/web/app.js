@@ -358,6 +358,9 @@ function verNewer(a, b) {
 async function checkUpdate() {
   const cur = cache.state?.version || '';
   if (!cur || cur === 'dev') return;
+  // auto 判定依赖 settings（update 三态）；未加载先拉一次（失败则本
+  // 轮按仅提示处理，托盘侧 1h 轮询兜底）。
+  if (!cache.settings) { try { cache.settings = await api('/api/config/settings'); } catch { /* 降级 */ } }
   const cached = JSON.parse(localStorage.getItem(UPD_KEY) || 'null');
   if (cached && Date.now() - cached.at < 3600e3) { offerUpdate(cached.tag, cur); return; }
   try {
@@ -376,7 +379,40 @@ function offerUpdate(tag, cur) {
   if (!verNewer(tag, cur) || localStorage.getItem(UPD_DISMISS) === tag) { pill.hidden = true; return; }
   $('upd-link-text').textContent = '升级到 ' + tag;
   pill.hidden = false;
+  // auto 态（M11-W3 settings.update=auto）：命中新版自动应用内安装，
+  // 每标签页生命周期至多一次（失败留 toast，网关侧 1h 轮询会再触发）。
+  if (cache.settings?.update === 'auto' && !autoInstallFired) {
+    autoInstallFired = true;
+    installUpdate();
+  }
 }
+let autoInstallFired = false;
+
+// installUpdate 应用内更新（M11-W3）：POST /api/update/install（下载
+// 校验→aside 换侧→spawn 接力→网关重启），重启后页面经 servedAnew 自
+// 动跟上新版本。失败恢复 pill 可重试，releases 页手动升级仍可用。
+async function installUpdate() {
+  const link = $('upd-link');
+  if (!link || link.dataset.busy) return;
+  link.dataset.busy = '1';
+  $('upd-link-text').textContent = '更新中…';
+  try {
+    await api('/api/update/install', { method: 'POST' });
+    $('upd-link-text').textContent = '已更新 · 重启中…';
+    status('更新已安装，网关正在重启（控制台将自动重连）', 'ok');
+  } catch (e) {
+    delete link.dataset.busy;
+    $('upd-link-text').textContent = '更新失败（点击重试）';
+    status('应用内更新失败：' + e.message + '；可到 releases 页手动升级', 'err');
+  }
+}
+
+// B1 pill 点击（M11-W3）：应用内安装替代跳转 releases 页（引擎未装配
+// 等场景 API 报错落 toast，仍可从错误提示手动进 releases）。
+$('upd-link').addEventListener('click', (e) => {
+  e.preventDefault();
+  installUpdate();
+});
 
 $('upd-x').addEventListener('click', (e) => {
   e.preventDefault();

@@ -40,7 +40,7 @@ func TestAppWindowBinFindsBrowser(t *testing.T) {
 // TestRunAppUsageError：非法 flag 走 ErrUsage（不装配网关）。
 func TestRunAppUsageError(t *testing.T) {
 	var out strings.Builder
-	if err := runApp([]string{"-bogus"}, &out); err != ErrUsage {
+	if err := runApp([]string{"-bogus"}, &out, relayState{}); err != ErrUsage {
 		t.Fatalf("app 非法 flag 应 ErrUsage: %v", err)
 	}
 	if err := runConsole([]string{"-bogus"}, &out); err != ErrUsage {
