@@ -48,12 +48,27 @@ type ChatTool struct {
 	} `json:"function"`
 }
 
-// ChatMessage 是 chat 的一条消息；Content 可为字符串或分段数组。
+// ChatMessage 是 chat 的一条消息；Content 可为字符串或分段数组
+// （分段见 ChatContentPart，图片支持 M10-W2 IR v2）。
 type ChatMessage struct {
 	Role       string         `json:"role"`
 	Content    any            `json:"content,omitempty"`
 	ToolCalls  []ChatToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string         `json:"tool_call_id,omitempty"`
+}
+
+// ChatContentPart 是 chat 分段内容的元素（IR v2：文本/图片两形态；
+// 解码经 IRPart 归一，见 parts.go）。
+type ChatContentPart struct {
+	Type     string      `json:"type"` // "text" | "image_url"
+	Text     string      `json:"text,omitempty"`
+	ImageURL *ChatImgURL `json:"image_url,omitempty"`
+}
+
+// ChatImgURL 是 image_url 分段的值：data: URL（内联）或 http(s) URL。
+type ChatImgURL struct {
+	URL    string `json:"url"`
+	Detail string `json:"detail,omitempty"`
 }
 
 // ChatRequest 是 /v1/chat/completions 请求。
@@ -66,6 +81,10 @@ type ChatRequest struct {
 	TopP        *float64      `json:"top_p,omitempty"`
 	Stop        any           `json:"stop,omitempty"`
 	Tools       []ChatTool    `json:"tools,omitempty"`
+
+	// Ignored 是跨协议翻译时被 fail-closed 忽略的内容块清单（D6：
+	// 不静默；translateRequest 汇总后写决策日志，不序列化上线）。
+	Ignored []string `json:"-"`
 }
 
 // ChatChoice 是流式/非流响应的通用选择项。
@@ -97,15 +116,25 @@ type ChatUsage struct {
 
 // ---------- Anthropic Messages ----------
 
+// BlockSource 是 image 块的 source（M10-W2 IR v2）：base64 或 url 两形态
+// （Magpie imageBlock 同构）。
+type BlockSource struct {
+	Type      string `json:"type"` // "base64" | "url"
+	MediaType string `json:"media_type,omitempty"`
+	Data      string `json:"data,omitempty"`
+	URL       string `json:"url,omitempty"`
+}
+
 // Block 是 messages 协议的内容块。
 type Block struct {
-	Type      string `json:"type"` // text / tool_use / tool_result
-	Text      string `json:"text,omitempty"`
-	ID        string `json:"id,omitempty"`          // tool_use
-	Name      string `json:"name,omitempty"`        // tool_use
-	Input     any    `json:"input,omitempty"`       // tool_use
-	ToolUseID string `json:"tool_use_id,omitempty"` // tool_result
-	Content   any    `json:"content,omitempty"`     // tool_result
+	Type      string       `json:"type"` // text / tool_use / tool_result / image
+	Text      string       `json:"text,omitempty"`
+	ID        string       `json:"id,omitempty"`          // tool_use
+	Name      string       `json:"name,omitempty"`        // tool_use
+	Input     any          `json:"input,omitempty"`       // tool_use
+	ToolUseID string       `json:"tool_use_id,omitempty"` // tool_result
+	Content   any          `json:"content,omitempty"`     // tool_result
+	Source    *BlockSource `json:"source,omitempty"`      // image
 }
 
 // AnthropicTool 对应 messages 的 tools 元素。
@@ -129,6 +158,8 @@ type MessagesRequest struct {
 	Stream    bool              `json:"stream,omitempty"`
 	MaxTokens int               `json:"max_tokens,omitempty"`
 	Tools     []AnthropicTool   `json:"tools,omitempty"`
+
+	Ignored []string `json:"-"` // 跨协议翻译忽略块留痕（D6），同 ChatRequest
 }
 
 // MessagesResponse 是非流式响应。

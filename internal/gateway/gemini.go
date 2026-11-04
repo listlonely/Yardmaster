@@ -16,11 +16,27 @@ import (
 // ---------- Gemini 模型 ----------
 
 // GeminiPart 是 contents[].parts 的元素。文本/工具调用/工具结果三形态；
-// thought:true 与 inlineData 等未建模形态忽略（可砍项纪律）。
+// 图片（inlineData/fileData）M10-W2 起建模（IR v2）；thought 等其余
+// 形态忽略（可砍项纪律，W3 处理 thought）。
 type GeminiPart struct {
 	Text             string        `json:"text,omitempty"`
 	FunctionCall     *GeminiFnCall `json:"functionCall,omitempty"`
 	FunctionResponse *GeminiFnResp `json:"functionResponse,omitempty"`
+	InlineData       *GeminiInline `json:"inlineData,omitempty"`
+	FileData         *GeminiFile   `json:"fileData,omitempty"`
+}
+
+// GeminiInline 是内联二进制（图片等）: MIME + base64。
+type GeminiInline struct {
+	MimeType string `json:"mimeType,omitempty"`
+	Data     string `json:"data,omitempty"`
+}
+
+// GeminiFile 是 fileData：文件 URI 引用（出站不生成——需先上传，URL 图
+// 到 Gemini 上游丢弃+留痕，Magpie 同决策）。
+type GeminiFile struct {
+	MimeType string `json:"mimeType,omitempty"`
+	FileURI  string `json:"fileUri,omitempty"`
 }
 
 type GeminiFnCall struct {
@@ -58,6 +74,7 @@ type GeminiRequest struct {
 	Tools             []GeminiTool    `json:"tools,omitempty"`
 	GenerationConfig  *GeminiGenCfg   `json:"generationConfig,omitempty"`
 	Model             string          `json:"-"`
+	Ignored           []string        `json:"-"` // 跨协议翻译忽略块留痕（D6）
 }
 
 type GeminiGenCfg struct {
@@ -173,17 +190,29 @@ func chatFinishToGemini(finish string) string {
 
 // geminiToChatRequest 把 Gemini 请求翻译为 Chat 请求。model 由入站
 // handler 从 URL 提取后注入（Gemini body 无 model 字段）。
+// IR v2（M10-W2）：inlineData/fileData 图片 → IRPart → chat 分段；
+// role=model 的图片（生成图历史）chat assistant 不携带，计入 Ignored。
 func geminiToChatRequest(gr *GeminiRequest, model string, stream bool) *ChatRequest {
-	cr := &ChatRequest{Model: model, Stream: stream}
+	cr := &ChatRequest{Model: model, Stream: stream, Ignored: gr.Ignored}
 	if gr.SystemInstruction != nil {
-		cr.Messages = append(cr.Messages, ChatMessage{Role: "system", Content: geminiPartsText(gr.SystemInstruction.Parts)})
+		var ig []string
+		parts := geminiPartsOf(gr.SystemInstruction.Parts, &ig)
+		if c := irToChatContent(parts); c != nil {
+			if s, ok := c.(string); ok {
+				cr.Messages = append(cr.Messages, ChatMessage{Role: "system", Content: s})
+			} else {
+				irNote(&ig, "image(system，chat system 仅文本)")
+			}
+		}
+		cr.Ignored = append(cr.Ignored, ig...)
 	}
 	for _, c := range gr.Contents {
 		role := "user"
 		if c.Role == "model" {
 			role = "assistant"
 		}
-		text := geminiPartsText(c.Parts)
+		var ig []string
+		parts := geminiPartsOf(c.Parts, &ig)
 		var toolCalls []ChatToolCall
 		fcIdx := 0
 		for _, p := range c.Parts {
@@ -197,7 +226,6 @@ func geminiToChatRequest(gr *GeminiRequest, model string, stream bool) *ChatRequ
 				fcIdx++
 			}
 		}
-		msg := ChatMessage{Role: role, Content: text}
 		if role == "user" {
 			for _, p := range c.Parts {
 				if p.FunctionResponse != nil {
@@ -211,12 +239,32 @@ func geminiToChatRequest(gr *GeminiRequest, model string, stream bool) *ChatRequ
 					})
 				}
 			}
-			if strings.TrimSpace(text) != "" {
-				cr.Messages = append(cr.Messages, msg)
+			// 旧行为保形：纯空白文本不产生消息；有图片则即使无文本也产生
+			hasImage := false
+			for _, p := range parts {
+				if p.Kind != "text" {
+					hasImage = true
+					break
+				}
 			}
+			if hasImage || strings.TrimSpace(geminiPartsText(c.Parts)) != "" {
+				if c := irToChatContent(parts); c != nil {
+					cr.Messages = append(cr.Messages, ChatMessage{Role: role, Content: c})
+				}
+			}
+			cr.Ignored = append(cr.Ignored, ig...)
 			continue
 		}
+		// assistant（role=model）：文本 + 工具调用；图片历史不携带 → 留痕
+		for _, p := range parts {
+			if p.Kind != "text" {
+				irNote(&ig, "image(model 历史，chat assistant 不携带)")
+				break
+			}
+		}
+		msg := ChatMessage{Role: role, Content: geminiPartsText(c.Parts)}
 		msg.ToolCalls = toolCalls
+		cr.Ignored = append(cr.Ignored, ig...)
 		cr.Messages = append(cr.Messages, msg)
 	}
 	for _, t := range gr.Tools {
@@ -248,12 +296,28 @@ func geminiPartsText(parts []GeminiPart) string {
 
 // ---------- 请求翻译：Chat → Gemini ----------
 
+// chatToGeminiRequest 把 Chat 请求翻译为 Gemini 请求。
+// IR v2（M10-W2）：chat 分段图片 → inlineData（URL 图丢弃+留痕：
+// fileData 需先上传文件，Magpie 同决策）；system 仅文本。
 func chatToGeminiRequest(cr *ChatRequest) *GeminiRequest {
-	gr := &GeminiRequest{}
+	gr := &GeminiRequest{Ignored: cr.Ignored}
 	if sys := firstSystem(cr.Messages); sys != nil {
-		if s := contentText(sys); s != "" {
-			gr.SystemInstruction = &GeminiContent{Parts: []GeminiPart{{Text: s}}}
+		var ig []string
+		parts := chatContentParts(sys, &ig)
+		texts := make([]IRPart, 0, len(parts))
+		for _, p := range parts {
+			if p.Kind == "text" {
+				texts = append(texts, p)
+			} else {
+				irNote(&ig, "image(system，gemini systemInstruction 仅文本)")
+			}
 		}
+		if c := irToChatContent(texts); c != nil {
+			if s, ok := c.(string); ok && s != "" {
+				gr.SystemInstruction = &GeminiContent{Parts: []GeminiPart{{Text: s}}}
+			}
+		}
+		gr.Ignored = append(gr.Ignored, ig...)
 	}
 	for _, m := range cr.Messages {
 		switch m.Role {
@@ -274,9 +338,17 @@ func chatToGeminiRequest(cr *ChatRequest) *GeminiRequest {
 				FunctionResponse: &GeminiFnResp{Name: name, Response: resp},
 			}}})
 		case "assistant":
-			var parts []GeminiPart
-			if s := contentText(m.Content); s != "" {
-				parts = append(parts, GeminiPart{Text: s})
+			var ig []string
+			parts := chatContentParts(m.Content, &ig)
+			var gParts []GeminiPart
+			for _, p := range parts {
+				if p.Kind == "text" {
+					if p.Text != "" {
+						gParts = append(gParts, GeminiPart{Text: p.Text})
+					}
+				} else {
+					irNote(&ig, "image(assistant，model 历史仅文本)")
+				}
 			}
 			for _, tc := range m.ToolCalls {
 				args := tc.Function.Arguments
@@ -284,15 +356,20 @@ func chatToGeminiRequest(cr *ChatRequest) *GeminiRequest {
 				if args == "" || json.Unmarshal([]byte(args), &v) != nil {
 					v = map[string]any{}
 				}
-				parts = append(parts, GeminiPart{FunctionCall: &GeminiFnCall{Name: tc.Function.Name, Args: v}})
+				gParts = append(gParts, GeminiPart{FunctionCall: &GeminiFnCall{Name: tc.Function.Name, Args: v}})
 			}
-			if len(parts) > 0 {
-				gr.Contents = append(gr.Contents, GeminiContent{Role: "model", Parts: parts})
+			if len(gParts) > 0 {
+				gr.Contents = append(gr.Contents, GeminiContent{Role: "model", Parts: gParts})
 			}
+			gr.Ignored = append(gr.Ignored, ig...)
 		default:
-			if s := contentText(m.Content); s != "" {
-				gr.Contents = append(gr.Contents, GeminiContent{Role: "user", Parts: []GeminiPart{{Text: s}}})
+			var ig []string
+			parts := chatContentParts(m.Content, &ig)
+			gParts := irToGeminiParts(parts, &ig)
+			if len(gParts) > 0 {
+				gr.Contents = append(gr.Contents, GeminiContent{Role: "user", Parts: gParts})
 			}
+			gr.Ignored = append(gr.Ignored, ig...)
 		}
 	}
 	if len(cr.Tools) > 0 {

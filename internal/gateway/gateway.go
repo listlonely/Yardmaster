@@ -949,7 +949,9 @@ func orDefault(v, def string) string {
 // translateRequest 把客户端请求翻译为上游协议（M4-W4 重构为两步式：
 // 客户端→ChatRequest→上游，每协议只写一对适配器，消除 12 组合的分支
 // 优先级纠缠；模型名改写在 attempt 层完成，Chat↔Messages 行为等价）。
-func translateRequest(_ ClientProto, clientReq any, upstream ClientProto, stream bool) []byte {
+// IR v2（M10-W2）：两步各自可能丢弃未建模内容块（D6），Ignored 随
+// 请求携带在此汇总，写决策日志（不静默）。
+func translateRequest(client ClientProto, clientReq any, upstream ClientProto, stream bool) []byte {
 	// 第一步：客户端请求 → ChatRequest（枢纽）。
 	var cr *ChatRequest
 	switch cq := clientReq.(type) {
@@ -964,16 +966,28 @@ func translateRequest(_ ClientProto, clientReq any, upstream ClientProto, stream
 	}
 	cr.Stream = stream
 	// 第二步：ChatRequest → 上游协议。
+	var ignored []string
+	ignored = append(ignored, cr.Ignored...)
 	var b []byte
 	switch upstream {
 	case ProtoMessages:
-		b, _ = json.Marshal(chatToMessagesRequest(cr))
+		mr := chatToMessagesRequest(cr)
+		ignored = append(ignored, mr.Ignored...)
+		b, _ = json.Marshal(mr)
 	case ProtoResponses:
-		b, _ = json.Marshal(chatToResponsesRequest(cr))
+		rr := chatToResponsesRequest(cr)
+		ignored = append(ignored, rr.Ignored...)
+		b, _ = json.Marshal(rr)
 	case ProtoGemini:
-		b, _ = json.Marshal(chatToGeminiRequest(cr))
+		gr := chatToGeminiRequest(cr)
+		ignored = append(ignored, gr.Ignored...)
+		b, _ = json.Marshal(gr)
 	default:
 		b, _ = json.Marshal(cr)
+	}
+	if len(ignored) > 0 {
+		slog.Warn("跨协议翻译丢弃未建模内容块（fail-closed，见 protocol.md IR v2 D6）",
+			"client", client, "upstream", upstream, "blocks", strings.Join(ignored, ","))
 	}
 	return b
 }

@@ -37,16 +37,26 @@ func chatFinishToMsg(s string) string {
 // ---------- 请求翻译 ----------
 
 // messagesToChatRequest 把 Messages 请求翻译为 Chat 请求。
+// IR v2（M10-W2）：图片块经 IRPart 归一为 chat 分段（data: URL 形态）；
+// thinking 等未建模块 fail-closed 忽略并计入 Ignored（D2/D6）。
 func messagesToChatRequest(mr *MessagesRequest) *ChatRequest {
 	cr := &ChatRequest{Model: mr.Model, Stream: mr.Stream, MaxTokens: mr.MaxTokens}
 	if mr.System != nil {
-		if sys := contentText(mr.System); sys != "" {
-			cr.Messages = append(cr.Messages, ChatMessage{Role: "system", Content: sys})
+		var sysIg []string
+		sysParts := msgContentParts(mr.System, &sysIg)
+		if c := irToChatContent(sysParts); c != nil {
+			if s, ok := c.(string); ok { // system 语义仅文本；图片入 system 计留痕
+				cr.Messages = append(cr.Messages, ChatMessage{Role: "system", Content: s})
+			} else {
+				irNote(&sysIg, "image(system，chat system 仅文本)")
+			}
 		}
+		cr.Ignored = append(cr.Ignored, sysIg...)
 	}
 	for _, m := range mr.Messages {
 		switch m.Role {
 		case "assistant":
+			var ig []string
 			cm := ChatMessage{Role: "assistant", Content: contentText(m.Content)}
 			for _, blk := range toolUseBlocks(m.Content) {
 				args, _ := json.Marshal(blk.Input)
@@ -56,9 +66,11 @@ func messagesToChatRequest(mr *MessagesRequest) *ChatRequest {
 					Function: ChatFunction{Name: blk.Name, Arguments: string(args)},
 				})
 			}
+			noteUnmodeledBlocks(m.Content, &ig) // thinking 等块：丢弃+留痕（D2/D6）
+			cr.Ignored = append(cr.Ignored, ig...)
 			cr.Messages = append(cr.Messages, cm)
 		case "user":
-			results, text := splitToolResults(m.Content)
+			results, _ := splitToolResults(m.Content)
 			for _, r := range results {
 				cr.Messages = append(cr.Messages, ChatMessage{
 					Role:       "tool",
@@ -66,9 +78,12 @@ func messagesToChatRequest(mr *MessagesRequest) *ChatRequest {
 					Content:    contentText(r.Content),
 				})
 			}
-			if text != "" {
-				cr.Messages = append(cr.Messages, ChatMessage{Role: "user", Content: text})
+			var ig []string
+			parts := msgContentParts(m.Content, &ig)
+			if c := irToChatContent(parts); c != nil {
+				cr.Messages = append(cr.Messages, ChatMessage{Role: "user", Content: c})
 			}
+			cr.Ignored = append(cr.Ignored, ig...)
 		default:
 			cr.Messages = append(cr.Messages, ChatMessage{Role: m.Role, Content: contentText(m.Content)})
 		}
@@ -86,6 +101,8 @@ func messagesToChatRequest(mr *MessagesRequest) *ChatRequest {
 
 // chatToMessagesRequest 把 Chat 请求翻译为 Messages 请求。
 // Anthropic 要求 max_tokens 必填，缺省 4096。
+// IR v2（M10-W2）：chat 分段图片 → image 块（base64/url 两形态）；
+// system/assistant 内容仅文本（图片计入 Ignored 留痕）。
 func chatToMessagesRequest(cr *ChatRequest) *MessagesRequest {
 	mr := &MessagesRequest{Model: cr.Model, Stream: cr.Stream, MaxTokens: cr.MaxTokens}
 	if mr.MaxTokens <= 0 {
@@ -95,9 +112,16 @@ func chatToMessagesRequest(cr *ChatRequest) *MessagesRequest {
 	for _, m := range cr.Messages {
 		switch m.Role {
 		case "system":
-			if s := contentText(m.Content); s != "" {
-				sys = append(sys, s)
+			var ig []string
+			parts := chatContentParts(m.Content, &ig)
+			if c := irToMsgContent(parts); c != nil {
+				if s, ok := c.(string); ok {
+					sys = append(sys, s)
+				} else {
+					irNote(&ig, "image(system，messages system 仅文本)")
+				}
 			}
+			mr.Ignored = append(mr.Ignored, ig...)
 		case "tool":
 			mr.Messages = append(mr.Messages, MessagesMessage{
 				Role: "user",
@@ -108,6 +132,7 @@ func chatToMessagesRequest(cr *ChatRequest) *MessagesRequest {
 				}},
 			})
 		case "assistant":
+			var ig []string
 			var blocks []Block
 			if s := contentText(m.Content); s != "" {
 				blocks = append(blocks, Block{Type: "text", Text: s})
@@ -117,12 +142,21 @@ func chatToMessagesRequest(cr *ChatRequest) *MessagesRequest {
 				_ = json.Unmarshal([]byte(tc.Function.Arguments), &input)
 				blocks = append(blocks, Block{Type: "tool_use", ID: tc.ID, Name: tc.Function.Name, Input: input})
 			}
+			noteUnmodeledChatParts(m.Content, &ig) // assistant 图片等：丢弃+留痕
 			if len(blocks) == 0 {
 				blocks = []Block{{Type: "text", Text: ""}}
 			}
+			mr.Ignored = append(mr.Ignored, ig...)
 			mr.Messages = append(mr.Messages, MessagesMessage{Role: "assistant", Content: blocks})
 		default:
-			mr.Messages = append(mr.Messages, MessagesMessage{Role: m.Role, Content: contentText(m.Content)})
+			var ig []string
+			parts := chatContentParts(m.Content, &ig)
+			content := irToMsgContent(parts)
+			if content == nil {
+				content = ""
+			}
+			mr.Ignored = append(mr.Ignored, ig...)
+			mr.Messages = append(mr.Messages, MessagesMessage{Role: m.Role, Content: content})
 		}
 	}
 	if len(sys) > 0 {
@@ -136,6 +170,19 @@ func chatToMessagesRequest(cr *ChatRequest) *MessagesRequest {
 		})
 	}
 	return mr
+}
+
+// noteUnmodeledChatParts 把 chat 分段内容中的图片计入留痕（assistant/
+// system 语境：messages 侧不携带，D6）。
+func noteUnmodeledChatParts(c any, ignored *[]string) {
+	if _, ok := c.(string); ok {
+		return
+	}
+	for _, p := range chatContentParts(c, ignored) {
+		if p.Kind != "text" {
+			irNote(ignored, "image(assistant/system)")
+		}
+	}
 }
 
 // ---------- 非流响应翻译 ----------

@@ -46,6 +46,7 @@ func chatFinishToResp(finish string) (status, reason string) {
 // input 为 string 时视作单条 user 消息；数组逐项映射：
 // message → 对应角色消息；function_call → assistant 的 tool_calls；
 // function_call_output → role:"tool"（tool_call_id=call_id）。
+// IR v2（M10-W2）：input_image 分段经 IRPart 归一为 chat 图片分段。
 func responsesToChatRequest(rr *ResponsesRequest) *ChatRequest {
 	cr := &ChatRequest{Model: rr.Model, Stream: rr.Stream, MaxTokens: rr.MaxOutputTokens}
 	if rr.Instructions != "" {
@@ -69,7 +70,14 @@ func responsesToChatRequest(rr *ResponsesRequest) *ChatRequest {
 				if role == "developer" {
 					role = "system"
 				}
-				cr.Messages = append(cr.Messages, ChatMessage{Role: role, Content: respContentText(m["content"])})
+				var ig []string
+				parts := respContentParts(m["content"], &ig)
+				content := irToChatContent(parts)
+				if content == nil {
+					content = ""
+				}
+				cr.Ignored = append(cr.Ignored, ig...)
+				cr.Messages = append(cr.Messages, ChatMessage{Role: role, Content: content})
 			case "function_call":
 				cm := ChatMessage{Role: "assistant"}
 				args, _ := m["arguments"].(string)
@@ -89,7 +97,7 @@ func responsesToChatRequest(rr *ResponsesRequest) *ChatRequest {
 					Content:    respOutputText(m["output"]),
 				})
 			}
-			// reasoning 等未建模形态：忽略（可砍项纪律：不猜测字段）
+			// reasoning 等未建模形态：忽略（sealed (b) 边界；W4 起计入留痕）
 		}
 	}
 	for _, t := range rr.Tools {
@@ -162,6 +170,8 @@ func respOutputText(o any) string {
 // chatToResponsesRequest 把 Chat 请求翻译为 Responses 请求。
 // system → instructions；tool_calls → function_call 项；role:"tool"
 // → function_call_output 项。
+// IR v2（M10-W2）：chat 分段图片 → input_image 项（data: URL 形态）；
+// assistant 输出侧仅文本（图片计入 Ignored 留痕）。
 func chatToResponsesRequest(cr *ChatRequest) *ResponsesRequest {
 	rr := &ResponsesRequest{
 		Model:           cr.Model,
@@ -180,10 +190,19 @@ func chatToResponsesRequest(cr *ChatRequest) *ResponsesRequest {
 				"type": "function_call_output", "call_id": m.ToolCallID, "output": m.Content,
 			})
 		case "assistant":
-			text := contentText(m.Content)
-			if text != "" {
-				addItem(map[string]any{"type": "message", "role": "assistant",
-					"content": []any{map[string]any{"type": "output_text", "text": text}}})
+			var ig []string
+			parts := chatContentParts(m.Content, &ig)
+			textParts := make([]IRPart, 0, len(parts))
+			for _, p := range parts {
+				if p.Kind == "text" {
+					textParts = append(textParts, p)
+				} else {
+					irNote(&ig, "image(assistant，responses output_text 仅文本)")
+				}
+			}
+			rr.Ignored = append(rr.Ignored, ig...)
+			if content := irToRespContent(textParts, true); content != nil {
+				addItem(map[string]any{"type": "message", "role": "assistant", "content": content})
 			}
 			for _, tc := range m.ToolCalls {
 				addItem(map[string]any{
@@ -192,8 +211,14 @@ func chatToResponsesRequest(cr *ChatRequest) *ResponsesRequest {
 				})
 			}
 		default: // user
-			addItem(map[string]any{"type": "message", "role": "user",
-				"content": []any{map[string]any{"type": "input_text", "text": contentText(m.Content)}}})
+			var ig []string
+			parts := chatContentParts(m.Content, &ig)
+			rr.Ignored = append(rr.Ignored, ig...)
+			content := irToRespContent(parts, false)
+			if content == nil { // 保形：空 user 内容仍输出单个空 input_text（原行为）
+				content = []any{map[string]any{"type": "input_text", "text": ""}}
+			}
+			addItem(map[string]any{"type": "message", "role": "user", "content": content})
 		}
 	}
 	if input != nil {
