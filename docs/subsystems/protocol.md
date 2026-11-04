@@ -117,3 +117,94 @@ M9 盘点确认本机无 Codex 订阅账户（用户实证），形状核实条�
 （`wire_api="responses"`），Responses↔Responses 同协议透传路径即
 Codex 直连路径，reasoning 项不受翻译损耗——(b) 的实际影响面进一步
 收窄为仅跨协议场景。
+
+## IR v2：thinking/多模态透传（M10-W1 设计定稿）[2026-11-04-IR-v2]
+
+> 兑现枢纽选型锚点（本文件头部：「Chat schema 即 IR v1；thinking/
+> 多模态透传立项时再升级正式 IR」）。M10 即该立项（开发文档 §9.12）。
+> 排期：W2 请求侧多模态、W3 响应侧 thinking 流出、W4 跨轮保留+C3、
+> W5 C2 错误分级、W6 矩阵回归发布 v0.10.0。
+
+### 现状与受损面
+
+- 跨协议路径（两步式枢纽）仅建模文本+工具：图片块与 thinking 块
+  **静默丢失**（`contentText`/`toolUseBlocks` 只取所需类型）；
+  `translate.go` 头部 TODO(W5) 即此处（M4 范围裁剪的历史债）。
+- 同协议透传路径（`rewriteModel` 字节保真）不受影响。
+- 主受损面 = messages 客户端 → chat 上游（claude-code → glm-coding，
+  用户日常场景）：贴图丢失、GLM 思考不可见、多轮 thinking 历史丢失。
+
+### 真机形状采样（2026-11-04，glm-coding/glm-4.7 经本机网关透传）
+
+| 采样 | 结果 |
+| :-- | :-- |
+| 流式（默认） | `delta.reasoning_content` 字符串增量，先于 `content` 出现；usage 带 `completion_tokens_details.reasoning_tokens:59` |
+| 流式 + `thinking:{"type":"disabled"}` | 参数经透传被上游接受：reasoning_content 消失、reasoning_tokens:0、completion_tokens 89→41 |
+| 非流式（默认） | `message.reasoning_content`（318 字符）与 `content` 并列；reasoning_tokens:110 |
+| 上游模型名 | chunk `model` = 上游真实名 glm-5.3-flash（服务 glm-4.7 请求） |
+
+结论：GLM 思考流出为 DeepSeek 系形状（`reasoning_content`，vendor
+扩展），请求侧 `thinking.type` 可控开关，usage 自带 reasoning_tokens
+细分。Magpie v0.1.2890 全仓**零** `reasoning_content`——此为超出
+Magpie 参考的自研增量（Magpie 不服务 GLM chat 思考场景）。
+
+### Magpie 交叉参考（ir.go / anthropic.go，v0.1.2890）
+
+- `Part.Kind`: text / image / file / tool_call / tool_result / thinking
+  / web_search；Image = MediaType+Data(base64) 或 URL（+Detail 低/高/auto）。
+- thinking 三态：Text（明文增量）/ Signature(+SignedBy)（anthropic 签名
+  与 gemini thoughtSignature）/ Sealed(+SealedBy)（redacted_thinking 与
+  responses reasoning item 原样密封，仅同 API 编码器写回）。
+- 事件：KThinkStart / KThink / KSig / KSealed。
+- **chat 客户端编码器零 thinking 输出**（chat.go 无 reasoning 字段）——
+  思考只输出给有思考形状的协议。
+- effortOf/fitEffort：reasoning effort 归一化（ultra→max 等）；
+  GLM-5.3 仅接受 low/high/max。
+
+### IR v2 设计（定稿）
+
+1. **内容分块（请求侧）**：枢纽 `ChatMessage.Content` 升级分块感知——
+   新增 `ChatContentPart{Type: text|image_url, Text, ImageURL}`；
+   解析对齐 Magpie：chat `image_url` 接受字符串或 `{url, detail}` 对象、
+   messages `image` 块 `source{media_type, data|url}`、gemini
+   `inline_data{mime_type, data}`、responses `input_image{image_url,
+   detail}`。中间形态 `IRPart{Kind, Text, MediaType, Data, URL, Detail}`
+   （Magpie Part 的裁剪：**不做** file/web_search/tool 级扩展/Loads/
+   cache——砍项留档，需要时再立项）。
+2. **事件扩展（响应侧）**：`gwEvent` 新增 `evThinking`（文本增量，语义
+   同 evText）；GLM `delta.reasoning_content` → evThinking；无 reasoning
+   上游零新增事件（可选段，不影响既有七类）。Signature/Sealed 事件
+   **不引入**（无跨协议来源，sealed (b) 边界维持）。
+3. **用量扩展**：`ChatUsage` 增 `completion_tokens_details.reasoning_tokens`
+   （真机证据 59/110）；缺失时零值不虚报。
+4. **停止原因**：零变化（thinking 不产生新停止原因，GLM finish_reason
+   不变）。
+
+### 决策（W2~W4 执行依据）
+
+- **D1 请求侧 thinking 参数**（anthropic `thinking.budget_tokens` →
+  chat）：fail-closed 忽略 + 决策留痕。chat 无标准对应；GLM
+  `thinking.type` 属 vendor 私有形态，翻译层不做 vendor 耦合（调用方
+  直连 GLM 走透传路径自带该参数，不受影响）。
+- **D2 thinking 块跨轮保留**（anthropic assistant 历史 → 非 anthropic
+  上游）：丢弃 + 决策留痕（chat/gemini 无需思考历史；带签名的回传仅
+  对真实 anthropic 上游有意义，而那走透传路径不经翻译）。
+- **D3 messages thinking 块输出**（W3）：仅文本（signature 空串）；
+  `redacted_thinking` 维持 sealed (b) 忽略。
+- **D4 reasoning_tokens 入账**（W3 顺带）：有则入账，缺失零值。
+- **D5 chat 客户端 thinking 输出：不做**（对齐 Magpie 立场——chat 无
+  标准思考字段，`reasoning_content` 是 vendor 扩展，hub 不发明协议；
+  chat 客户端 + GLM 上游走透传自带）。
+- **D6 未知内容块**：fail-closed 忽略 + 决策 trace 留痕（不再静默）。
+
+### 验收矩阵（W2~W3 扩展口径）
+
+4×4 协议矩阵 × 三行内容维度：
+
+| 内容维度 | 覆盖 |
+| :-- | :-- |
+| 文本+工具 | 现状回归（32 组合不变为基线） |
+| 图片（请求侧） | 全组合构造请求（不碰真机）：四种入站形态 × 四种上游形态 |
+| thinking（响应侧） | GLM 上游 × {messages, responses, gemini} 客户端（chat 客户端按 D5 不输出）；非 GLM 上游零变化 |
+
+透传路径（同协议）字节保真语义不回归为全程红线。
