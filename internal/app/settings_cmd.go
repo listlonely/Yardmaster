@@ -31,7 +31,7 @@ func runSettings(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "用法: yardmaster settings <get|set> [键 值]；当前支持键：global_proxy、l1_classifier、l1_timeout_ms、listen、token、gemini_client_secret、fx-usd-cny")
+		fmt.Fprintln(stderr, "用法: yardmaster settings <get|set> [键 值]；当前支持键：global_proxy、l1_classifier、l1_timeout_ms、listen、token、gemini_client_secret、fx-usd-cny、update")
 		return ErrUsage
 	}
 	switch args[0] {
@@ -70,6 +70,14 @@ func runSettings(args []string, stdout, stderr io.Writer) error {
 			fmt.Fprintln(stdout, "fx_usd_cny = （空，成本报告仅显示美元）")
 		} else {
 			fmt.Fprintf(stdout, "fx_usd_cny = %g（成本报告显示 ≈¥ 换算）\n", s.FxUsdCNY)
+		}
+		switch s.UpdateMode() {
+		case store.UpdateAuto:
+			fmt.Fprintln(stdout, "update = auto（发现新版全自动下载安装重启）")
+		case store.UpdateOff:
+			fmt.Fprintln(stdout, "update = off（静默，不检查更新）")
+		default:
+			fmt.Fprintln(stdout, "update = check（只提示，缺省）")
 		}
 		return nil
 	case "set":
@@ -127,8 +135,14 @@ func runSettings(args []string, stdout, stderr io.Writer) error {
 				return ErrUsage
 			}
 			s.FxUsdCNY = fx
+		case "update":
+			if !store.ValidUpdateMode(val) {
+				fmt.Fprintln(stderr, "update 须为 off / check / auto（check=只提示（缺省），auto=发现新版全自动下载安装重启）")
+				return ErrUsage
+			}
+			s.Update = val
 		default:
-			fmt.Fprintf(stderr, "不支持的设置键 %q；当前支持：global_proxy、l1_classifier、l1_timeout_ms、listen、token、gemini_client_secret、fx-usd-cny\n", key)
+			fmt.Fprintf(stderr, "不支持的设置键 %q；当前支持：global_proxy、l1_classifier、l1_timeout_ms、listen、token、gemini_client_secret、fx-usd-cny、update\n", key)
 			return ErrUsage
 		}
 		// 安全基线（F10）：非回环监听必须带令牌（M2-W5，serve 拒启的

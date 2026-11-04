@@ -193,6 +193,15 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, name st
 		if f.Notify == nil {
 			f.Notify = cur.Notify
 		}
+		// 自动更新三态（M11-W2）：空值保留现值（表单未提供）；显式值
+		// 必须合法（off/check/auto），读不懂=拒绝落盘。
+		if f.Update == "" {
+			f.Update = cur.Update
+		}
+		if !store.ValidUpdateMode(f.Update) {
+			writeAPIErr(w, badRequest(fmt.Errorf("update 取值非法 %q（合法：off / check / auto）", f.Update)))
+			return
+		}
 		// 安全基线（F10）：非回环监听必须带令牌；非法地址拒绝落盘。
 		if f.Listen != "" {
 			if _, _, err := net.SplitHostPort(f.Listen); err != nil {

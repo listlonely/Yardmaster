@@ -37,6 +37,34 @@ type Settings struct {
 	// false 才关闭；指针而非 bool 是为管理 API PUT 的空值保留语义
 	//（nil=未提供保留现值，与 otel 等字段的保留逻辑同规）。
 	Notify *bool `json:"notify,omitempty"`
+
+	// 自动更新三态（M11-W2，app.md §十一）：off=完全静默不检查；
+	// check=只提示（缺省，现状行为）；auto=发现新版全自动下载安装重启。
+	// 自动替换 exe 属高敏动作，缺省永不 auto——用户显式开启才启用。
+	Update string `json:"update,omitempty"`
+}
+
+// 自动更新三态取值。
+const (
+	UpdateOff   = "off"
+	UpdateCheck = "check"
+	UpdateAuto  = "auto"
+)
+
+// UpdateMode 归一更新模式：空值与未知值回落 check（缺省提示态——
+// 读不懂=按最保守的可观察行为处理，不静默升级）。
+func (s Settings) UpdateMode() string {
+	switch s.Update {
+	case UpdateOff, UpdateAuto:
+		return s.Update
+	default:
+		return UpdateCheck
+	}
+}
+
+// ValidUpdateMode 报告 v 是否为合法 update 取值（"" 合法=缺省 check）。
+func ValidUpdateMode(v string) bool {
+	return v == "" || v == UpdateOff || v == UpdateCheck || v == UpdateAuto
 }
 
 // NotifyEnabled 返回桌面气泡通知是否开启（nil=缺省开启）。

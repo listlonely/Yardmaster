@@ -3,7 +3,7 @@
 package app
 
 import (
-	"encoding/json"
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -18,6 +18,16 @@ const repoAPI = "https://api.github.com/repos/listlonely/Yardmaster/releases/lat
 
 // updateCheck 查询 GitHub 最新 release 并与当前版本比较（升级提示）。
 func updateCheck(args []string, stdout, stderr io.Writer) error {
+	// 子命令分发（M11-W2）：check/无参=比较提示（现状）；download=
+	// 下载校验暂存（安装与接力重启是 W3）。
+	if len(args) > 0 {
+		switch args[0] {
+		case "download":
+			return updateDownloadCmd(args[1:], stdout, stderr)
+		case "check":
+			args = args[1:]
+		}
+	}
 	fs := flag.NewFlagSet("update", flag.ContinueOnError)
 	fs.SetOutput(stderr) // flag 用法错误输出到 stderr
 	if err := fs.Parse(args); err != nil {
@@ -45,31 +55,14 @@ func updateCheck(args []string, stdout, stderr io.Writer) error {
 }
 
 // latestRelease 查询 GitHub 最新 release（M9-W4 抽取：CLI update check
-// 与托盘「升级到 x.y.z」动态菜单项共用）。
+// 与托盘「升级到 x.y.z」动态菜单项共用；M11-W2 起委托 fetchRelease 单一
+// 查询路径——含资产清单的完整元数据由下载管线直接消费）。
 func latestRelease() (tag, url string, err error) {
-	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequest(http.MethodGet, repoAPI, nil)
+	rel, err := fetchRelease(context.Background(), &http.Client{Timeout: 10 * time.Second}, repoAPI)
 	if err != nil {
 		return "", "", err
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", "", fmt.Errorf("查询最新版本失败（网络不可达？）: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
-		return "", "", fmt.Errorf("GitHub API 返回 %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
-	}
-	var out struct {
-		TagName string `json:"tag_name"`
-		URL     string `json:"html_url"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", "", fmt.Errorf("解析 GitHub 响应失败: %w", err)
-	}
-	return out.TagName, out.URL, nil
+	return rel.Tag, rel.URL, nil
 }
 
 // compareVersions 比较 x.y.z 语义版本：a<b 返回 -1，相等 0，a>b 返回 1。

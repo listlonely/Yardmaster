@@ -173,6 +173,45 @@ func TestConfigPutSettingsWritesBackupAndFile(t *testing.T) {
 	}
 }
 
+// M11-W2：settings update 三态——非法值 400 且不改现值（fail-closed）；
+// 空值保留现值（控制台表单未提供该字段）；合法值落盘。
+func TestConfigPutSettingsUpdateMode(t *testing.T) {
+	s, srv := newConfigServer(t, nil)
+	settingsPath := filepath.Join(s.AppDir, "settings.json")
+	if err := os.WriteFile(settingsPath, []byte(`{"update":"auto"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, body := doPut(t, srv.URL, "/api/config/settings", `{"update":"bogus"}`)
+	if st != http.StatusBadRequest {
+		t.Fatalf("非法 update 应 400，得到 HTTP %d: %s", st, body)
+	}
+	var cur store.Settings
+	if err := store.LoadJSON(settingsPath, &cur); err != nil {
+		t.Fatal(err)
+	}
+	if cur.Update != "auto" {
+		t.Fatalf("被拒请求不得改值: %+v", cur)
+	}
+	if st, body = doPut(t, srv.URL, "/api/config/settings", `{}`); st != http.StatusOK {
+		t.Fatalf("空体（未提供字段）应保留现值: HTTP %d: %s", st, body)
+	}
+	if err := store.LoadJSON(settingsPath, &cur); err != nil {
+		t.Fatal(err)
+	}
+	if cur.Update != "auto" {
+		t.Fatalf("空值应保留 auto: %+v", cur)
+	}
+	if st, body = doPut(t, srv.URL, "/api/config/settings", `{"update":"off"}`); st != http.StatusOK {
+		t.Fatalf("合法 off 应落盘: HTTP %d: %s", st, body)
+	}
+	if err := store.LoadJSON(settingsPath, &cur); err != nil {
+		t.Fatal(err)
+	}
+	if cur.Update != "off" {
+		t.Fatalf("off 未落盘: %+v", cur)
+	}
+}
+
 func TestConfigPutRulesInvalidRegexRejected(t *testing.T) {
 	s, srv := newConfigServer(t, nil)
 	st, body := doPut(t, srv.URL, "/api/config/rules",
