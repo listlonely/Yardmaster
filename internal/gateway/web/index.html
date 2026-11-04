@@ -22,9 +22,9 @@
           <svg class="nav-ic" viewBox="0 0 20 20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="5.5" height="5.5" rx="1.2"/><rect x="11.5" y="3" width="5.5" height="5.5" rx="1.2"/><rect x="3" y="11.5" width="5.5" height="5.5" rx="1.2"/><rect x="11.5" y="11.5" width="5.5" height="5.5" rx="1.2"/></g></svg>
           <span>总览</span></button>
         <span class="nav-gl">路由</span>
-        <button type="button" class="nav-it" data-tab="providers" data-title="Provider">
+        <button type="button" class="nav-it" data-tab="providers" data-title="服务商">
           <svg class="nav-ic" viewBox="0 0 20 20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3.5" width="14" height="5.5" rx="1.5"/><rect x="3" y="11" width="14" height="5.5" rx="1.5"/><path d="M6 6.2h.01M6 13.8h.01"/></g></svg>
-          <span>Provider</span></button>
+          <span>服务商</span></button>
         <button type="button" class="nav-it" data-tab="routing" data-title="路由">
           <svg class="nav-ic" viewBox="0 0 20 20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10h5l4-5h5M8 10l4 5h5M14.5 3l2.5 2-2.5 2M14.5 13l2.5 2-2.5 2"/></g></svg>
           <span>路由</span></button>
@@ -90,7 +90,7 @@
           <span class="pill" id="ov-pill">连接中…</span>
         </div>
       </div>
-      <div class="label">代理链 <span class="label-note">F3 继承：账号 → Provider → 全局 → 系统</span></div>
+      <div class="label">代理链 <span class="label-note">F3 继承：账号 → 服务商 → 全局 → 系统</span></div>
       <div class="list" id="ov-proxy"><div class="row"><div class="who"><div class="name muted2">读取中…</div></div></div></div>
       <div class="label">休眠与额度</div>
       <div class="list" id="ov-rest"></div>
@@ -124,21 +124,21 @@
       <p class="foot-note">保存后写入 settings.json；监听地址与令牌等装配期字段需重启 serve 完全生效。所有写路径经备份栈 + 审计。</p>
     </section>
 
-    <!-- Provider -->
+    <!-- 服务商 -->
     <section id="page-providers" class="view" hidden>
       <div class="view-head">
         <div class="search">
           <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.5 10.5 3 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-          <input id="pv-q" type="search" spellcheck="false" autocomplete="off" placeholder="查找 Provider 或账号" aria-label="查找 Provider">
+          <input id="pv-q" type="search" spellcheck="false" autocomplete="off" placeholder="查找服务商或账号" aria-label="查找服务商">
         </div>
         <span class="sub" id="pv-count"></span>
       </div>
       <div id="prov-list"></div>
       <div class="after-list">
-        <button type="button" class="text add" id="btn-add-provider">＋ 添加 Provider</button>
+        <button type="button" class="text add" id="btn-add-provider">＋ 添加服务商</button>
         <span class="sub">OAuth 订阅类请用 CLI：<code>yardmaster provider add-oauth</code></span>
       </div>
-      <div class="empty-state" id="prov-none" hidden><b>尚未配置 Provider</b>点击上方「＋ 添加 Provider」，从厂商预设开始（或用 CLI <code>yardmaster provider add</code>）</div>
+      <div class="empty-state" id="prov-none" hidden><b>尚未配置服务商</b>点击上方「＋ 添加服务商」，从厂商预设开始（或用 CLI <code>yardmaster provider add</code>）</div>
     </section>
 
     <!-- 路由 -->

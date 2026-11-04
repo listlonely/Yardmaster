@@ -2,7 +2,7 @@
 // —— 构造：.list/.row 行卡片取代 <table>；.who/.name/.sub 两行式信息层级；
 //    应用壳（body 不滚、各视图独立滚动）；单一滑动高亮 .nav-hl；
 // —— 交互：status() 状态行反馈（不再用 toast）；Magpie 式模态（含确认框）；
-//    骨架屏加载态；Provider 客户端查找；胶囊开关；document.hidden 轮询守卫。
+//    骨架屏加载态；服务商客户端查找；胶囊开关；document.hidden 轮询守卫。
 // 数据源不变：/api/state、/api/config/*、/api/trace、/api/cost、/api/dispatch/*、
 // /api/plugins/*、/api/pricing/sync、/api/reload。写路径五铁律不受影响：
 // 每次提交前 fresh GET 构造全文档，经 PUT /api/config/*（服务端严格校验 +
@@ -441,7 +441,7 @@ async function loadOverview() {
     $('ov-pill').className = 'pill ok';
     $('ov-state').textContent =
       `版本 ${s.version} · 已运行 ${s.uptime} · ` +
-      `Provider ${(s.providers || []).length} 个 · 路由组 ${(s.groups || []).length} 个`;
+      `服务商 ${(s.providers || []).length} 个 · 路由组 ${(s.groups || []).length} 个`;
     renderRest(s);
   } catch (e) {
     renderSideGw(false);
@@ -474,7 +474,7 @@ function renderStatCards() {
   }
   const rules = cache.rules ? (cache.rules.rules || []).length : '…';
   $('stat-cards').innerHTML =
-    statCard('Provider', provs.length, `${provs.filter((p) => !p.disabled).length} 个启用`) +
+    statCard('服务商', provs.length, `${provs.filter((p) => !p.disabled).length} 个启用`) +
     statCard('账号', accCount, `${quotaAccs} 个配置额度`) +
     statCard('路由组', (cache.state.groups || []).length) +
     statCard('任务规则', rules) +
@@ -500,7 +500,7 @@ function renderRest(s) {
     '<div class="row"><div class="who"><div class="name muted2">无休眠中的账号，额度正常</div></div></div>';
 }
 
-// 代理链（F3 继承：账号 → Provider → 全局 → 系统），行卡片化
+// 代理链（F3 继承：账号 → 服务商 → 全局 → 系统），行卡片化
 function renderProxyChain() {
   const g = cache.settings.global_proxy || '';
   const rows = [`<div class="row">
@@ -509,12 +509,12 @@ function renderProxyChain() {
   const provs = cache.providers.providers || [];
   const special = provs.filter((p) => p.proxy || (p.accounts || []).some((a) => a.proxy));
   if (!special.length) {
-    rows.push('<div class="row"><div class="who"><div class="name muted2">无 Provider/账号级代理覆写：全部流量走全局链</div></div></div>');
+    rows.push('<div class="row"><div class="who"><div class="name muted2">无服务商/账号级代理覆写：全部流量走全局链</div></div></div>');
   } else {
     for (const p of special) {
       for (const a of (p.accounts || [])) {
         const eff = a.proxy || p.proxy || g || '系统代理';
-        const src = a.proxy ? '账号' : p.proxy ? 'Provider' : g ? '全局' : '系统';
+        const src = a.proxy ? '账号' : p.proxy ? '服务商' : g ? '全局' : '系统';
         rows.push(`<div class="row">
           <div class="who"><div class="name"><code>${esc(p.id)}/${esc(a.name)}</code></div>
           <div class="sub">生效层：${esc(src)} · <code>${esc(eff)}</code></div></div></div>`);
@@ -573,7 +573,7 @@ $('btn-save-settings').addEventListener('click', async () => {
 async function reloadConfig() {
   const r = await api('/api/reload', { method: 'POST' });
   cache.providers = null; // 重载后强制重新拉取配置
-  status(`已重载：${r.providers} 个 provider`, 'ok');
+  status(`已重载：${r.providers} 个服务商`, 'ok');
   if (!q('#page-overview').hidden) loadOverview();
   if (!q('#page-providers').hidden) loadProviders();
   if (!q('#page-routing').hidden) loadRouting();
@@ -590,7 +590,7 @@ $('btn-reload').addEventListener('click', async () => {
   }
 });
 
-// ---------- Provider（行卡片构造 + 客户端查找） ----------
+// ---------- 服务商（行卡片构造 + 客户端查找） ----------
 
 // 胶囊开关通用行为（trace/dispatch 自动刷新、插件启停共用）
 function bindSwitch(el, onChange) {
@@ -622,10 +622,10 @@ function usageBar(a) {
     <span>${fmtTokens(used)} / ${fmtTokens(quota)}（${pct}%）</span>`;
 }
 
-// effectiveProxy：账号 → Provider → 全局 → 系统（F3 继承链），标注生效层。
+// effectiveProxy：账号 → 服务商 → 全局 → 系统（F3 继承链），标注生效层。
 function effectiveProxy(a, p, global) {
   if (a.proxy) return { v: a.proxy, src: '账号' };
-  if (p.proxy) return { v: p.proxy, src: 'Provider' };
+  if (p.proxy) return { v: p.proxy, src: '服务商' };
   if (global) return { v: global, src: '全局' };
   return { v: '系统代理', src: '系统' };
 }
@@ -682,7 +682,7 @@ function provCard(p, live, resting, global) {
       <div class="name">${esc(p.name || p.id)} <code>${esc(p.id)}</code>
         <span class="pill">${esc(p.protocol)}</span>
         ${p.disabled ? '<span class="pill disabled">已停用</span>' : ''}</div>
-      <div class="sub">${accs.length} 个账号${p.proxy ? ` · Provider 代理 <code>${esc(p.proxy)}</code>` : ''}</div>
+      <div class="sub">${accs.length} 个账号${p.proxy ? ` · 服务商代理 <code>${esc(p.proxy)}</code>` : ''}</div>
     </div>
   </div>`;
   const folded = accs.length > ACC_VISIBLE && !accFolds.has(p.id);
@@ -735,12 +735,12 @@ function renderProviders() {
   });
   const accTotal = provs.reduce((n, p) => n + (p.accounts || []).length, 0);
   $('pv-count').textContent = pvFilter
-    ? `${provs.length}/${(f.providers || []).length} 个 Provider · ${accTotal} 个账号`
-    : `${provs.length} 个 Provider · ${accTotal} 个账号`;
+    ? `${provs.length}/${(f.providers || []).length} 个服务商 · ${accTotal} 个账号`
+    : `${provs.length} 个服务商 · ${accTotal} 个账号`;
   $('prov-list').innerHTML = provs.map((p) => provCard(p, live, resting, global)).join('');
   $('prov-none').hidden = (f.providers || []).length > 0;
   if ((f.providers || []).length && !provs.length) {
-    $('prov-list').innerHTML = '<div class="empty-state">没有匹配的 Provider 或账号</div>';
+    $('prov-list').innerHTML = '<div class="empty-state">没有匹配的服务商或账号</div>';
     $('prov-none').hidden = true;
   }
 }
@@ -762,9 +762,9 @@ function ensureProviders() {
   else loadProviders();
 }
 
-// ---------- 添加 Provider（M9：预设 tile + 表单，走 providers 写路径） ----------
+// ---------- 添加服务商（M9：预设 tile + 表单，走 providers 写路径） ----------
 // 与 CLI `provider add` 同语义：id 已存在 = 向其追加账号（账号名冲突拒
-// 绝），不存在 = 新建 Provider；api_key 新明文经服务端 keepProviderKeys
+// 绝），不存在 = 新建服务商；api_key 新明文经服务端 keepProviderKeys
 // 采纳（GET→PUT 往返不破坏现存密钥）。OAuth 订阅类不在此列（授权流在
 // 浏览器外，仍走 CLI add-oauth）。
 
@@ -798,7 +798,7 @@ async function addProviderModal() {
   ].join('');
   const formHTML = `
     <div class="tiles" id="ap-tiles">${tiles}</div>
-    ${frow('Provider ID', `<input class="field mono" name="id" placeholder="如 deepseek" required>`)}
+    ${frow('服务商 ID', `<input class="field mono" name="id" placeholder="如 deepseek" required>`)}
     ${frow('显示名', `<input class="field" name="name" placeholder="默认同 ID">`)}
     ${frow('协议', `<select class="field" name="protocol">
       ${Object.entries(PROTOCOL_LABEL).map(([v, l]) => `<option value="${v}">${v}（${l}）</option>`).join('')}
@@ -807,10 +807,10 @@ async function addProviderModal() {
     ${frow('API Key', `<input class="field mono" name="api_key" type="password" autocomplete="new-password" placeholder="sk-…（仅存本机 providers.json）" required>`)}
     ${frow('账号名', `<input class="field mono" name="account" value="main" required>`)}
     ${frow('账号代理', `<input class="field mono" name="proxy" placeholder="可选；http(s)/socks5(h)://… 或 direct">`)}
-    ${frow('Provider 代理', `<input class="field mono" name="provider_proxy" placeholder="可选；账号未配置时继承">`)}
+    ${frow('服务商代理', `<input class="field mono" name="provider_proxy" placeholder="可选；账号未配置时继承">`)}
     ${frow('最大并发', `<input class="field" name="max_concurrent" type="number" min="0" step="1" placeholder="0 = 不限">`)}`;
   const dlg = openDialog({
-    title: '添加 Provider',
+    title: '添加服务商',
     body: formHTML,
     onSubmit: async (form) => {
       const v = formVals(form);
@@ -818,7 +818,7 @@ async function addProviderModal() {
       const accName = v.account.trim() || 'main';
       const key = v.api_key.trim();
       const baseURL = v.base_url.trim();
-      if (!id) throw new Error('Provider ID 不能为空');
+      if (!id) throw new Error('服务商 ID 不能为空');
       if (!baseURL) throw new Error('Base URL 不能为空');
       if (!key) throw new Error('API Key 不能为空');
       if (parseInt(v.max_concurrent, 10) < 0) throw new Error('最大并发不能为负');
@@ -826,7 +826,7 @@ async function addProviderModal() {
         const providers = cur.providers || [];
         const target = providers.find((p) => p.id === id);
         if (target) {
-          // 追加账号到已有 Provider（CLI add 同语义；账号已存在时拒绝——
+          // 追加账号到已有服务商（CLI add 同语义；账号已存在时拒绝——
           // 换账号名，或用 CLI add -replace 更新凭证）
           if ((target.accounts || []).some((a) => a.name === accName)) {
             throw new Error(`账号 ${id}/${accName} 已存在（换账号名，或用 CLI provider add -replace 更新凭证）`);
@@ -844,7 +844,7 @@ async function addProviderModal() {
           accounts: [buildAccount(v, accName, key)],
         }] };
       });
-      status(`Provider 已保存：${id}/${accName}（${r.effect === 'immediate' ? '已热生效' : r.effect}，写前备份已留底）`, 'ok');
+      status(`服务商已保存：${id}/${accName}（${r.effect === 'immediate' ? '已热生效' : r.effect}，写前备份已留底）`, 'ok');
       afterWrite();
     },
   });
@@ -918,7 +918,7 @@ function memberValid(m, provs, groups) {
   }
   const [provID, model] = (m || '').split('/');
   const p = provs.find((x) => x.id === provID);
-  if (!p) return ' <span class="pill prefail">provider 不存在</span>';
+  if (!p) return ' <span class="pill prefail">服务商不存在</span>';
   if (model && (p.models || []).length && !p.models.some((mm) => mm.id === model)) {
     return ' <span class="pill warn">模型不在清单</span>';
   }
@@ -1022,7 +1022,7 @@ function memberClientCheck(m, provs, otherGroupIDs) {
   }
   const [provID, model] = m.split('/');
   const p = provs.find((x) => x.id === provID);
-  if (!p) return `成员 ${m} 引用的 provider 不存在`;
+  if (!p) return `成员 ${m} 引用的服务商不存在`;
   if (model && (p.models || []).length && !p.models.some((mm) => mm.id === model)) {
     return `模型 ${model} 不在 ${provID} 的清单内`;
   }
@@ -1236,7 +1236,7 @@ function quotaModal(provID, accName) {
   });
 }
 
-// 路由页操作列事件委托（编辑/删除）+ Provider 页额度入口
+// 路由页操作列事件委托（编辑/删除）+ 服务商页额度入口
 $('list-groups').addEventListener('click', (e) => {
   const g = e.target.dataset.g;
   if (!g) return;
@@ -1899,11 +1899,11 @@ function cmdkRegistry() {
   return views.concat([
     { label: '切换主题', hint: '跟随系统 → 亮 → 暗 循环', kw: 'theme 主题 亮色 暗色',
       run: cycleTheme },
-    { label: '重载配置', hint: '重读 providers.json 并热替换路由快照', kw: 'reload 配置 重载 provider',
+    { label: '重载配置', hint: '重读 providers.json 并热替换路由快照', kw: 'reload 配置 重载 provider 服务商',
       run: reloadConfig },
     { label: '余额探测', hint: '立即轮询全部账号余额/额度', kw: 'probe quota 余额 额度 探测',
       run: probeQuotas },
-    { label: '添加 Provider', hint: '从厂商预设新建上游（或追加账号）', kw: 'add provider 新增 供应商 预设',
+    { label: '添加服务商', hint: '从厂商预设新建上游（或追加账号）', kw: 'add provider 新增 供应商 服务商 预设',
       run: () => { show('providers'); addProviderModal(); } },
   ]);
 }
