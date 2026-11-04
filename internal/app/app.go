@@ -310,12 +310,14 @@ func trayUpdateLabel() string {
 	return ""
 }
 
-// trayUpdateQuery 托盘升级查询入口（M11-W3，trayUpdateLabel 的 auto 态
-// 演进）：auto 模式命中新版即自动触发安装（每轮查询至多一次；失败
-// 静默留痕，1h 后下轮重试）。check/off 态只出菜单文本（off 由调用方
-// 语义保证——off 不查更新时本函数仍会被周期调用，但 UpdateMode 不会
-// 是 auto，行为即只提示）。
+// trayUpdateQuery 托盘升级查询入口（M11-W3，trayUpdateLabel 的三态
+// 演进）：off=完全静默（不查 GitHub、不显示菜单）；auto=命中新版即
+// 自动触发安装（每轮查询至多一次；失败静默留痕，1h 后下轮重试）；
+// check=只提示（菜单文本，点击才安装）。
 func (st *serveSetup) trayUpdateQuery() string {
+	if st.settings.UpdateMode() == store.UpdateOff {
+		return "" // off 态彻底静默——连版本查询都不发
+	}
 	label := trayUpdateLabel()
 	if label == "" || st.srv.OnUpdateInstall == nil || st.settings.UpdateMode() != store.UpdateAuto {
 		return label

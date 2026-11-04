@@ -359,8 +359,9 @@ async function checkUpdate() {
   const cur = cache.state?.version || '';
   if (!cur || cur === 'dev') return;
   // auto 判定依赖 settings（update 三态）；未加载先拉一次（失败则本
-  // 轮按仅提示处理，托盘侧 1h 轮询兜底）。
+  // 轮按仅提示处理，托盘侧 1h 轮询兜底）。off=完全静默（不查 GitHub）。
   if (!cache.settings) { try { cache.settings = await api('/api/config/settings'); } catch { /* 降级 */ } }
+  if (cache.settings?.update === 'off') return;
   const cached = JSON.parse(localStorage.getItem(UPD_KEY) || 'null');
   if (cached && Date.now() - cached.at < 3600e3) { offerUpdate(cached.tag, cur); return; }
   try {
