@@ -169,7 +169,6 @@ func TestImageMatrix(t *testing.T) {
 // TestImageOrderPreserved：text+image+text 混排到 chat/messages 上游，
 // 顺序与分块结构保留（不合并、不换位）。
 func TestImageOrderPreserved(t *testing.T) {
-	const dataURL = "data:image/png;base64," + w2ImgB64
 	mr := &MessagesRequest{Model: "m", MaxTokens: 100, Messages: []MessagesMessage{{
 		Role: "user",
 		Content: []any{

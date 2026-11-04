@@ -195,24 +195,21 @@ func chatFinishToGemini(finish string) string {
 func geminiToChatRequest(gr *GeminiRequest, model string, stream bool) *ChatRequest {
 	cr := &ChatRequest{Model: model, Stream: stream, Ignored: gr.Ignored}
 	if gr.SystemInstruction != nil {
-		var ig []string
-		parts := geminiPartsOf(gr.SystemInstruction.Parts, &ig)
+		parts := geminiPartsOf(gr.SystemInstruction.Parts)
 		if c := irToChatContent(parts); c != nil {
 			if s, ok := c.(string); ok {
 				cr.Messages = append(cr.Messages, ChatMessage{Role: "system", Content: s})
 			} else {
-				irNote(&ig, "image(system，chat system 仅文本)")
+				irNote(&cr.Ignored, "image(system，chat system 仅文本)")
 			}
 		}
-		cr.Ignored = append(cr.Ignored, ig...)
 	}
 	for _, c := range gr.Contents {
 		role := "user"
 		if c.Role == "model" {
 			role = "assistant"
 		}
-		var ig []string
-		parts := geminiPartsOf(c.Parts, &ig)
+		parts := geminiPartsOf(c.Parts)
 		var toolCalls []ChatToolCall
 		fcIdx := 0
 		for _, p := range c.Parts {
@@ -252,19 +249,17 @@ func geminiToChatRequest(gr *GeminiRequest, model string, stream bool) *ChatRequ
 					cr.Messages = append(cr.Messages, ChatMessage{Role: role, Content: c})
 				}
 			}
-			cr.Ignored = append(cr.Ignored, ig...)
 			continue
 		}
 		// assistant（role=model）：文本 + 工具调用；图片历史不携带 → 留痕
 		for _, p := range parts {
 			if p.Kind != "text" {
-				irNote(&ig, "image(model 历史，chat assistant 不携带)")
+				irNote(&cr.Ignored, "image(model 历史，chat assistant 不携带)")
 				break
 			}
 		}
 		msg := ChatMessage{Role: role, Content: geminiPartsText(c.Parts)}
 		msg.ToolCalls = toolCalls
-		cr.Ignored = append(cr.Ignored, ig...)
 		cr.Messages = append(cr.Messages, msg)
 	}
 	for _, t := range gr.Tools {

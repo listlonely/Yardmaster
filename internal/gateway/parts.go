@@ -244,8 +244,9 @@ func respContentParts(c any, ignored *[]string) []IRPart {
 }
 
 // geminiPartsOf 把 Gemini parts 解析为 IRPart（inlineData=内联 base64、
-// fileData=文件 URI；thought/functionCall/FunctionResponse 由调用方分支处理）。
-func geminiPartsOf(parts []GeminiPart, ignored *[]string) []IRPart {
+// fileData=文件 URI；thought/functionCall/FunctionResponse 由调用方分支
+// 处理）。四种形态全部建模，无忽略项。
+func geminiPartsOf(parts []GeminiPart) []IRPart {
 	var out []IRPart
 	for _, p := range parts {
 		switch {
