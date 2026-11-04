@@ -43,6 +43,8 @@ type ResponsesRequest struct {
 	MaxOutputTokens int             `json:"max_output_tokens,omitempty"`
 	Tools           []ResponsesTool `json:"tools,omitempty"`
 	ToolChoice      any             `json:"tool_choice,omitempty"`
+
+	Ignored []string `json:"-"` // 跨协议翻译忽略块留痕（D6）
 }
 
 // ResponsesOutputItem 是响应 output 数组的元素（非流式形态）。
