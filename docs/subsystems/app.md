@@ -641,3 +641,33 @@ MIT（Copyright (c) 2026 yetone）：设计模式借鉴无义务；若逐字复�
 >   失败（点击重试）」菜单恢复路径（依赖真实点击序列）；.new-failed
 >   文件的自动清理（当前留档供诊断，下次安装 aside 前不删——收尾清
 >   理仅 .old）。
+
+> [2026-11-04-图标换装与托盘根因修复] 用户定向：jimeng 生成图标网格
+> 选定第一排第三（黑底白色发光 S 形岔路箭头）为应用图标；同时用户
+> 截图实证**托盘图标从未显示**（tooltip「Yardmaster 网关运行中」在、
+> 图标无）——**推翻 M8-W2 的「假阴性、图标实际正常」结论**，那次
+> `systray error: unable to set icon: The operation completed
+> successfully` 是真失败。三重根因与修复（tools/genwinres 改造）：
+> - **根因 1（格式）**：fyne.io/systray Windows 端 SetIcon 把 bytes
+>   落临时文件后走 LoadImage(LR_LOADFROMFILE)——**只认 .ico 文件**，
+>   PNG 喂入失败且 GetLastError=0（即 M8 记录的假阴性错误文本）。
+> - **根因 2（帧编码）**：即便喂 ICO，winres.SaveICO 的帧是 PNG
+>   编码（icon.go addImage pngEncode）——资源管理器（shell）认 PNG
+>   帧，但 LoadImage 老 API 按 DIB 误读=花屏（System.Drawing.Icon
+>   预览实证）。托盘 ICO 必须手写 **BMP/DIB 帧**容器（BITMAPINFOHEADER
+>   height 双倍 + BGRA 行倒序 XOR + 1bpp AND 掩码）。
+> - **根因 3（可见性）**：旧代码生成图标深蓝底 #1e2430 在深色任务栏
+>   几乎隐形。托盘帧加**白色圆角外框**（图标 84% 居中）——深色任务栏
+>   看白框、浅色任务栏看黑底白线，双保险。
+> - **产物链**：appicon.png（2048px 源图裁 [1380,290,530,530] 入库，
+>   jimeng 源图不留库）→ genwinres 单一事实源生成三产物：①exe 图标
+>   syso（圆角透明化，四角白底残留按 11.5% 圆径 mask）；②托盘多尺寸
+>   ICO（16/20/24/32/48 DIB 帧，internal/app/tray_icon.ico go:embed，
+>   LoadImage 兼容性经 System.Drawing.Icon 双尺寸加载+视觉预览验证）；
+>   ③通知 PNG（notify_icon.png 64px——beeep []byte 分支按 PNG 解码，
+>   与托盘 ICO 格式不同源不同用）。go:generate 一次产出全部。
+> - **顺手修复**：notify.go 原把 trayIcon() 字节传 beeep——语义歪打
+>   正着（beeep []byte 分支要 PNG，旧 PNG 字节恰好可用）；现改为独立
+>   notify_icon.png 嵌入，托盘/通知格式各归其位。
+> - **DPI/深浅色未实测项**：任务栏深浅色切换下的实际观感、高 DPI 缩
+>   放下的帧选择（16/20/24/32/48 已备）——留用户日常确认。

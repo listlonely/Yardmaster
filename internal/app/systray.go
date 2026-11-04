@@ -4,17 +4,20 @@
 //
 // M9-W4 动态化（Magpie traymenu 同构——原生菜单非用户可配置，动态性
 // 体现在版本行/升级入口/状态摘要的运行时改标题）：固定项=打开窗口/退出；
-// 信息项=版本（禁用态）、「升级到 x.y.z」（有新版才显示，点击开
-// releases 页）、状态摘要（休眠/派发进行中，30s 刷新）。i18n 不做
+// 信息项=版本（禁用态）、「升级到 x.y.z」（有新版才显示，M11-W3 起
+// 点击=应用内安装）、状态摘要（休眠/派发进行中，30s 刷新）。i18n 不做
 // （M8 留档不采纳延续）。
+//
+// 图标（M11 后期换装）：tray_icon.ico（tools/genwinres 从 appicon.png
+// 生成——jimeng 图第一排第三：黑底白色发光 S 形岔路箭头 + 白色圆角外
+// 框保证深色任务栏可见）。**必须喂 ICO**：fyne systray Windows 端
+// SetIcon 经 LoadImage(LR_LOADFROMFILE) 只认 .ico 文件，PNG 喂入静默
+// 失败（GetLastError=0 假阴性）=托盘从未显示图标（2026-11-04 用户截图
+// 实证并修复）。见 tools/genwinres 头注释。
 package app
 
 import (
-	"bytes"
-	"image"
-	"image/color"
-	"image/draw"
-	"image/png"
+	_ "embed"
 	"log/slog"
 	"os/exec"
 	"runtime"
@@ -23,31 +26,14 @@ import (
 	"fyne.io/systray"
 )
 
-// releasesURL 是升级菜单项的落地页。
-const releasesURL = "https://github.com/listlonely/Yardmaster/releases"
+//go:embed tray_icon.ico
+var trayIconICO []byte
 
-// trayIcon 代码生成 32x32 PNG 图标（深蓝底 + 白色轨岔斜线，调车长意象），
-// 无需外部资源文件。
-func trayIcon() []byte {
-	img := image.NewNRGBA(image.Rect(0, 0, 32, 32))
-	bg := color.RGBA{R: 0x1e, G: 0x24, B: 0x30, A: 0xff}
-	track := color.RGBA{R: 0xe0, G: 0xe7, B: 0xff, A: 0xff}
-	accent := color.RGBA{R: 0x3b, G: 0x82, B: 0xf6, A: 0xff}
-	draw.Draw(img, img.Bounds(), &image.Uniform{bg}, image.Point{}, draw.Src)
-	// 两条平行横轨（y=20 / y=24）
-	for x := 4; x < 28; x++ {
-		img.Set(x, 20, track)
-		img.Set(x, 24, track)
-	}
-	// 岔轨斜线（从右上引向 x=14 的横轨）
-	for i := 0; i < 12; i++ {
-		img.Set(16+i, 19-i, accent)
-		img.Set(17+i, 19-i, accent)
-	}
-	var buf bytes.Buffer
-	_ = png.Encode(&buf, img)
-	return buf.Bytes()
-}
+// trayIcon 返回托盘图标字节（多尺寸 ICO，16/20/24/32/48 帧）。
+func trayIcon() []byte { return trayIconICO }
+
+// releasesURL 是升级菜单项的落地页（OnUpdateInstall 未装配时的回退）。
+const releasesURL = "https://github.com/listlonely/Yardmaster/releases"
 
 // openBrowser 调系统默认浏览器打开控制台（exec 纯 Go，无 cgo）。
 func openBrowser(url string) error {

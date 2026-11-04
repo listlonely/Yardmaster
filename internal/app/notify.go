@@ -8,12 +8,20 @@
 package app
 
 import (
+	_ "embed"
+	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/gen2brain/beeep"
-	"log/slog"
 )
+
+// notifyIconPNG 是桌面通知图标（tools/genwinres 从 appicon.png 生成的
+// 64px 圆角透明 PNG；beeep Windows 端 []byte 分支按 PNG 解码——注意
+// 与托盘的 ICO 是两份产物，喂错格式会静默失败）。
+//
+//go:embed notify_icon.png
+var notifyIconPNG []byte
 
 // restNotifyTTL 是同一 key 的通知限频窗口。
 const restNotifyTTL = 10 * time.Minute
@@ -31,13 +39,13 @@ func newNotifier(enabled bool) *notifier {
 
 // sendBeeep 是 beeep.Notify 的间接层（测试替换用）。
 var sendBeeep = func(title, msg string) {
-	if err := beeep.Notify(title, msg, trayIcon()); err != nil {
+	if err := beeep.Notify(title, msg, notifyIconPNG); err != nil {
 		slog.Debug("桌面通知失败（降级）", "title", title, "err", err)
 	}
 }
 
-// send 弹出气泡；key 非空时限频（窗口内同 key 静默）。app 图标与托盘
-// 同款（trayIcon 32 网格 PNG 字节）。
+// send 弹出气泡；key 非空时限频（窗口内同 key 静默）。图标=appicon
+// 同款（notify_icon.png，与托盘 ICO 同源不同格式）。
 func (n *notifier) send(key, title, msg string) {
 	if n == nil || !n.enabled {
 		return
