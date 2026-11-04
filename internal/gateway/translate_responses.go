@@ -302,6 +302,13 @@ func chatResponseToResponses(model string, cc *ChatChunk) *ResponsesResponse {
 		if ch.Message == nil {
 			continue
 		}
+		// thinking → reasoning item（思考先于回答；D3 同源：仅明文 summary）。
+		if ch.Message.Reasoning != "" {
+			rsp.Output = append(rsp.Output, ResponsesOutputItem{
+				Type: "reasoning", ID: "rs_0",
+				Summary: []any{map[string]any{"type": "summary_text", "text": ch.Message.Reasoning}},
+			})
+		}
 		if s, ok := ch.Message.Content.(string); ok && s != "" {
 			rsp.Output = append(rsp.Output, ResponsesOutputItem{
 				Type: "message", ID: "msg_0", Role: "assistant", Status: "completed",
@@ -323,7 +330,8 @@ func chatResponseToResponses(model string, cc *ChatChunk) *ResponsesResponse {
 		}{Reason: reason}
 	}
 	if cc.Usage != nil {
-		// responses 出口：cached_tokens 含于 input_tokens（M6-W1 校准）。
+		// responses 出口：cached_tokens 含于 input_tokens（M6-W1 校准）；
+		// reasoning_tokens 入 output_tokens_details（M10-W3 D4，有则带）。
 		cached := 0
 		if cc.Usage.PromptTokensDetails != nil {
 			cached = cc.Usage.PromptTokensDetails.CachedTokens
@@ -334,6 +342,11 @@ func chatResponseToResponses(model string, cc *ChatChunk) *ResponsesResponse {
 				CachedTokens int `json:"cached_tokens"`
 			}{CachedTokens: cached}
 		}
+		if cc.Usage.CompletionTokensDetails != nil && cc.Usage.CompletionTokensDetails.ReasoningTokens > 0 {
+			rsp.Usage.OutputTokensDetails = &struct {
+				ReasoningTokens int `json:"reasoning_tokens,omitempty"`
+			}{ReasoningTokens: cc.Usage.CompletionTokensDetails.ReasoningTokens}
+		}
 	}
 	return rsp
 }
@@ -342,16 +355,22 @@ func chatResponseToResponses(model string, cc *ChatChunk) *ResponsesResponse {
 
 // respEncoder 把 gwEvent 编码为 Responses SSE 事件序列（承接 M4
 // chatToRespStream 的 item 状态机与 response.completed 收尾）。
+// M10-W3：reasoning item（evThinking → reasoning_summary_text.delta），
+// item 的 output_index 动态分配（思考先于文本时 reasoning=0/message=1）。
 type respEncoder struct {
-	out     *sseOut
-	respID  string
-	itemSeq int              // 已开 item 计数（output_index 递增）
-	msgOpen bool             // message item 已 added
-	textAll strings.Builder  // 累积全文（output_text.done 用）
-	fcOpen  map[int]*fcState // 事件工具顺序号 → 状态
-	fcDone  []ResponsesOutputItem
-	finish  string
-	usage   *gwUsage
+	out      *sseOut
+	respID   string
+	nextIdx  int              // 下一个 output_index（动态分配）
+	rsOpen   bool             // reasoning item 已 added
+	rsIdx    int              // reasoning item 的 output_index；-1 无
+	rsAll    strings.Builder  // 思考全文（summary_text.done 用）
+	msgOpen  bool             // message item 已 added
+	msgIdx   int              // message item 的 output_index
+	textAll  strings.Builder  // 累积全文（output_text.done 用）
+	fcOpen   map[int]*fcState // 事件工具顺序号 → 状态
+	fcDone   []ResponsesOutputItem
+	finish   string
+	usage    *gwUsage
 }
 
 type fcState struct {
@@ -363,7 +382,7 @@ type fcState struct {
 }
 
 func newRespEncoder(out *sseOut) *respEncoder {
-	return &respEncoder{out: out, respID: "resp_" + traceID(time.Now()), fcOpen: map[int]*fcState{}}
+	return &respEncoder{out: out, respID: "resp_" + traceID(time.Now()), rsIdx: -1, fcOpen: map[int]*fcState{}}
 }
 
 func (t *respEncoder) emit(name string, body map[string]any) {
@@ -380,9 +399,26 @@ func (t *respEncoder) Encode(ev gwEvent) {
 	case evText:
 		t.openMessage()
 		t.emit("response.output_text.delta", map[string]any{
-			"item_id": "msg_0", "output_index": 0, "content_index": 0, "delta": ev.text,
+			"item_id": "msg_0", "output_index": t.msgIdx, "content_index": 0, "delta": ev.text,
 		})
 		t.textAll.WriteString(ev.text)
+	case evThinking:
+		// M10-W3：思考 → reasoning item（summary_text 增量；sealed (b) 不涉及——
+		// 此处只有明文思考，无 encrypted_content）。
+		if !t.rsOpen {
+			t.rsOpen = true
+			t.rsIdx = t.nextIdx
+			t.nextIdx++
+			t.emit("response.output_item.added", map[string]any{
+				"output_index": t.rsIdx, "item": map[string]any{
+					"type": "reasoning", "id": "rs_0", "summary": []any{},
+				},
+			})
+		}
+		t.emit("response.reasoning_summary_text.delta", map[string]any{
+			"item_id": "rs_0", "output_index": t.rsIdx, "summary_index": 0, "delta": ev.text,
+		})
+		t.rsAll.WriteString(ev.text)
 	case evToolStart:
 		t.toolStart(ev.idx, ev.id, ev.name)
 	case evToolArgs:
@@ -407,13 +443,15 @@ func (t *respEncoder) openMessage() {
 		return
 	}
 	t.msgOpen = true
+	t.msgIdx = t.nextIdx
+	t.nextIdx++
 	t.emit("response.output_item.added", map[string]any{
-		"output_index": 0, "item": map[string]any{
+		"output_index": t.msgIdx, "item": map[string]any{
 			"type": "message", "id": "msg_0", "role": "assistant", "status": "in_progress", "content": []any{},
 		},
 	})
 	t.emit("response.content_part.added", map[string]any{
-		"item_id": "msg_0", "output_index": 0, "content_index": 0,
+		"item_id": "msg_0", "output_index": t.msgIdx, "content_index": 0,
 		"part": map[string]any{"type": "output_text", "text": ""},
 	})
 }
@@ -422,11 +460,11 @@ func (t *respEncoder) openMessage() {
 func (t *respEncoder) toolStart(idx int, id, name string) {
 	st := t.fcOpen[idx]
 	if st == nil {
-		t.itemSeq++
 		st = &fcState{
-			itemID: fmt.Sprintf("fc_%d", t.itemSeq), outputIdx: t.itemSeq,
+			itemID: fmt.Sprintf("fc_%d", t.nextIdx), outputIdx: t.nextIdx,
 			callID: id, name: name,
 		}
+		t.nextIdx++
 		t.fcOpen[idx] = st
 		t.emit("response.output_item.added", map[string]any{
 			"output_index": st.outputIdx, "item": map[string]any{
@@ -442,17 +480,30 @@ func (t *respEncoder) toolStart(idx int, id, name string) {
 
 // Finish 收尾：闭合各 item 并发 response.completed / incomplete。
 func (t *respEncoder) Finish() {
+	if t.rsOpen {
+		// M10-W3：reasoning item 收尾（summary_text.done + item.done）。
+		full := t.rsAll.String()
+		t.emit("response.reasoning_summary_text.done", map[string]any{
+			"item_id": "rs_0", "output_index": t.rsIdx, "summary_index": 0, "text": full,
+		})
+		t.emit("response.output_item.done", map[string]any{
+			"output_index": t.rsIdx, "item": map[string]any{
+				"type": "reasoning", "id": "rs_0",
+				"summary": []any{map[string]any{"type": "summary_text", "text": full}},
+			},
+		})
+	}
 	if t.msgOpen {
 		full := t.textAll.String()
 		t.emit("response.output_text.done", map[string]any{
-			"item_id": "msg_0", "output_index": 0, "content_index": 0, "text": full,
+			"item_id": "msg_0", "output_index": t.msgIdx, "content_index": 0, "text": full,
 		})
 		t.emit("response.content_part.done", map[string]any{
-			"item_id": "msg_0", "output_index": 0, "content_index": 0,
+			"item_id": "msg_0", "output_index": t.msgIdx, "content_index": 0,
 			"part": map[string]any{"type": "output_text", "text": full},
 		})
 		t.emit("response.output_item.done", map[string]any{
-			"output_index": 0, "item": map[string]any{
+			"output_index": t.msgIdx, "item": map[string]any{
 				"type": "message", "id": "msg_0", "role": "assistant", "status": "completed",
 				"content": []any{map[string]any{"type": "output_text", "text": full}},
 			},
@@ -483,6 +534,12 @@ func (t *respEncoder) Finish() {
 		"status": "completed",
 	}
 	output := []any{}
+	if t.rsOpen { // reasoning item 在 message 前（思考先于回答的块序惯例）
+		output = append(output, map[string]any{
+			"type": "reasoning", "id": "rs_0",
+			"summary": []any{map[string]any{"type": "summary_text", "text": t.rsAll.String()}},
+		})
+	}
 	if t.msgOpen {
 		output = append(output, map[string]any{
 			"type": "message", "id": "msg_0", "role": "assistant", "status": "completed",
@@ -497,10 +554,14 @@ func (t *respEncoder) Finish() {
 		resp["incomplete_details"] = map[string]any{"reason": reason}
 	}
 	if t.usage != nil {
-		// responses 出口语义：cached_tokens 含于 input_tokens（对齐官方）。
+		// responses 出口语义：cached_tokens 含于 input_tokens（对齐官方）；
+		// reasoning_tokens 入 output_tokens_details（D4，有则带）。
 		u := map[string]any{"input_tokens": t.usage.prompt - t.usage.cached, "output_tokens": t.usage.completion}
 		if t.usage.cached > 0 {
 			u["input_tokens_details"] = map[string]any{"cached_tokens": t.usage.cached}
+		}
+		if t.usage.reasoning > 0 {
+			u["output_tokens_details"] = map[string]any{"reasoning_tokens": t.usage.reasoning}
 		}
 		resp["usage"] = u
 	}

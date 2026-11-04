@@ -57,6 +57,7 @@ type ResponsesOutputItem struct {
 	CallID  string `json:"call_id,omitempty"`   // function_call
 	Args    string `json:"arguments,omitempty"` // function_call
 	Content any    `json:"content,omitempty"`   // message：[{type,text}]
+	Summary any    `json:"summary,omitempty"`   // reasoning：[{type:summary_text,text}]（M10-W3）
 }
 
 // ResponsesUsage 是 Responses 的用量字段（形状对齐官方：input/output
@@ -68,6 +69,9 @@ type ResponsesUsage struct {
 	InputTokensDetails *struct {
 		CachedTokens int `json:"cached_tokens"`
 	} `json:"input_tokens_details,omitempty"`
+	OutputTokensDetails *struct {
+		ReasoningTokens int `json:"reasoning_tokens,omitempty"`
+	} `json:"output_tokens_details,omitempty"` // M10-W3 D4：有则带
 }
 
 // ResponsesResponse 是非流式响应的最小骨架。

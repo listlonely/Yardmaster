@@ -16,10 +16,11 @@ import (
 // ---------- Gemini 模型 ----------
 
 // GeminiPart 是 contents[].parts 的元素。文本/工具调用/工具结果三形态；
-// 图片（inlineData/fileData）M10-W2 起建模（IR v2）；thought 等其余
-// 形态忽略（可砍项纪律，W3 处理 thought）。
+// 图片（inlineData/fileData）M10-W2 起建模（IR v2）；thought（思考文本）
+// M10-W3 起建模（响应方向 → evThinking → 各协议思考块）；其余形态忽略。
 type GeminiPart struct {
 	Text             string        `json:"text,omitempty"`
+	Thought          bool          `json:"thought,omitempty"` // 思考文本标记（M10-W3）
 	FunctionCall     *GeminiFnCall `json:"functionCall,omitempty"`
 	FunctionResponse *GeminiFnResp `json:"functionResponse,omitempty"`
 	InlineData       *GeminiInline `json:"inlineData,omitempty"`
@@ -99,6 +100,7 @@ type GeminiUsage struct {
 	PromptTokenCount        int `json:"promptTokenCount,omitempty"`
 	CandidatesTokenCount    int `json:"candidatesTokenCount,omitempty"`
 	CachedContentTokenCount int `json:"cachedContentTokenCount,omitempty"` // 含于 PromptTokenCount
+	ThoughtsTokenCount      int `json:"thoughtsTokenCount,omitempty"`      // 思考 token（M10-W3 D4；含于 CandidatesTokenCount）
 }
 
 // geminiUpstreamPath 拼上游 URL（模型名在路径里，Magpie GeminiPath 同形）。
@@ -392,11 +394,16 @@ func geminiResponseToChat(gr *GeminiResponse) *ChatChunk {
 	out.Object = "chat.completion"
 	msg := &ChatMessage{Role: "assistant"}
 	var texts []string
+	var thoughts []string
 	hasTool := false
 	fcIdx := 0
 	for _, cand := range gr.Candidates {
 		for _, p := range cand.Content.Parts {
 			if p.Text != "" {
+				if p.Thought { // M10-W3：思考文本入 hub Reasoning（→ 各客户端思考块）
+					thoughts = append(thoughts, p.Text)
+					continue
+				}
 				texts = append(texts, p.Text)
 			}
 			if p.FunctionCall != nil {
@@ -411,6 +418,7 @@ func geminiResponseToChat(gr *GeminiResponse) *ChatChunk {
 		}
 	}
 	msg.Content = strings.Join(texts, "")
+	msg.Reasoning = strings.Join(thoughts, "")
 	if gr.UsageMeta != nil {
 		// 入站 gemini 细分折叠为 chat「prompt 含命中」（cachedContentTokenCount
 		// 含于 promptTokenCount——M6-W1 校准）。
@@ -449,6 +457,9 @@ func chatResponseToGemini(cc *ChatChunk) *GeminiResponse {
 			continue
 		}
 		var parts []GeminiPart
+		if ch.Message.Reasoning != "" { // M10-W3：思考 → thought part（前置于正文）
+			parts = append(parts, GeminiPart{Text: ch.Message.Reasoning, Thought: true})
+		}
 		if s, ok := ch.Message.Content.(string); ok && s != "" {
 			parts = append(parts, GeminiPart{Text: s})
 		}
@@ -470,7 +481,8 @@ func chatResponseToGemini(cc *ChatChunk) *GeminiResponse {
 		gr.Candidates[0].FinishReason = chatFinishToGemini(finish)
 	}
 	if cc.Usage != nil {
-		// gemini 出口：cachedContentTokenCount 含于 promptTokenCount（M6-W1 校准）。
+		// gemini 出口：cachedContentTokenCount 含于 promptTokenCount（M6-W1 校准）；
+		// thoughtsTokenCount 入 usageMetadata（M10-W3 D4，有则带）。
 		cached := 0
 		if cc.Usage.PromptTokensDetails != nil {
 			cached = cc.Usage.PromptTokensDetails.CachedTokens
@@ -479,6 +491,9 @@ func chatResponseToGemini(cc *ChatChunk) *GeminiResponse {
 			PromptTokenCount:        cc.Usage.PromptTokens,
 			CandidatesTokenCount:    cc.Usage.CompletionTokens,
 			CachedContentTokenCount: cached,
+		}
+		if cc.Usage.CompletionTokensDetails != nil {
+			gr.UsageMeta.ThoughtsTokenCount = cc.Usage.CompletionTokensDetails.ReasoningTokens
 		}
 	}
 	return gr
@@ -522,6 +537,8 @@ func (t *geminiEncoder) Encode(ev gwEvent) {
 	switch ev.kind {
 	case evText:
 		t.emitParts([]GeminiPart{{Text: ev.text}})
+	case evThinking: // M10-W3：思考 → thought part（Gemini 原生思考形态）
+		t.emitParts([]GeminiPart{{Text: ev.text, Thought: true}})
 	case evToolStart:
 		if ev.name != "" {
 			t.toolNames[ev.idx] = ev.name
@@ -556,11 +573,13 @@ func (t *geminiEncoder) Finish() {
 		Content: GeminiContent{Role: "model", Parts: nil}, FinishReason: chatFinishToGemini(t.finish),
 	}}}
 	if t.usage != nil {
-		// gemini 出口语义：cachedContentTokenCount 含于 promptTokenCount。
+		// gemini 出口语义：cachedContentTokenCount 含于 promptTokenCount；
+		// thoughtsTokenCount 入 usageMetadata（D4，有则带）。
 		final.UsageMeta = &GeminiUsage{
 			PromptTokenCount:        t.usage.prompt,
 			CandidatesTokenCount:    t.usage.completion,
 			CachedContentTokenCount: t.usage.cached,
+			ThoughtsTokenCount:      t.usage.reasoning,
 		}
 	}
 	t.out.emit("", final)
@@ -593,6 +612,10 @@ func (d *geminiDecoder) Feed(ev sseEvent) ([]gwEvent, error) {
 		first := true
 		for _, p := range cand.Content.Parts {
 			if p.Text != "" {
+				if p.Thought { // 思考文本（M10-W3）→ evThinking
+					out = append(out, gwEvent{kind: evThinking, text: p.Text})
+					continue
+				}
 				texts = append(texts, p.Text)
 			}
 			if p.FunctionCall != nil {
@@ -622,7 +645,7 @@ func (d *geminiDecoder) Feed(ev sseEvent) ([]gwEvent, error) {
 	if gr.UsageMeta != nil {
 		out = append(out, gwEvent{kind: evUsage, usage: gwUsage{
 			prompt: gr.UsageMeta.PromptTokenCount, completion: gr.UsageMeta.CandidatesTokenCount,
-			cached: gr.UsageMeta.CachedContentTokenCount,
+			cached: gr.UsageMeta.CachedContentTokenCount, reasoning: gr.UsageMeta.ThoughtsTokenCount,
 		}})
 	}
 	return out, nil

@@ -15,7 +15,7 @@ import (
 
 // ---------- 事件模型 ----------
 
-// gwEventKind 是流式事件类别（七类）。
+// gwEventKind 是流式事件类别（M10-W3 起八类：新增 evThinking）。
 type gwEventKind int
 
 const (
@@ -26,6 +26,7 @@ const (
 	evToolDone                     // 单个工具调用收束：idx（协议无对应事件时可忽略）
 	evStop                         // 流终止：stop（chat 词表 stop/length/tool_calls/content_filter）
 	evUsage                        // 用量快照：usage
+	evThinking                     // 思考增量（M10-W3）：text（GLM reasoning_content/上游 thinking_delta/thought）
 )
 
 // gwEvent 是一条内存事件（decoder 与 encoder 之间的唯一中间表示）。
@@ -33,7 +34,7 @@ type gwEvent struct {
 	kind  gwEventKind
 	msgID string // evStart：响应 ID
 	model string // evStart：模型名
-	text  string // evText/evToolArgs：增量文本
+	text  string // evText/evToolArgs/evThinking：增量文本
 	idx   int    // 工具调用顺序号（decoder 已归一）
 	id    string // evToolStart：工具调用 ID
 	name  string // evToolStart：工具名
@@ -43,11 +44,13 @@ type gwEvent struct {
 
 // gwUsage 是事件层用量快照。prompt 统一「含命中」口径（anthropic
 // cache_read 折叠进 prompt，与 M5-W2 TraceUsage 同规）；cached 为命中数
-// （各协议展开见 encoder 出口语义）。
+// （各协议展开见 encoder 出口语义）；reasoning 为思考 token（M10-W3 D4，
+// 有槽位的协议输出）。
 type gwUsage struct {
 	prompt     int
 	completion int
 	cached     int
+	reasoning  int
 }
 
 // ---------- 适配器接口 ----------
@@ -152,6 +155,9 @@ func (d *chatDecoder) Feed(ev sseEvent) ([]gwEvent, error) {
 			d.startID = cc.ID
 			out = append(out, gwEvent{kind: evStart, msgID: cc.ID, model: d.model})
 		}
+		if ch.Delta.Reasoning != "" { // GLM/DeepSeek 系思考增量（先于 content）
+			out = append(out, gwEvent{kind: evThinking, text: ch.Delta.Reasoning})
+		}
 		if s, ok := ch.Delta.Content.(string); ok && s != "" {
 			out = append(out, gwEvent{kind: evText, text: s})
 		}
@@ -168,12 +174,16 @@ func (d *chatDecoder) Feed(ev sseEvent) ([]gwEvent, error) {
 		out = append(out, gwEvent{kind: evStart, msgID: cc.ID})
 	}
 	if cc.Usage != nil {
-		var cached int
+		var cached, reasoning int
 		if cc.Usage.PromptTokensDetails != nil {
 			cached = cc.Usage.PromptTokensDetails.CachedTokens
 		}
+		if cc.Usage.CompletionTokensDetails != nil {
+			reasoning = cc.Usage.CompletionTokensDetails.ReasoningTokens
+		}
 		out = append(out, gwEvent{kind: evUsage, usage: gwUsage{
-			prompt: cc.Usage.PromptTokens, completion: cc.Usage.CompletionTokens, cached: cached,
+			prompt: cc.Usage.PromptTokens, completion: cc.Usage.CompletionTokens,
+			cached: cached, reasoning: reasoning,
 		}})
 	}
 	return out, nil

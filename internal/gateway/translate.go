@@ -109,6 +109,7 @@ func chatToMessagesRequest(cr *ChatRequest) *MessagesRequest {
 		mr.MaxTokens = 4096
 	}
 	var sys []string
+	sysSeen := false
 	for _, m := range cr.Messages {
 		switch m.Role {
 		case "system":
@@ -116,7 +117,20 @@ func chatToMessagesRequest(cr *ChatRequest) *MessagesRequest {
 			parts := chatContentParts(m.Content, &ig)
 			if c := irToMsgContent(parts); c != nil {
 				if s, ok := c.(string); ok {
-					sys = append(sys, s)
+					if !sysSeen {
+						// 首条 system → 顶层 system（现状语义）
+						sys = append(sys, s)
+						sysSeen = true
+					} else {
+						// C3（M10-W4）：中途 system → <system-reminder> 包装的
+						// user 消息（Claude Code 兼容惯例；messages 协议仅顶层
+						// 可 system）。
+						mr.Messages = append(mr.Messages, MessagesMessage{
+							Role: "user",
+							Content: []Block{{Type: "text",
+								Text: "<system-reminder>\n" + s + "\n</system-reminder>"}},
+						})
+					}
 				} else {
 					irNote(&ig, "image(system，messages system 仅文本)")
 				}
@@ -200,6 +214,10 @@ func chatResponseToMessages(mr *MessagesRequest, cc *ChatChunk) *MessagesRespons
 	}
 	ch := cc.Choices[0]
 	if ch.Message != nil {
+		// thinking 块在文本前（anthropic 块序惯例；D3：仅文本无 signature）。
+		if ch.Message.Reasoning != "" {
+			ms.Content = append(ms.Content, Block{Type: "thinking", Thinking: ch.Message.Reasoning})
+		}
 		if s := contentText(ch.Message.Content); s != "" {
 			ms.Content = append(ms.Content, Block{Type: "text", Text: s})
 		}
@@ -237,6 +255,7 @@ type msgsEncoder struct {
 	started   bool
 	curBlock  int // 当前打开的 anthropic 块索引；-1 无
 	curIsText bool
+	curIsThinking bool // 当前打开块是否 thinking（M10-W3）
 	textOpen  bool
 	nextBlock int
 	toolBlks  map[int]int // 事件工具顺序号 → anthropic 块索引
@@ -256,6 +275,7 @@ func (t *msgsEncoder) openBlock(kind string, blk *Block) {
 	}
 	t.curBlock = t.nextBlock
 	t.nextBlock++
+	t.curIsThinking = false
 	if kind == "text" {
 		t.curIsText, t.textOpen = true, true
 		t.emit("content_block_start", map[string]any{"type": "content_block_start", "index": t.curBlock, "content_block": Block{Type: "text"}})
@@ -289,6 +309,17 @@ func (t *msgsEncoder) Encode(ev gwEvent) {
 		t.emit("content_block_delta", map[string]any{
 			"type": "content_block_delta", "index": t.curBlock,
 			"delta": map[string]any{"type": "text_delta", "text": ev.text},
+		})
+	case evThinking:
+		// M10-W3 D3：thinking 块仅文本输出（signature 不产出——无跨协议来源）。
+		t.start()
+		if !t.curIsThinking {
+			t.openBlock("thinking", &Block{Type: "thinking"})
+			t.curIsThinking = true
+		}
+		t.emit("content_block_delta", map[string]any{
+			"type": "content_block_delta", "index": t.curBlock,
+			"delta": map[string]any{"type": "thinking_delta", "thinking": ev.text},
 		})
 	case evToolStart:
 		t.start() // 惰性启动：工具调用先于文本时同样需要 message_start 在首
@@ -399,6 +430,10 @@ func (d *msgsDecoder) Feed(ev sseEvent) ([]gwEvent, error) {
 		case "text_delta":
 			if e.Delta.Text != "" {
 				out = append(out, gwEvent{kind: evText, text: e.Delta.Text})
+			}
+		case "thinking_delta": // M10-W3：上游 thinking → 事件（chat 客户端 encoder 按 D5 忽略）
+			if e.Delta.Thinking != "" {
+				out = append(out, gwEvent{kind: evThinking, text: e.Delta.Thinking})
 			}
 		case "input_json_delta":
 			if idx, ok := d.toolIdx[e.Index]; ok && e.Delta.PartialJSON != "" {

@@ -49,10 +49,13 @@ type ChatTool struct {
 }
 
 // ChatMessage 是 chat 的一条消息；Content 可为字符串或分段数组
-// （分段见 ChatContentPart，图片支持 M10-W2 IR v2）。
+// （分段见 ChatContentPart，图片支持 M10-W2 IR v2）。ReasoningContent
+// 是 GLM/DeepSeek 系思考文本（M10-W3：响应方向 hub 携带 → 各客户端
+// encoder；请求方向按 D2 不回填历史）。
 type ChatMessage struct {
 	Role       string         `json:"role"`
 	Content    any            `json:"content,omitempty"`
+	Reasoning  string         `json:"reasoning_content,omitempty"`
 	ToolCalls  []ChatToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string         `json:"tool_call_id,omitempty"`
 }
@@ -105,13 +108,17 @@ type ChatChunk struct {
 }
 
 // ChatUsage 是 token 用量（PromptTokensDetails 对齐 openai：cached_tokens
-// 含于 prompt_tokens；M6-W1 校准补齐——此前事件/翻译层丢弃缓存细分）。
+// 含于 prompt_tokens；M6-W1 校准补齐——此前事件/翻译层丢弃缓存细分；
+// M10-W3 增 completion_tokens_details.reasoning_tokens，D4 有则入账）。
 type ChatUsage struct {
-	PromptTokens        int `json:"prompt_tokens"`
-	CompletionTokens    int `json:"completion_tokens"`
-	PromptTokensDetails *struct {
+	PromptTokens            int `json:"prompt_tokens"`
+	CompletionTokens        int `json:"completion_tokens"`
+	PromptTokensDetails     *struct {
 		CachedTokens int `json:"cached_tokens"`
 	} `json:"prompt_tokens_details,omitempty"`
+	CompletionTokensDetails *struct {
+		ReasoningTokens int `json:"reasoning_tokens,omitempty"`
+	} `json:"completion_tokens_details,omitempty"`
 }
 
 // ---------- Anthropic Messages ----------
@@ -127,8 +134,9 @@ type BlockSource struct {
 
 // Block 是 messages 协议的内容块。
 type Block struct {
-	Type      string       `json:"type"` // text / tool_use / tool_result / image
+	Type      string       `json:"type"` // text / tool_use / tool_result / image / thinking
 	Text      string       `json:"text,omitempty"`
+	Thinking  string       `json:"thinking,omitempty"`    // thinking 块文本（D3：signature 不产出）
 	ID        string       `json:"id,omitempty"`          // tool_use
 	Name      string       `json:"name,omitempty"`        // tool_use
 	Input     any          `json:"input,omitempty"`       // tool_use
@@ -184,6 +192,7 @@ type msgEvent struct {
 	Delta struct {
 		Type        string `json:"type,omitempty"`
 		Text        string `json:"text,omitempty"`
+		Thinking    string `json:"thinking,omitempty"` // thinking_delta（M10-W3）
 		PartialJSON string `json:"partial_json,omitempty"`
 		StopReason  string `json:"stop_reason,omitempty"`
 	} `json:"delta,omitempty"`
