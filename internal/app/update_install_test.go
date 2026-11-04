@@ -120,6 +120,25 @@ func TestSwapAsideFailureRestores(t *testing.T) {
 	}
 }
 
+// app-only 安装（原位无 console exe）：网关直接落位补装，不产 .old。
+func TestSwapAsideGatewayAbsent(t *testing.T) {
+	exeDir, stageDir := seedSwapDir(t, false, false)
+	if err := os.Remove(filepath.Join(exeDir, gatewayExeName)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := swapAside(
+		filepath.Join(stageDir, gatewayExeName), "",
+		filepath.Join(exeDir, gatewayExeName), filepath.Join(exeDir, appExeName)); err != nil {
+		t.Fatal(err)
+	}
+	if got := readAll(t, filepath.Join(exeDir, gatewayExeName)); got != "NEW-GW" {
+		t.Fatalf("app-only 补装应直接落位，得到 %q", got)
+	}
+	if _, serr := os.Stat(filepath.Join(exeDir, gatewayExeName+oldSuffix)); !os.IsNotExist(serr) {
+		t.Fatal("原位缺失不应产生 .old")
+	}
+}
+
 // 上一轮残留 .old 不阻塞新一轮换侧（aside 先清残留）。
 func TestSwapAsideClearsStaleOld(t *testing.T) {
 	exeDir, stageDir := seedSwapDir(t, false, false)

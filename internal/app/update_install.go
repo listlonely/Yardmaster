@@ -129,9 +129,10 @@ func installLock(stageDir string) (release func(), err error) {
 }
 
 // swapAside 换侧核心（exeDir 参数化由调用方解析，测试可注入假目录）：
-// aside（原位→.old，旧 .old 先清）→ moveIn（暂存→原位）。任何失败在
-// 返回前逆序还原（原位恒有可执行文件——绝无空窗）。返回 appSwapped=
-// 桌面入口是否一并换侧。
+// aside（原位→.old，旧 .old 先清）→ moveIn（暂存→原位）。原位缺失的
+// 目标直接落位（app-only 安装补齐网关入口的场景，不产 .old）。任何
+// 失败在返回前逆序还原（原位恒有可执行文件——绝无空窗）。返回
+// appSwapped=桌面入口是否一并换侧。
 func swapAside(stagedGateway, stagedApp, gatewayPath, appPath string) (appSwapped bool, err error) {
 	moved := []string{} // 已 aside 的原位文件（还原用，逆序回滚）
 	restore := func() {
@@ -147,9 +148,11 @@ func swapAside(stagedGateway, stagedApp, gatewayPath, appPath string) (appSwappe
 		moved = append(moved, path)
 		return nil
 	}
-	if err := aside(gatewayPath); err != nil {
-		return false, err
-	}
+	if _, serr := os.Stat(gatewayPath); serr == nil {
+		if err := aside(gatewayPath); err != nil {
+			return false, err
+		}
+	} // 原位无 console exe（app-only 安装）：直接落位，不产 .old
 	if stagedApp != "" {
 		if _, serr := os.Stat(appPath); serr == nil {
 			if err := aside(appPath); err != nil {
@@ -217,14 +220,16 @@ func installStaged(stageDir string, restart func(), allowSame bool) error {
 	cmd.Env = append(os.Environ(), relayEnv+"="+strconv.Itoa(os.Getpid()))
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr // 接力 banner 落同一终端
 	if serr := cmd.Start(); serr != nil {
-		// spawn 失败还原（swapAside 已成功，手动逆操作）。
+		// spawn 失败还原（swapAside 已成功，手动逆操作；.old 存在才
+		// 还原——app-only 补装路径无 .old，直接删除落位的新文件即可）。
 		_ = os.Remove(gatewayPath)
 		if appSwapped {
 			_ = os.Remove(appPath)
 		}
-		_ = os.Rename(gatewayPath+oldSuffix, gatewayPath)
-		if appSwapped {
-			_ = os.Rename(appPath+oldSuffix, appPath)
+		for _, p := range []string{gatewayPath, appPath} {
+			if _, e := os.Stat(p + oldSuffix); e == nil {
+				_ = os.Rename(p+oldSuffix, p)
+			}
 		}
 		return fmt.Errorf("启动接力进程失败: %w", serr)
 	}
