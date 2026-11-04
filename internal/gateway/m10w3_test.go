@@ -6,6 +6,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -192,6 +193,37 @@ func TestGeminiThoughtDecode(t *testing.T) {
 	}
 	if !gotThinking || !gotText {
 		t.Errorf("thought/text 解析缺失: %+v", evs)
+	}
+}
+
+// TestC2TimeoutErrNote：504/524 语义分级（C2）——候选摘要前缀 + 全败
+// 结构化文案；其余状态码不注入（原始体原样回传语义不变）。
+func TestC2TimeoutErrNote(t *testing.T) {
+	if upstreamErrNote(504) != "网关/代理超时（504）" || upstreamErrNote(524) != "后端超时（Cloudflare 524）" || upstreamErrNote(500) != "" {
+		t.Errorf("upstreamErrNote 分级错误: 504=%q 524=%q 500=%q", upstreamErrNote(504), upstreamErrNote(524), upstreamErrNote(500))
+	}
+	s := &Server{}
+	for _, tc := range []struct {
+		status int
+		want   string
+	}{
+		{524, "后端超时（Cloudflare 524）"},
+		{504, "网关/代理超时（504）"},
+	} {
+		rec := httptest.NewRecorder()
+		s.relayLastError(rec, ProtoMessages, attemptResult{status: tc.status, body: []byte("upstream says no")})
+		if rec.Code != tc.status {
+			t.Errorf("[%d] 状态码应透传: %d", tc.status, rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), tc.want) {
+			t.Errorf("[%d] 缺语义文案: %s", tc.status, rec.Body.String())
+		}
+	}
+	// 非 504/524：原始体原样（既有语义）
+	rec := httptest.NewRecorder()
+	s.relayLastError(rec, ProtoMessages, attemptResult{status: 500, body: []byte("raw-upstream-body")})
+	if rec.Body.String() != "raw-upstream-body" {
+		t.Errorf("非 504/524 应原样回传: %s", rec.Body.String())
 	}
 }
 

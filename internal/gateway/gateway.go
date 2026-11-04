@@ -438,7 +438,8 @@ func (s *Server) serveWithFailover(w http.ResponseWriter, r *http.Request,
 			if res.err != nil {
 				tc.Err = res.err.Error()
 			} else if res.status >= 400 {
-				tc.Err = netproxy.Snippet(res.body)
+				// C2：504/524 候选摘要带语义前缀（trace 可区分超时来源）
+				tc.Err = strings.TrimSpace(upstreamErrNote(res.status) + " " + netproxy.Snippet(res.body))
 			}
 			tr.Candidates = append(tr.Candidates, tc)
 		}
@@ -560,6 +561,20 @@ func classifyAttempt(res attemptResult) string {
 		return CandClient
 	default:
 		return CandOK
+	}
+}
+
+// upstreamErrNote 504/524 语义分级（C2，M10-W5）：区分「代理/网关
+// 等不及」（504）与「后端处理超时」（Cloudflare 524）。仅用于 trace
+// 候选摘要前缀与全败文案——不改重试/休眠判定（均按 ≥500 既有语义）。
+func upstreamErrNote(status int) string {
+	switch status {
+	case http.StatusGatewayTimeout:
+		return "网关/代理超时（504）"
+	case 524:
+		return "后端超时（Cloudflare 524）"
+	default:
+		return ""
 	}
 }
 
@@ -859,6 +874,11 @@ func (s *Server) relayLastError(w http.ResponseWriter, client ClientProto, last 
 		st := last.status
 		if st < 400 {
 			st = http.StatusBadGateway
+		}
+		if note := upstreamErrNote(st); note != "" {
+			// C2：504/524 写结构化语义文案（原始体多为 HTML/空，无可辨语义）
+			writeClientErr(client, w, st, note+"，全部候选失败（上游原始响应: "+netproxy.Snippet(last.body)+"）")
+			return
 		}
 		w.WriteHeader(st)
 		_, _ = w.Write(last.body)
