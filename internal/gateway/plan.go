@@ -150,13 +150,16 @@ func (p *Planner) Plan(target, stickyKey string) ([]Candidate, error) {
 
 // expandMember 展开一个成员引用为候选：
 //   - "provider/model"：该模型的每个可用账号一个候选；
+//   - "provider/model@account"：账号席位——仅该账号的候选（账号不在
+//     Provider 内时返回空切片：运行期动态状态，配置校验已挡写路径）；
 //   - 裸 provider id（自动组）：按预检模型清单逐模型 × 账号展开
 //     （未预检的 provider 无模型清单，无法确定上游模型名，报错）。
 //
 // provider 未知或裸 id 无模型清单返回错误（配置错误应可见）；
 // provider 停用/无可用账号返回空切片（动态状态，调用方合并后判定）。
 func (p *Planner) expandMember(ref string, now time.Time) ([]Candidate, error) {
-	if id, model, ok := strings.Cut(ref, "/"); ok && id != "" && model != "" {
+	head, accName, hasAcc := strings.Cut(ref, "@")
+	if id, model, ok := strings.Cut(head, "/"); ok && id != "" && model != "" {
 		prov := p.providerByID(id)
 		if prov == nil {
 			return nil, fmt.Errorf("未知 provider %q", id)
@@ -164,7 +167,14 @@ func (p *Planner) expandMember(ref string, now time.Time) ([]Candidate, error) {
 		if prov.Disabled {
 			return nil, nil
 		}
-		return p.accountsOf(prov, model, now), nil
+		cands := p.accountsOf(prov, model, now)
+		if hasAcc {
+			cands = candidatesOfAccount(cands, accName)
+		}
+		return cands, nil
+	}
+	if hasAcc {
+		return nil, fmt.Errorf("成员 %q 的账号席位需 provider/model@account 形态", ref)
 	}
 	prov := p.providerByID(ref)
 	if prov == nil {
@@ -181,6 +191,17 @@ func (p *Planner) expandMember(ref string, now time.Time) ([]Candidate, error) {
 		cands = append(cands, p.accountsOf(prov, m.ID, now)...)
 	}
 	return cands, nil
+}
+
+// candidatesOfAccount 过滤出指定账号的候选（席位成员）。
+func candidatesOfAccount(cands []Candidate, accName string) []Candidate {
+	out := cands[:0:0]
+	for _, c := range cands {
+		if c.Account.Name == accName {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // accountExhausted 判断账号当日额度是否已用尽（M2-W4 额度感知路由）。

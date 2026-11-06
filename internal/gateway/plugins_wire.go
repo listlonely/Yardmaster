@@ -20,6 +20,11 @@ func (s *Server) AttachPlugins(r *plugin.Registry) {
 		return
 	}
 	s.Plugins = r
+	// 插件声明意图并入词表（声明即同步）：路由页分配表、插件分类兜底
+	// 校验（classifyIntentWithPlugin）与 GET /api/plugins 视图同一口径。
+	if s.Intents != nil {
+		s.Intents.WithPluginIntents(r.DeclaredIntents)
+	}
 	if s.Traces != nil {
 		prev := s.Traces.OnTrace
 		s.Traces.OnTrace = func(tr Trace) {

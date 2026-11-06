@@ -19,26 +19,37 @@ import (
 	"yardmaster/internal/store"
 )
 
-// 四类扩展点 capability（枚举外值拒绝装载）。
+// 五类扩展点 capability（枚举外值拒绝装载）。
 const (
 	CapEvents   = "events.trace"   // 事件订阅（fire-and-forget）
 	CapDispatch = "dispatch.parse" // 派发输出解析（请求/响应）
 	CapClassify = "classify.intent"
 	CapVendor   = "vendor.verdict"
+	CapOAuth    = "provider.oauth" // 订阅厂商适配（适配本体在插件，主程序无厂商代码）
 )
 
 var capabilitySet = map[string]bool{
-	CapEvents: true, CapDispatch: true, CapClassify: true, CapVendor: true,
+	CapEvents: true, CapDispatch: true, CapClassify: true, CapVendor: true, CapOAuth: true,
+}
+
+// IntentRef 是插件声明的一个意图（classify.intent 能力）：插件自带
+// 词表元数据，管理面透出后并入意图分配表与词表校验（声明即同步）。
+type IntentRef struct {
+	ID    string `json:"id"`              // 稳定 ID；建议命名空间化（如 sre/oncall）
+	Label string `json:"label,omitempty"` // 展示名
+	Desc  string `json:"desc,omitempty"`  // 一句话说明
 }
 
 // Spec 是 plugins.json 的一个插件条目。
 type Spec struct {
-	ID           string   `json:"id"`                     // 唯一标识
-	Command      []string `json:"command"`                // argv（外部可执行体）
-	Enabled      bool     `json:"enabled,omitempty"`      // 缺省 false（显式开启）
-	Capabilities []string `json:"capabilities,omitempty"` // 声明的能力（实际授予=配置∩声明）
-	TimeoutMS    int      `json:"timeout_ms,omitempty"`   // 请求/响应钩子超时；0=1000ms
-	Env          []string `json:"env,omitempty"`          // 附加环境变量；含 "INHERIT_ENV=1" 则继承父进程全量环境
+	ID           string      `json:"id"`                     // 唯一标识
+	Command      []string    `json:"command"`                // argv（外部可执行体）
+	Enabled      bool        `json:"enabled,omitempty"`      // 缺省 false（显式开启）
+	Capabilities []string    `json:"capabilities,omitempty"` // 声明的能力（实际授予=配置∩声明）
+	Desc         string      `json:"desc,omitempty"`         // 简介（管理面插件行展示）
+	Intents      []IntentRef `json:"intents,omitempty"`      // 声明意图（须具备 classify.intent 能力）
+	TimeoutMS    int         `json:"timeout_ms,omitempty"`   // 请求/响应钩子超时；0=1000ms
+	Env          []string    `json:"env,omitempty"`          // 附加环境变量；含 "INHERIT_ENV=1" 则继承父进程全量环境
 }
 
 // File 是 plugins.json 的文件形态。
@@ -68,7 +79,24 @@ func Validate(f File) error {
 		}
 		for _, c := range p.Capabilities {
 			if !capabilitySet[c] {
-				return fmt.Errorf("插件 %s 的未知能力 %q（支持: events.trace/dispatch.parse/classify.intent/vendor.verdict）", p.ID, c)
+				return fmt.Errorf("插件 %s 的未知能力 %q（支持: events.trace/dispatch.parse/classify.intent/vendor.verdict/provider.oauth）", p.ID, c)
+			}
+		}
+		if len(p.Intents) > 0 {
+			hasClassify := false
+			for _, c := range p.Capabilities {
+				if c == CapClassify {
+					hasClassify = true
+					break
+				}
+			}
+			if !hasClassify {
+				return fmt.Errorf("插件 %s 声明了意图但未具备 classify.intent 能力", p.ID)
+			}
+			for _, ir := range p.Intents {
+				if ir.ID == "" {
+					return fmt.Errorf("插件 %s 的声明意图 id 不能为空", p.ID)
+				}
 			}
 		}
 		if p.TimeoutMS != 0 && (p.TimeoutMS < 100 || p.TimeoutMS > 30000) {

@@ -600,3 +600,68 @@ body.app .stat-v { font-size: 1.15rem; }
 body.app .cards { gap: 8px; }
 body.app .disp-output { font-size: 11px; }
 body.app .set-field { width: 18rem; }
+
+/* ---------- 批1 落地（2026-11 原型定稿）：意图调用链 + 编辑链弹窗 +
+   添加服务商改版 + 插件商店（组件样式与原型同构） ---------- */
+
+/* 路由页：链预览（策略 pill + 序号化成员 chips） */
+.chain-preview { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; flex: 1.4; min-width: 0; }
+.ord-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 5px 2px 2px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line)); background: var(--accent-soft); border-radius: 999px; font-size: 11.5px; }
+.ord-chip b { display: inline-grid; place-items: center; width: 17px; height: 17px; border-radius: 50%; background: var(--accent); color: var(--accent-fg); font-size: 10px; font-family: var(--code); flex: none; }
+.ord-chip code { background: none; padding: 0; }
+.ord-chip button { width: 17px; height: 17px; border-radius: 50%; display: inline-grid; place-items: center; color: var(--ctl-fg); font-size: 11px; line-height: 1; flex: none; }
+.ord-chip button:hover { background: color-mix(in srgb, var(--accent) 22%, var(--card)); color: var(--fg); }
+.ord-chip button:disabled { opacity: .3; pointer-events: none; }
+.ord-chip.mini { padding: 1px 8px 1px 1px; font-size: 11px; }
+.ord-chip.mini b { width: 14px; height: 14px; font-size: 9px; }
+.ord-chip code .at, .pick-chip code .at { color: var(--muted); font-style: normal; }
+
+/* 编辑链弹窗：推荐提示 + 席位选择器 + 已选排序 */
+.pick-hint { margin-bottom: 8px; padding: 8px 12px; border-radius: 10px; background: color-mix(in srgb, var(--accent-soft) 55%, var(--card)); border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line)); font-size: 12px; color: var(--fg-2); line-height: 1.6; display: flex; align-items: center; gap: 10px; }
+.pick-hint > span { flex: 1; min-width: 0; }
+.pick-hint .text.add { flex: none; white-space: nowrap; color: var(--accent); font-weight: 500; }
+.pick-order { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; min-height: 26px; }
+.pick-provs { max-height: 40vh; overflow-y: auto; border: 1px solid var(--line-2); border-radius: 10px; background: var(--card-2); padding: 2px 0; grid-column: 2; min-width: 0; }
+.pick-prov { padding: 8px 12px; }
+.pick-prov + .pick-prov { border-top: 1px solid var(--line-2); }
+.pick-prov > b { display: flex; align-items: center; gap: 4px; font-size: 12px; margin-bottom: 6px; }
+.pick-prov .pick-meta { font-weight: 400; letter-spacing: 0; color: var(--faint); font-size: 11px; }
+.pick-chip { display: inline-flex; align-items: center; gap: 5px; margin: 0 8px 6px 0; padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--card); font-size: 11.5px; cursor: pointer; transition: border-color .12s, background .12s; }
+.pick-chip:hover { border-color: var(--accent); }
+.pick-chip:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.pick-chip input { accent-color: var(--accent); }
+.pick-chip.whole { font-weight: 500; color: var(--accent); }
+.pick-chip code { background: none; padding: 0; }
+
+/* 插件页：分类筛选 chips */
+.cat-chip { display: inline-flex; align-items: center; padding: 3px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); font-size: 12px; color: var(--fg-2); cursor: pointer; transition: border-color .12s, background .12s; }
+.cat-chip:hover { border-color: var(--accent); }
+.cat-chip.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 500; }
+
+/* 添加服务商：订阅提示条 + 检测 + 模型勾选 + 网络三选 + 高级折叠 */
+.ap-subhint { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding: 8px 12px; border-radius: 10px; background: color-mix(in srgb, var(--amber-soft) 60%, var(--card)); border: 1px solid color-mix(in srgb, var(--amber) 25%, var(--line)); font-size: 11.5px; color: var(--fg-2); line-height: 1.6; }
+.ap-subhint > span { flex: 1; min-width: 0; }
+.ap-subhint .text.add { flex: none; white-space: nowrap; color: var(--amber); font-weight: 500; }
+.ap-note { font-size: 11.5px; color: var(--muted); padding: 6px 0 0; }
+.key-probe { display: flex; align-items: center; gap: 6px; }
+.key-probe .field { flex: 1; min-width: 0; width: auto; }
+.key-probe .text.add { flex: none; white-space: nowrap; }
+.net-pick { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.net-pick select { flex: none; width: auto; }
+.net-pick input { flex: 1; min-width: 0; }
+.ap-models { margin: 2px 0 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--card-2); overflow: hidden; }
+.ap-models-head { display: flex; align-items: center; gap: 4px; padding: 7px 12px; font-size: 12px; font-weight: 600; color: var(--fg-2); border-bottom: 1px solid var(--line-2); background: var(--card); }
+.ap-models-head .text { margin-left: auto; font-weight: 400; }
+.ap-model { display: flex; align-items: center; gap: 8px; padding: 6px 12px; font-size: 12px; cursor: pointer; border-top: 1px solid var(--line-2); }
+.ap-model:first-of-type { border-top: 0; }
+.ap-model:hover { background: var(--card); }
+.ap-model input { accent-color: var(--accent); }
+.ap-model code { background: none; padding: 0; }
+.ap-probing { font-size: 11.5px; color: var(--muted); padding: 10px 12px; }
+.ap-adv { margin: 8px 0 4px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--card-2); }
+.ap-adv summary { list-style: none; display: flex; align-items: center; gap: 8px; padding: 9px 12px; font-size: 12px; color: var(--ctl-fg); cursor: pointer; }
+.ap-adv summary::-webkit-details-marker { display: none; }
+.ap-adv summary:hover { color: var(--fg); }
+.ap-adv summary .chev { transition: transform .25s; }
+.ap-adv[open] summary .chev { transform: rotate(90deg); }
+.ap-adv .ap-adv-body { padding: 2px 12px 10px; }

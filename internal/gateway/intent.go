@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"yardmaster/internal/classify"
+	"yardmaster/internal/plugin"
 	"yardmaster/internal/store"
 )
 
@@ -41,6 +42,8 @@ type IntentChain struct {
 	l1Model     string // provider/model；空=L1 关闭
 	l1Timeout   time.Duration
 	call        L1Caller // nil=L1 关闭
+
+	pluginIntents func() []plugin.IntentRef // 启用插件声明的意图（nil=无插件注入）
 
 	mu            sync.Mutex
 	intentsStamp  time.Time // intents.json mtime（热生效）
@@ -71,6 +74,12 @@ func NewIntentChain(intentsPath, l1Model string, l1Timeout time.Duration, call L
 // SetNow 注入时钟（测试用）。
 func (c *IntentChain) SetNow(f func() time.Time) { c.now = f }
 
+// WithPluginIntents 注入插件声明意图提供者（AttachPlugins 装配）：
+// 词表并入与插件分类校验共用同一来源。
+func (c *IntentChain) WithPluginIntents(fn func() []plugin.IntentRef) {
+	c.pluginIntents = fn
+}
+
 // Classify 返回消息意图 id（内置或自定义词表）；无法判定返回空串。
 // nil 接收者安全（网关未装配判定链时静默跳过）。
 func (c *IntentChain) Classify(message string) string {
@@ -91,8 +100,8 @@ func (c *IntentChain) Classify(message string) string {
 	return c.classifyL1Locked(strategy, message)
 }
 
-// Vocabulary 返回当前生效的意图词表（内置+自定义；插件分类兜底的
-// 校验依据，M7-W4——词表外 intent 不采纳）。nil 接收者安全。
+// Vocabulary 返回当前生效的意图词表（内置+自定义+启用插件声明；插件
+// 分类兜底的校验依据，M7-W4——词表外 intent 不采纳）。nil 接收者安全。
 func (c *IntentChain) Vocabulary() []string {
 	if c == nil {
 		return nil
@@ -103,6 +112,11 @@ func (c *IntentChain) Vocabulary() []string {
 	out := append([]string(nil), classify.BuiltinIntents...)
 	for _, def := range intentsOf(strategy) {
 		out = append(out, def.ID)
+	}
+	if c.pluginIntents != nil {
+		for _, ir := range c.pluginIntents() {
+			out = append(out, ir.ID)
+		}
 	}
 	return out
 }

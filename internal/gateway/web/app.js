@@ -228,8 +228,6 @@ function formModal(title, bodyHTML, onSubmit) {
 }
 
 const formVals = (form) => Object.fromEntries(new FormData(form).entries());
-const lines = (s) => (s || '').split('\n').map((x) => x.trim()).filter(Boolean);
-const compileCheck = (expr) => { try { new RegExp(expr); return null; } catch (e) { return e.message; } };
 
 // ---------- 骨架屏 ----------
 function skeleton(el, n = 4) {
@@ -762,11 +760,11 @@ function ensureProviders() {
   else loadProviders();
 }
 
-// ---------- 添加服务商（M9：预设 tile + 表单，走 providers 写路径） ----------
-// 与 CLI `provider add` 同语义：id 已存在 = 向其追加账号（账号名冲突拒
-// 绝），不存在 = 新建服务商；api_key 新明文经服务端 keepProviderKeys
-// 采纳（GET→PUT 往返不破坏现存密钥）。OAuth 订阅类不在此列（授权流在
-// 浏览器外，仍走 CLI add-oauth）。
+// ---------- 添加服务商（2026-11 定稿：无订阅预设 + 检测模型 + 模型勾选） ----------
+// 订阅类适配由社区插件提供（插件页先启用），此处只添加 API Key 类。
+// 「检测并获取模型」走 POST /api/provider/probe（服务端按协议请求上游
+// /models，api_key 仅进内存）。写入语义与 CLI add 同：id 已存在=追加
+// 备用 Key（同名账号拒绝），api_key 经服务端 keepProviderKeys 采纳。
 
 let presetsCache = null;
 
@@ -775,7 +773,7 @@ async function loadPresets() {
   try {
     presetsCache = await api('/api/provider-presets');
   } catch {
-    presetsCache = []; // 预设拉取失败不阻塞：自定义表单仍可用
+    presetsCache = []; // 预设拉取失败不阻塞：手动接入仍可用
   }
   return presetsCache;
 }
@@ -788,94 +786,189 @@ const PROTOCOL_LABEL = {
 };
 
 async function addProviderModal() {
-  const presets = await loadPresets();
-  const tiles = [
-    ...presets.map((p) => `<button type="button" class="tile-p" data-preset="${esc(p.id)}">
+  const presets = (await loadPresets()).filter((p) => p.kind !== 'oauth');
+  const tiles = presets.map((p) =>
+    `<button type="button" class="tile-p" data-preset="${esc(p.id)}">
       <b>${esc(p.name)}</b>
       <span>${esc(PROTOCOL_LABEL[p.protocol] || p.protocol)}${p.note ? ` · ${esc(p.note)}` : ''}</span>
-    </button>`),
-    `<button type="button" class="tile-p custom" data-preset=""><b>自定义</b><span>手动填写全部字段</span></button>`,
-  ].join('');
-  const formHTML = `
-    <div class="tiles" id="ap-tiles">${tiles}</div>
-    ${frow('服务商 ID', `<input class="field mono" name="id" placeholder="如 deepseek" required>`)}
-    ${frow('显示名', `<input class="field" name="name" placeholder="默认同 ID">`)}
-    ${frow('协议', `<select class="field" name="protocol">
-      ${Object.entries(PROTOCOL_LABEL).map(([v, l]) => `<option value="${v}">${v}（${l}）</option>`).join('')}
-    </select>`)}
-    ${frow('Base URL', `<input class="field mono" name="base_url" placeholder="https://api.example.com/v1" required>`, '上游完整前缀；网关按协议追加 /chat/completions、/v1/messages 等')}
-    ${frow('API Key', `<input class="field mono" name="api_key" type="password" autocomplete="new-password" placeholder="sk-…（仅存本机 providers.json）" required>`)}
-    ${frow('账号名', `<input class="field mono" name="account" value="main" required>`)}
-    ${frow('账号代理', `<input class="field mono" name="proxy" placeholder="可选；http(s)/socks5(h)://… 或 direct">`)}
-    ${frow('服务商代理', `<input class="field mono" name="provider_proxy" placeholder="可选；账号未配置时继承">`)}
-    ${frow('最大并发', `<input class="field" name="max_concurrent" type="number" min="0" step="1" placeholder="0 = 不限">`)}`;
+    </button>`).join('');
+  const body =
+    `<div class="ap-subhint"><span>Claude / Codex / Gemini 订阅的适配由社区插件提供：先到「插件」页启用对应订阅适配，并在那里添加账号。此处只添加 API Key 类服务商。</span>` +
+    `<button type="button" class="text add" data-act-go-plugins>去插件页</button></div>` +
+    `<div class="tiles" id="ap-tiles">${tiles}</div>` +
+    `<div class="after-list" style="margin:0 2px 8px"><button type="button" class="text add" id="ap-custom">手动接入（预设外的中转 / 自建网关）</button></div>` +
+    `<div class="ap-note" id="ap-note">选一个预设 → 粘贴 API Key → 检测 → 勾选要启用的模型 → 添加；预设外的上游用「手动接入」。</div>` +
+    `<div id="ap-keywrap">` +
+    frow('API Key', `<div class="key-probe"><input class="field mono" name="api_key" type="password" autocomplete="new-password" placeholder="sk-…（仅存本机 providers.json）" required>` +
+      `<button type="button" class="text add" id="ap-probe">检测并获取模型</button></div>`) +
+    `</div>` +
+    `<div class="ap-models" id="ap-models" hidden></div>` +
+    `<div id="ap-netwrap">` +
+    frow('网络', `<div class="net-pick"><select class="field" name="netmode">` +
+      `<option value="inherit">跟随全局代理</option>` +
+      `<option value="direct">直连（不走代理）</option>` +
+      `<option value="custom">自定义代理…</option></select>` +
+      `<input class="field mono" name="neturl" placeholder="http(s)/socks5(h)://…" hidden></div>`,
+      '全局代理在「总览 → 设置」配置一次；这里只选是否走它') +
+    `</div>` +
+    `<details class="ap-adv" id="ap-adv" hidden><summary>` +
+    `<svg class="chev" viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="m6.5 4.5 3 3.5-3 3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>` +
+    `高级选项（预设已自动填写，一般无需改动）</summary><div class="ap-adv-body">` +
+    frow('服务商 ID', `<input class="field mono" name="id" placeholder="如 deepseek" required>`) +
+    frow('显示名', `<input class="field" name="name" placeholder="默认同 ID">`) +
+    frow('协议', `<select class="field" name="protocol">` +
+      Object.entries(PROTOCOL_LABEL).map(([v, l]) => `<option value="${v}">${v}（${l}）</option>`).join('') +
+      `</select>`) +
+    frow('Base URL', `<input class="field mono" name="base_url" placeholder="https://api.example.com/v1" required>`, '上游完整前缀；网关按协议追加 /chat/completions、/v1/messages 等') +
+    frow('账号名', `<input class="field mono" name="account" value="main" required>`) +
+    frow('最大并发', `<input class="field" name="max_concurrent" type="number" min="0" step="1" placeholder="0 = 不限">`) +
+    `</div></details>`;
   const dlg = openDialog({
     title: '添加服务商',
-    body: formHTML,
+    body,
+    yes: '添加',
     onSubmit: async (form) => {
       const v = formVals(form);
       const id = v.id.trim();
       const accName = v.account.trim() || 'main';
       const key = v.api_key.trim();
       const baseURL = v.base_url.trim();
-      if (!id) throw new Error('服务商 ID 不能为空');
+      if (!id) throw new Error('服务商 ID 不能为空（选预设自动填，或展开高级选项手填）');
       if (!baseURL) throw new Error('Base URL 不能为空');
       if (!key) throw new Error('API Key 不能为空');
       if (parseInt(v.max_concurrent, 10) < 0) throw new Error('最大并发不能为负');
+      const box = q('#ap-models');
+      const models = (!box.hidden && box.querySelector('input[name=apmodel]'))
+        ? [...box.querySelectorAll('input[name=apmodel]:checked')].map((x) => x.value)
+        : [];
+      // 网络：跟随全局（空）/ 直连（direct）/ 自定义 URL
+      let proxy = '';
+      if (v.netmode === 'direct') proxy = 'direct';
+      else if (v.netmode === 'custom') {
+        proxy = (v.neturl || '').trim();
+        if (!proxy) throw new Error('选择自定义代理时需填写代理地址');
+      }
+      const acc = { name: accName, api_key: key };
+      if (parseInt(v.max_concurrent, 10) > 0) acc.max_concurrent = parseInt(v.max_concurrent, 10);
+      if (proxy) acc.proxy = proxy;
       const r = await putProvidersDoc((cur) => {
         const providers = cur.providers || [];
         const target = providers.find((p) => p.id === id);
         if (target) {
-          // 追加账号到已有服务商（CLI add 同语义；账号已存在时拒绝——
-          // 换账号名，或用 CLI add -replace 更新凭证）
+          // 追加账号到已有服务商（CLI add 同语义；账号已存在时拒绝）
           if ((target.accounts || []).some((a) => a.name === accName)) {
             throw new Error(`账号 ${id}/${accName} 已存在（换账号名，或用 CLI provider add -replace 更新凭证）`);
           }
-          target.accounts = [...(target.accounts || []), buildAccount(v, accName, key)];
-          if (v.provider_proxy.trim()) target.proxy = v.provider_proxy.trim();
-          if (baseURL && baseURL !== target.base_url) target.base_url = baseURL;
+          target.accounts = [...(target.accounts || []), acc];
+          if (models.length) {
+            const have = new Set((target.models || []).map((m) => m.id));
+            target.models = [...(target.models || []), ...models.filter((m) => !have.has(m)).map((m) => ({ id: m }))];
+          }
           return { ...cur, providers };
         }
         return { ...cur, providers: [...providers, {
           id, name: v.name.trim() || id,
           protocol: v.protocol,
           base_url: baseURL,
-          ...(v.provider_proxy.trim() ? { proxy: v.provider_proxy.trim() } : {}),
-          accounts: [buildAccount(v, accName, key)],
+          models: models.map((m) => ({ id: m })),
+          accounts: [acc],
         }] };
       });
-      status(`服务商已保存：${id}/${accName}（${r.effect === 'immediate' ? '已热生效' : r.effect}，写前备份已留底）`, 'ok');
+      status(`服务商已保存：${id}/${accName}${models.length ? `（含 ${models.length} 个模型）` : ''}（${r.effect === 'immediate' ? '已热生效' : r.effect}，写前备份已留底）`, 'ok');
       afterWrite();
     },
   });
   dlg.catch(() => {}); // 取消/关闭不算错误（吞掉未处理 rejection）
-  // 预设 tile 点选 → 预填（CLI add -preset 同语义：显式改动不被覆盖）
-  bindTiles($('modal-root'), presets);
-}
-
-function buildAccount(v, accName, key) {
-  const acc = { name: accName, api_key: key };
-  if (parseInt(v.max_concurrent, 10) > 0) acc.max_concurrent = parseInt(v.max_concurrent, 10);
-  if (v.proxy.trim()) acc.proxy = v.proxy.trim();
-  return acc;
-}
-
-// bindTiles 预设点选预填：id/name/protocol/base_url，自定义 tile 清空。
-function bindTiles(root, presets) {
-  const tiles = root.querySelector('#ap-tiles');
-  const form = tiles.closest('form');
-  tiles.addEventListener('click', (e) => {
+  const root = q('#modal-root .dialog:last-child');
+  const tilesEl = root.querySelector('#ap-tiles');
+  const form = root.querySelector('form');
+  const probeBtn = root.querySelector('#ap-probe');
+  const noteEl = root.querySelector('#ap-note');
+  const adv = root.querySelector('#ap-adv');
+  const set = (name, val) => { form.elements[name].value = val; };
+  // 「去插件页」：关弹窗并切视图
+  root.querySelector('[data-act-go-plugins]').addEventListener('click', () => {
+    root.closest('.modal-back')?.remove();
+    show('plugins');
+  });
+  // 预设点选 → 预填（CLI add -preset 同语义：显式改动不被覆盖）
+  tilesEl.addEventListener('click', (e) => {
     const t = e.target.closest('.tile-p');
     if (!t) return;
-    tiles.querySelectorAll('.tile-p.on').forEach((x) => x.classList.remove('on'));
+    tilesEl.querySelectorAll('.tile-p.on').forEach((x) => x.classList.remove('on'));
     t.classList.add('on');
     const p = presets.find((x) => x.id === t.dataset.preset);
-    const set = (name, val) => { form.elements[name].value = val; };
-    if (!p) { set('id', ''); set('name', ''); set('base_url', ''); return; }
-    set('id', p.id);
-    set('name', p.name);
-    set('protocol', p.protocol);
-    set('base_url', p.base_url);
+    const box = root.querySelector('#ap-models');
+    box.hidden = true; box.innerHTML = '';
+    probeBtn.disabled = false; probeBtn.textContent = '检测并获取模型';
+    set('id', p.id); set('name', p.name); set('protocol', p.protocol); set('base_url', p.base_url);
+    const ex = (cache.providers?.providers || []).find((x) => x.id === p.id);
+    if (ex) {
+      // 预设命中已有服务商：追加备用 Key，账号名可编辑
+      set('name', ex.name || ex.id); set('protocol', ex.protocol); set('base_url', ex.base_url);
+      adv.hidden = false; adv.open = true;
+      noteEl.textContent = `${p.name} 已存在：将向其追加备用 Key，可改账号名后检测添加。`;
+    } else {
+      adv.hidden = true; adv.open = false; // 纯 Key 预设：技术字段全部自动，不展示
+      noteEl.textContent = `已选预设 ${p.name}：粘贴 API Key → 检测 → 勾选模型 → 添加。`;
+    }
+    form.elements.api_key.focus();
+  });
+  // 手动接入：清空预填 + 展开高级选项
+  root.querySelector('#ap-custom').addEventListener('click', () => {
+    tilesEl.querySelectorAll('.tile-p.on').forEach((x) => x.classList.remove('on'));
+    const box = root.querySelector('#ap-models');
+    box.hidden = true; box.innerHTML = '';
+    probeBtn.disabled = false; probeBtn.textContent = '检测并获取模型';
+    set('id', ''); set('name', ''); set('base_url', '');
+    adv.hidden = false; adv.open = true;
+    noteEl.textContent = '手动接入：填写协议与 Base URL，粘贴 Key 后检测模型（任意 OpenAI 兼容上游均可）。';
+    form.elements.id.focus();
+  });
+  // 网络：选「自定义代理」时出现 URL 输入
+  const netmode = form.elements.netmode, neturl = form.elements.neturl;
+  netmode.addEventListener('change', () => {
+    neturl.hidden = netmode.value !== 'custom';
+    if (!neturl.hidden) neturl.focus();
+  });
+  // 检测：验证凭证并拉取模型清单（POST /api/provider/probe）
+  probeBtn.addEventListener('click', async () => {
+    const errEl = root.querySelector('.modal-err');
+    if (errEl) errEl.textContent = '';
+    const key = form.elements.api_key.value.trim();
+    if (!key) { if (errEl) errEl.textContent = '先粘贴 API Key 再检测'; form.elements.api_key.focus(); return; }
+    probeBtn.disabled = true; probeBtn.textContent = '检测中…';
+    const box = root.querySelector('#ap-models');
+    box.hidden = false;
+    box.innerHTML = '<div class="ap-probing">正在验证凭证并拉取模型清单…（密钥错误会在这里报出）</div>';
+    try {
+      const r = await api('/api/provider/probe', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ protocol: form.elements.protocol.value, base_url: form.elements.base_url.value.trim(), api_key: key }),
+      });
+      const list = r.models || [];
+      if (!list.length) {
+        box.innerHTML = '<div class="ap-probing">上游未返回模型清单（可跳过检测直接添加，模型稍后经「路由」使用时再确认）。</div>';
+      } else {
+        box.innerHTML =
+          '<div class="ap-models-head"><span>支持的模型（' + list.length + '）</span>' +
+          '<button type="button" class="text" data-sel="all">全选</button>' +
+          '<button type="button" class="text" data-sel="none">清空</button></div>' +
+          list.map((m) => '<label class="ap-model"><input type="checkbox" name="apmodel" value="' + esc(m) + '" checked><code>' + esc(m) + '</code></label>').join('');
+        noteEl.textContent = '凭证有效，已拉取 ' + list.length + ' 个模型——勾选要启用的模型（默认全选），点「添加」完成。';
+      }
+      probeBtn.disabled = false; probeBtn.textContent = '重新检测';
+    } catch (e) {
+      box.hidden = true; box.innerHTML = '';
+      probeBtn.disabled = false; probeBtn.textContent = '检测并获取模型';
+      if (errEl) errEl.textContent = '检测失败：' + e.message;
+      else status('检测失败: ' + e.message, 'err');
+    }
+  });
+  root.querySelector('#ap-models').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-sel]');
+    if (!b) return;
+    root.querySelectorAll('#ap-models input[name=apmodel]').forEach((x) => { x.checked = b.dataset.sel === 'all'; });
   });
 }
 
@@ -894,106 +987,142 @@ async function removeAccount(provID, accName) {
   afterWrite();
 }
 
-// ---------- 路由（行卡片构造） ----------
+// ---------- 路由（融合视图：意图 = 一条有序调用链，2026-11 原型定稿） ----------
+// 底层逻辑（关键词/正则/优先级）由网关内置，UI 只暴露「意图 → 调用链」
+// 一个动作。落地映射（后端契约不变）：每条链 = 隐式组（chain-<意图>）+
+// 规则引用；兜底 = 无条件规则 → chain-fallback。CLI 的 groups/rules 完整
+// 契约保留；UI 之外的既有规则不受影响（编辑仅改 target）。
 
 const STRATEGY_LABEL = {
   order: '固定顺序', rotate: '每请求轮换', smart: '按剩余额度',
-  usage: '当日用量均衡', weight: '平滑加权轮询',
+  usage: '当日用量均衡', weight: '平滑加权',
+};
+const STRATEGY_OPTION = {
+  smart: '按剩余额度分配（推荐）', order: '顺序用尽再换',
+  rotate: '每次请求轮换', usage: '当日用量均衡',
+};
+const ORDER_HINTS = {
+  order: '成员顺序即调用顺序：1 号优先，额度用尽或故障才落到下一个',
+  smart: '按各账号剩余额度自动分配，勾选顺序不影响分配',
+  rotate: '每次请求轮流使用各成员，顺序仅作起始次序',
+  usage: '按当日用量均衡分配，谁用得少谁上；顺序不生效',
 };
 
-const ruleCond = (r) => {
-  const parts = [];
-  if (r.intent) parts.push('意图=' + r.intent);
-  if (r.regex) parts.push('正则 /' + r.regex + '/');
-  if (r.max_tokens) parts.push('≤' + r.max_tokens + ' tokens');
-  if (r.caller_key) parts.push('caller=' + r.caller_key);
-  return parts.join(' · ') || '（兜底）';
-};
+// 内置意图定义（前端写死，随版本发布；关键词/正则/优先级在网关侧）。
+// long-context / vision 的网关判定随后续版本落地，先开放配置——提前配
+// 链，判定就绪即生效。
+const INTENT_DEFS = [
+  { id: 'coding', label: '编程', desc: '写代码、改代码、评审、测试等开发任务',
+    rec: '建议配 2~3 个模型的调用链：多模型自动容灾，额度不会卡死在一个账号上' },
+  { id: 'qa', label: '问答', desc: '知识问答、解释、查资料等轻任务',
+    rec: '便宜快速的模型就够；用量大时配一条低价链更省额度' },
+  { id: 'writing', label: '写作', desc: '文案、文档、润色等长文任务',
+    rec: '选输出质量好的模型；写作量大时同样建议配链' },
+  { id: 'long-context', label: '长上下文', desc: '超长文件 / 仓库级分析，优先大窗口模型',
+    rec: '选上下文窗口最大的模型；单一模型即可' },
+  { id: 'vision', label: '图片理解', desc: '带截图或图片输入的任务',
+    rec: '必须选支持图片输入的模型——纯文本模型会让请求失败' },
+];
 
-// memberValid：组成员引用有效性标注。
+// 成员显示名：'glm/glm-4.6@main' → 'glm-4.6@main'；'deepseek' → 'deepseek'
+function memberLabel(m) {
+  const at = (m || '').indexOf('@');
+  const head = at >= 0 ? m.slice(0, at) : m;
+  const slash = head.indexOf('/');
+  const body = slash >= 0 ? head.slice(slash + 1) : head;
+  return at >= 0 ? body + '@' + m.slice(at + 1) : body;
+}
+
+// 行内有效性标注（与后端 validateMember 同规）。
 function memberValid(m, provs, groups) {
   if ((m || '').startsWith('group/')) {
-    const ok = groups.has(m.slice(6));
-    return ok ? '' : ' <span class="pill prefail">组不存在</span>';
+    return groups.has(m.slice(6)) ? '' : ' <span class="pill prefail">组不存在</span>';
   }
-  const [provID, model] = (m || '').split('/');
-  const p = provs.find((x) => x.id === provID);
+  const at = (m || '').indexOf('@');
+  const head = at >= 0 ? m.slice(0, at) : m;
+  const acc = at >= 0 ? m.slice(at + 1) : '';
+  const slash = head.indexOf('/');
+  const provID = slash >= 0 ? head.slice(0, slash) : head;
+  const model = slash >= 0 ? head.slice(slash + 1) : '';
+  const p = (provs || []).find((x) => x.id === provID);
   if (!p) return ' <span class="pill prefail">服务商不存在</span>';
+  if (acc && !(p.accounts || []).some((a) => a.name === acc)) return ' <span class="pill prefail">账号不存在</span>';
   if (model && (p.models || []).length && !p.models.some((mm) => mm.id === model)) {
     return ' <span class="pill warn">模型不在清单</span>';
   }
   return '';
 }
 
-const listEmpty = (msg) => `<div class="empty-state">${esc(msg)}</div>`;
-
 async function loadRouting() {
   try {
-    const [state, rules, keys, intents, provCfg] = await Promise.all([
-      api('/api/state'), api('/api/config/rules'),
-      api('/api/config/keys'), api('/api/config/intents'),
+    const [state, rules, intents, plugViews, provCfg] = await Promise.all([
+      api('/api/state'), api('/api/config/rules'), api('/api/config/intents'),
+      api('/api/plugins').catch(() => ({ plugins: [] })),
       cache.providers ? Promise.resolve(cache.providers) : api('/api/config/providers'),
     ]);
-    cache.rules = rules;
     cache.providers = provCfg;
+    cache.rules = rules;
     const provs = provCfg.providers || [];
     const groupIDs = new Set((state.groups || []).map((g) => g.id));
 
-    $('list-groups').innerHTML = (state.groups || []).map((g) => `
-      <div class="row">
-        <div class="who">
-          <div class="name"><code>${esc(g.id)}</code> <span class="pill">${esc(STRATEGY_LABEL[g.strategy] || g.strategy)}</span></div>
-          <div class="sub wrap">成员：${(g.members || []).map((m) => `<code>${esc(m)}</code>${memberValid(m, provs, groupIDs)}`).join(' ') || '—'}</div>
-        </div>
-        <div class="row-acts">
-          <button type="button" class="text edit" data-g="${esc(g.id)}">编辑</button>
-          <button type="button" class="text del" data-g="${esc(g.id)}">删除</button>
-        </div>
-      </div>`).join('') || listEmpty('未配置路由组');
+    // 链状态反推：规则（intent=X 精确 / 无条件=兜底）→ target=group/<id>
+    // → 组成员与策略；直连 target（provider/model[/@account]）显示为单成员链。
+    const chainOf = {};
+    for (const r of (rules.rules || [])) {
+      const plain = !r.intent && !r.regex && !r.max_tokens && !r.caller_key;
+      const key = plain ? 'fallback' : (r.intent || '');
+      if (!key || chainOf[key]) continue;
+      if ((r.target || '').startsWith('group/')) {
+        const g = (state.groups || []).find((x) => x.id === r.target.slice(6));
+        if (g) chainOf[key] = { rule: r, group: g };
+      } else {
+        chainOf[key] = { rule: r, group: null, members: [r.target] };
+      }
+    }
+    cache.chainOf = chainOf;
 
-    $('list-rules').innerHTML = (rules.rules || []).map((r) => `
-      <div class="row">
-        <div class="who">
-          <div class="name"><code>${esc(r.id)}</code> <span class="muted2">${esc(r.desc || '')}</span></div>
-          <div class="sub">${esc(ruleCond(r))}</div>
-        </div>
-        <code>${esc(r.target)}</code>
-        <span class="muted2" title="命中次数">${r.hits || 0} 次</span>
-        <div class="row-acts">
-          <button type="button" class="text edit" data-r="${esc(r.id)}">编辑</button>
-          <button type="button" class="text del" data-r="${esc(r.id)}">删除</button>
-        </div>
-      </div>`).join('') || listEmpty('未配置规则');
+    // 插件声明意图（enabled + granted classify.intent，GET /api/plugins 已过滤口径）
+    const pluginDefs = (plugViews.plugins || []).filter((p) => p.enabled && (p.intents || []).length)
+      .flatMap((p) => p.intents.map((i) => ({ ...i, via: p.id })));
+    const customDefs = (intents.intents || []).map((d) => ({ id: d.id, label: d.label || d.id, desc: '用户自定义意图（CLI / intents.json 维护）', via: 'custom' }));
 
-    $('list-keys').innerHTML = (keys.bindings || []).map((b) => `
-      <div class="row">
-        <div class="who">
-          <div class="name"><code>${esc(b.key)}</code></div>
-          <div class="sub">默认模型 <code>${esc(b.default_model)}</code></div>
-        </div>
-      </div>`).join('') || listEmpty('未配置绑定');
-
-    $('list-intents').innerHTML = (intents.intents || []).map((d) => `
-      <div class="row">
-        <div class="who">
-          <div class="name"><code>${esc(d.id)}</code> ${d.label ? esc(d.label) : ''}</div>
-          <div class="sub wrap">${esc((d.keywords || []).join('、') || (d.regexes || []).join('；')) || '<span class="muted2">无关键词（仅示例句 few-shot）</span>'}</div>
-        </div>
-        <span class="muted2">优先级 ${d.priority || 0}</span>
-        <div class="row-acts">
-          <button type="button" class="text edit" data-i="${esc(d.id)}">编辑</button>
-          <button type="button" class="text del" data-i="${esc(d.id)}">删除</button>
-        </div>
-      </div>`).join('') || listEmpty('无自定义意图（仅内置 L0/L1）');
+    const rows = INTENT_DEFS.map((d) => chainRow(d, chainOf[d.id], provs, groupIDs));
+    for (const d of pluginDefs) rows.push(chainRow(d, chainOf[d.id], provs, groupIDs, '插件'));
+    for (const d of customDefs) rows.push(chainRow(d, chainOf[d.id], provs, groupIDs, '自定义'));
+    rows.push(chainRow(
+      { id: 'fallback', label: '兜底', desc: '未命中任何意图的请求走这里' },
+      chainOf.fallback, provs, groupIDs));
+    $('list-intents').innerHTML = rows.join('');
   } catch (e) {
     status('路由页加载失败: ' + e.message, 'err');
-    ['list-groups', 'list-rules', 'list-keys', 'list-intents'].forEach((id) => {
-      if (!$(id).innerHTML) $(id).innerHTML = errBox('加载失败: ' + e.message, 'routing');
-    });
+    if (!$('list-intents').innerHTML) $('list-intents').innerHTML = errBox('加载失败: ' + e.message, 'routing');
   }
 }
 
+function chainRow(d, chain, provs, groupIDs, viaBadge) {
+  const members = chain?.group ? chain.group.members : (chain?.members || []);
+  const strategy = chain?.group ? chain.group.strategy : '';
+  const has = members.length > 0;
+  const hits = (chain?.rule || {}).hits || 0;
+  const via = viaBadge
+    ? `<span class="pill oauth" title="${viaBadge === '插件' ? '由插件 ' + esc(d.via) + ' 声明（classify.intent）' : '用户自定义意图（intents.json）'}">${esc(viaBadge)}</span>` : '';
+  return `<div class="row"><div class="who">
+    <div class="name">${esc(d.label)} <code>${esc(d.id)}</code>${via}</div>
+    <div class="sub">${esc(d.desc || '')}${d.via && viaBadge === '插件' ? ' · 由插件 ' + esc(d.via) + ' 提供分类' : ''}</div></div>` +
+    (has
+      ? `<div class="chain-preview"><span class="pill">${esc(STRATEGY_LABEL[strategy] || strategy || '—')}</span>` +
+        members.map((m, i) => `<span class="ord-chip mini" title="${esc(m)}"><b>${i + 1}</b><code>${esc(memberLabel(m))}</code></span>${memberValid(m, provs, groupIDs)}`).join('') +
+        `</div>`
+      : `<span class="muted2" style="flex:none">未配置</span>`) +
+    (hits ? `<span class="muted2" title="命中次数">${hits} 次</span>` : '') +
+    `<div class="row-acts" style="opacity:1">
+      <button type="button" class="text add" data-chain="${esc(d.id)}" data-label="${esc(d.label || d.id)}" data-rec="${esc(d.rec || d.desc || '')}">${has ? '编辑链' : '＋ 配置调用链'}</button>
+    </div></div>`;
+}
+
 // ---------- 写路径（M2-W3 契约不变）：fresh GET → 修改 → PUT ----------
+
+const listEmpty = (msg) => `<div class="empty-state">${esc(msg)}</div>`;
 
 // providers 全文档写回：fresh GET → mutator 修改 → PUT（服务端保留密钥）
 async function putProvidersDoc(mutator) {
@@ -1014,15 +1143,22 @@ async function afterWrite() {
   if (!q('#page-routing').hidden) loadRouting();
 }
 
-// 客户端成员校验（与服务端 validateProviders/validateMember 同规）
+// 客户端成员校验（与服务端 validateProviders/validateMember 同规：
+// provider/model、provider/model@account、provider、group/<id>）
 function memberClientCheck(m, provs, otherGroupIDs) {
   if (!m) return '成员引用为空';
   if (m.startsWith('group/')) {
     return otherGroupIDs.has(m.slice(6)) ? null : `引用的组 ${m} 不存在`;
   }
-  const [provID, model] = m.split('/');
+  const at = m.indexOf('@');
+  const head = at >= 0 ? m.slice(0, at) : m;
+  const acc = at >= 0 ? m.slice(at + 1) : '';
+  const slash = head.indexOf('/');
+  const provID = slash >= 0 ? head.slice(0, slash) : head;
+  const model = slash >= 0 ? head.slice(slash + 1) : '';
   const p = provs.find((x) => x.id === provID);
   if (!p) return `成员 ${m} 引用的服务商不存在`;
+  if (acc && !(p.accounts || []).some((a) => a.name === acc)) return `账号 ${acc} 不在 ${provID} 中`;
   if (model && (p.models || []).length && !p.models.some((mm) => mm.id === model)) {
     return `模型 ${model} 不在 ${provID} 的清单内`;
   }
@@ -1032,183 +1168,226 @@ function memberClientCheck(m, provs, otherGroupIDs) {
 const frow = (label, field, hint) =>
   `<div class="frow"><span>${label}</span>${field}${hint ? `<div class="hint">${hint}</div>` : ''}</div>`;
 
-function groupModal(existing) {
-  const isEdit = !!existing;
-  formModal(isEdit ? `编辑路由组 ${existing.id}` : '新建路由组',
-    frow('组 ID', `<input class="field mono" name="id" value="${esc(existing?.id || '')}" ${isEdit ? 'readonly' : ''} required>`) +
-    frow('策略', `<select class="field" name="strategy">
-      <option value="order"${existing?.strategy === 'order' ? ' selected' : ''}>order（固定顺序，用尽再换）</option>
-      <option value="rotate"${existing?.strategy === 'rotate' ? ' selected' : ''}>rotate（每请求轮换）</option>
-      <option value="smart"${existing?.strategy === 'smart' ? ' selected' : ''}>smart（按剩余额度比例）</option>
-      <option value="usage"${existing?.strategy === 'usage' ? ' selected' : ''}>usage（当日用量升序，负载均衡）</option>
-      <option value="weight"${existing?.strategy === 'weight' ? ' selected' : ''}>weight（平滑加权轮询）</option>
-    </select>`) +
-    frow('成员', `<textarea class="field mono" name="members" rows="4">${esc((existing?.members || []).join('\n'))}</textarea>`,
-      '成员格式 provider/model、provider（取其清单）或 group/&lt;id&gt;，每行一个；顺序即 order 策略的顺序') +
-    frow('权重', `<input class="field mono" name="weights" value="${esc(Object.entries(existing?.weights || {}).map(([k, v]) => `${k}=${v}`).join(', '))}" placeholder="键=权重，逗号分隔">`,
-      '仅 weight 策略生效，缺省 1；键支持 provider/account · provider/model · provider'),
-  async (form) => {
-    const v = formVals(form);
-    const id = v.id.trim();
-    if (!id) throw new Error('组 ID 不能为空');
-    const members = lines(v.members);
-    if (!members.length) throw new Error('至少需要一个成员');
-    let weights;
-    if (v.strategy === 'weight') {
-      weights = {};
-      for (const pair of (v.weights || '').split(',')) {
-        const t = pair.trim();
-        if (!t) continue;
-        const [k, w] = t.split('=').map((x) => x.trim());
-        const n = parseInt(w, 10);
-        if (!k || !Number.isInteger(n) || n <= 0) throw new Error(`权重项非法: "${t}"（应为 键=正整数）`);
-        weights[k] = n;
+// 服务商的 Key/账号归属摘要（选择器里让用户看清「谁在服务」）
+function provMetaText(p, state) {
+  const n = (p.accounts || []).length;
+  let s = n ? `${n} 个账号` : '无账号';
+  const resting = Object.keys(state.resting || {}).filter((k) => k.startsWith(p.id + '/')).length +
+    (state.exhausted || []).filter((k) => k.startsWith(p.id + '/')).length;
+  if (resting) s += ` · ${resting} 个休眠中`;
+  return s;
+}
+
+// 推荐成员（前端启发式）：第一个有模型清单的服务商的第一个模型
+function recMember(provs) {
+  const p = (provs || []).find((x) => (x.models || []).length);
+  return p ? `${p.id}/${p.models[0].id}` : '';
+}
+
+// 隐式组 ID（UI 生成的链组统一 chain- 前缀；用户同名组直接复用）
+const chainGroupID = (intentId) => 'chain-' + intentId;
+
+// 调用链编辑器（融合后唯一的分配交互）：策略 + 有序成员（模型@账号
+// 席位，勾选先后即优先级；分组头「全选」勾齐该商全部席位、半选态可见）。
+function intentChainModal(intentId, label, recHint) {
+  const provs = cache.providers?.providers || [];
+  const chain = (cache.chainOf || {})[intentId] || {};
+  const curStrategy = chain.group?.strategy || 'smart';
+  const curMembers = chain.group?.members || chain.members || [];
+  // 直连目标（provider/model）进编辑器后转为链成员；group/ 引用不进编辑
+  let picked = curMembers.filter((m) => !m.startsWith('group/'));
+  const rec = recMember(provs);
+  const dlg = openDialog({
+    title: `调用链 · ${label}`,
+    body:
+      `<div class="pick-hint"><span>${esc(recHint || '未命中任何意图的请求走这里；建议配最稳的模型或链')}</span>` +
+      (rec && !picked.includes(rec) ? `<button type="button" class="text add" id="pick-rec">一键加入推荐 ${esc(memberLabel(rec))}</button>` : '') +
+      `</div>` +
+      frow('分配策略', `<select class="field" name="strategy">` +
+        Object.entries(STRATEGY_OPTION).map(([v, l]) =>
+          `<option value="${v}"${curStrategy === v ? ' selected' : ''}>${l}</option>`).join('') +
+        `</select>`) +
+      `<div class="frow"><span>成员与顺序</span><div class="pick-order" id="pick-order"></div>` +
+      `<div class="hint" id="pick-order-hint"></div>` +
+      `<div class="pick-provs" id="pick-provs"></div>` +
+      `<div class="hint">成员精确到「模型@账号」——哪个模型、走哪把 Key，一目了然；勾「全选」= 该商全部席位（此后新增的模型不自动加入）。休眠/耗尽的席位自动跳过，勾选先后即优先级；清空保存 = 该意图走兜底。</div></div>`,
+    yes: '保存',
+    onSubmit: async (form) => {
+      const v = formVals(form);
+      // 整商成员吸收该商细选席位；保持已选顺序；空 = 走兜底
+      const wholes = picked.filter((m) => !m.includes('/') && !m.includes('@'));
+      const members = picked.filter((m) => !(m.includes('/') && !m.includes('@') && wholes.includes(m.split('/')[0])));
+      for (const m of members) {
+        const err = memberClientCheck(m, provs, new Set());
+        if (err) throw new Error(err);
       }
+      await saveIntentChain(intentId, v.strategy, members);
+    },
+  });
+  dlg.catch(() => {});
+  const root = q('#modal-root .dialog:last-child');
+  const state = cache.state || {};
+
+  function renderCandidates() {
+    root.querySelector('#pick-provs').innerHTML = provs.map((p) => {
+      const accs = (p.accounts || []).length ? p.accounts : [{ name: '' }];
+      const chips = accs.map((a) => (p.models || []).map((m) => {
+        const val = a.name ? `${p.id}/${m.id}@${a.name}` : `${p.id}/${m.id}`;
+        return `<label class="pick-chip"><input type="checkbox" value="${esc(val)}"${picked.includes(val) ? ' checked' : ''}><code>${esc(m.id)}${a.name ? `<i class="at">@${esc(a.name)}</i>` : ''}</code></label>`;
+      }).join('')).join('');
+      return `<div class="pick-prov"><b>${esc(p.name || p.id)}<span class="pick-meta">${esc(provMetaText(p, state))}</span></b>` +
+        `<label class="pick-chip whole"><input type="checkbox" data-selall="${esc(p.id)}">全选</label>` +
+        `<div class="chips">${chips || '<span class="muted2">清单为空（检测后生成）</span>'}</div></div>`;
+    }).join('');
+    syncSelAll(root, picked);
+    root.querySelectorAll('#pick-provs input[type=checkbox]:not([data-selall])').forEach((inp) => {
+      inp.checked = picked.includes(inp.value);
+    });
+  }
+  function updateHint() {
+    root.querySelector('#pick-order-hint').textContent =
+      ORDER_HINTS[root.querySelector('select[name=strategy]').value] || '';
+  }
+  function renderPicked() {
+    const box = root.querySelector('#pick-order');
+    box.innerHTML = picked.length
+      ? picked.map((m, i) =>
+        `<span class="ord-chip"><b>${i + 1}</b><code>${esc(memberLabel(m))}</code>` +
+        `<button type="button" class="ord-mv" data-i="${i}" data-d="-1"${i === 0 ? ' disabled' : ''} aria-label="上移">↑</button>` +
+        `<button type="button" class="ord-mv" data-i="${i}" data-d="1"${i === picked.length - 1 ? ' disabled' : ''} aria-label="下移">↓</button>` +
+        `<button type="button" class="ord-x" data-i="${i}" aria-label="移除">×</button></span>`).join('')
+      : `<span class="muted2">尚未选择成员——在下方勾选（留空保存 = 走兜底）</span>`;
+    root.querySelectorAll('#pick-provs input[type=checkbox]:not([data-selall])').forEach((inp) => {
+      inp.checked = picked.includes(inp.value);
+    });
+    syncSelAll(root, picked);
+    updateHint();
+  }
+  root.querySelector('#pick-provs').addEventListener('change', (e) => {
+    const inp = e.target;
+    if (!inp || inp.type !== 'checkbox') return;
+    if (inp.dataset.selall) {
+      // 全选：勾齐/清空该服务商全部席位（追加顺序按 chip 排列）
+      const pid = inp.dataset.selall;
+      const vals = [...root.querySelectorAll('#pick-provs input[type=checkbox]:not([data-selall])')]
+        .filter((x) => x.value.startsWith(pid + '/')).map((x) => x.value);
+      if (inp.checked) vals.forEach((v) => { if (!picked.includes(v)) picked.push(v); });
+      else picked = picked.filter((m) => !vals.includes(m));
+      renderPicked();
+      return;
     }
-    const r = await putProvidersDoc((cur) => {
+    if (!inp.value) return;
+    if (inp.checked) { if (!picked.includes(inp.value)) picked.push(inp.value); }
+    else picked = picked.filter((m) => m !== inp.value);
+    renderPicked();
+  });
+  root.querySelector('#pick-order').addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    const i = Number(b.dataset.i);
+    if (b.classList.contains('ord-x')) picked.splice(i, 1);
+    else if (b.classList.contains('ord-mv')) {
+      const j = i + Number(b.dataset.d);
+      if (j < 0 || j >= picked.length) return;
+      [picked[i], picked[j]] = [picked[j], picked[i]];
+    } else return;
+    renderPicked();
+  });
+  root.querySelector('select[name=strategy]').addEventListener('change', updateHint);
+  root.querySelector('#pick-rec')?.addEventListener('click', () => {
+    if (!rec || picked.includes(rec)) return;
+    picked.push(rec);
+    renderCandidates();
+    renderPicked();
+  });
+  renderCandidates();
+  renderPicked();
+}
+
+// 分组头全选框同步（含半选态）
+function syncSelAll(root, picked) {
+  root.querySelectorAll('#pick-provs input[data-selall]').forEach((inp) => {
+    const pid = inp.dataset.selall;
+    const vals = [...root.querySelectorAll('#pick-provs input[type=checkbox]:not([data-selall])')]
+      .filter((x) => x.value.startsWith(pid + '/')).map((x) => x.value);
+    const on = vals.filter((v) => picked.includes(v)).length;
+    inp.checked = vals.length > 0 && on === vals.length;
+    inp.indeterminate = on > 0 && on < vals.length;
+  });
+}
+
+// 保存调用链 = 隐式组 + 规则双写（providers groups + rules，均 fresh
+// GET → 修改 → PUT，写前备份+审计由服务端统一处理）。
+async function saveIntentChain(intentId, strategy, members) {
+  const isFallback = intentId === 'fallback';
+  const gid = chainGroupID(intentId);
+  if (members.length) {
+    // 1. 组：建/改（chain- 前缀组；同名用户组复用）
+    await putProvidersDoc((cur) => {
       const groups = cur.groups || [];
-      const otherIDs = new Set(groups.filter((g) => g.id !== id).map((g) => g.id));
-      if (otherIDs.has(id)) throw new Error(`组 ID ${id} 已存在`);
+      const otherIDs = new Set(groups.filter((g) => g.id !== gid).map((g) => g.id));
       for (const m of members) {
         const err = memberClientCheck(m, cur.providers || [], otherIDs);
         if (err) throw new Error(err);
       }
-      const g = { id, strategy: v.strategy, members };
-      if (weights && Object.keys(weights).length) g.weights = weights;
-      const idx = groups.findIndex((x) => x.id === id);
+      const g = { id: gid, strategy, members };
+      const idx = groups.findIndex((x) => x.id === gid);
       if (idx >= 0) groups[idx] = g; else groups.push(g);
       return { ...cur, groups };
     });
-    status(`路由组已保存（${r.effect === 'immediate' ? '已热生效' : r.effect}，写前备份已留底）`, 'ok');
-    afterWrite();
-  });
-}
-
-async function deleteGroup(id) {
-  const ok = await confirmModal(`删除路由组 ${id}`,
-    '引用它的规则/绑定会失去目标。当前文件将先备份到 backup/ 目录，可手工还原。');
-  if (!ok) return;
-  await putProvidersDoc((cur) => ({ ...cur, groups: (cur.groups || []).filter((g) => g.id !== id) }));
-  status('路由组已删除（写前备份已留底）', 'ok');
-  afterWrite();
-}
-
-const BUILTIN_INTENTS = ['coding', 'qa', 'writing'];
-
-async function refreshIntents() {
-  const r = await api('/api/config/intents');
-  return r.intents || [];
-}
-
-function intentDatalist(custom) {
-  const ids = [...BUILTIN_INTENTS, ...(custom || []).map((d) => d.id)];
-  return `<datalist id="dl-intents">${ids.map((i) => `<option value="${esc(i)}">`).join('')}</datalist>`;
-}
-
-async function ruleModal(existing) {
-  const isEdit = !!existing;
-  const customIntents = await refreshIntents(); // 词表注入 datalist（内置 + 自定义）
-  formModal(isEdit ? `编辑规则 ${existing.id}` : '新建规则',
-    frow('规则 ID', `<input class="field mono" name="id" value="${esc(existing?.id || '')}" ${isEdit ? 'readonly' : ''} required>`) +
-    frow('说明', `<input class="field" name="desc" value="${esc(existing?.desc || '')}">`) +
-    frow('意图条件', `<input class="field mono" name="intent" list="dl-intents" value="${esc(existing?.intent || '')}" placeholder="留空=不限">`) +
-    frow('正则条件', `<input class="field mono" name="regex" value="${esc(existing?.regex || '')}" placeholder="对最新用户消息原文匹配；留空=不限">`) +
-    frow('token 上限', `<input class="field" name="max_tokens" type="number" min="0" value="${existing?.max_tokens || ''}" placeholder="估算输入 ≤ 此值才命中；留空=不限">`) +
-    frow('调用方 key', `<input class="field mono" name="caller_key" value="${esc(existing?.caller_key || '')}" placeholder="如 gw-claude-code；留空=不限">`) +
-    frow('目标', `<input class="field mono" name="target" value="${esc(existing?.target || '')}" required placeholder="provider/model · provider · group/&lt;id&gt;">`) +
-    intentDatalist(customIntents),
-  async (form) => {
-    const v = formVals(form);
-    const id = v.id.trim();
-    if (!id) throw new Error('规则 ID 不能为空');
-    const target = v.target.trim();
-    if (!target) throw new Error('目标不能为空');
-    if (v.regex.trim()) {
-      const err = compileCheck(v.regex.trim());
-      if (err) throw new Error('正则非法: ' + err);
-    }
+    // 2. 规则：intent 链=精确意图规则；兜底=无条件规则（恒最后）
     const cur = await api('/api/config/rules');
     const rules = cur.rules || [];
-    if (rules.some((r) => r.id === id && !isEdit)) throw new Error(`规则 ID ${id} 已存在`);
-    const rule = {
-      id, desc: v.desc.trim(), intent: v.intent.trim(), regex: v.regex.trim(),
-      max_tokens: parseInt(v.max_tokens, 10) || 0,
-      caller_key: v.caller_key.trim(), target,
-      hits: (rules.find((r) => r.id === id) || {}).hits || 0, // 引擎按 ID 保留计数
-    };
-    const idx = rules.findIndex((r) => r.id === id);
-    if (idx >= 0) rules[idx] = rule; else rules.push(rule);
+    let rule;
+    if (isFallback) {
+      rule = rules.find((r) => !r.intent && !r.regex && !r.max_tokens && !r.caller_key);
+      if (!rule) rule = { id: 'fallback' };
+    } else {
+      rule = rules.find((r) => r.intent === intentId);
+      if (!rule) rule = { id: 'intent-' + intentId.replace(/[^a-zA-Z0-9_-]+/g, '-'), intent: intentId };
+    }
+    const hadCond = !!(rule.regex || rule.max_tokens || rule.caller_key);
+    rule.target = 'group/' + gid;
+    const idx = rules.findIndex((r) => r.id === rule.id);
+    if (idx >= 0) rules[idx] = rule;
+    else if (isFallback) rules.push(rule);
+    else {
+      // 插到第一条无条件规则之前（兜底规则保持最后）
+      const fb = rules.findIndex((r) => !r.intent && !r.regex && !r.max_tokens && !r.caller_key);
+      if (fb >= 0) rules.splice(fb, 0, rule); else rules.push(rule);
+    }
     await api('/api/config/rules', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ rules }),
     });
-    status('规则已保存（mtime 热生效，写前备份已留底）', 'ok');
-    afterWrite();
-  });
-}
-
-async function deleteRule(id) {
-  const ok = await confirmModal(`删除规则 ${id}`, '当前文件将先备份到 backup/ 目录，可手工还原。');
-  if (!ok) return;
-  const cur = await api('/api/config/rules');
-  await api('/api/config/rules', {
-    method: 'PUT', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ rules: (cur.rules || []).filter((r) => r.id !== id) }),
-  });
-  status('规则已删除（写前备份已留底）', 'ok');
-  afterWrite();
-}
-
-function intentModal(existing) {
-  const isEdit = !!existing;
-  formModal(isEdit ? `编辑意图 ${existing.id}` : '新建自定义意图',
-    frow('意图 ID', `<input class="field mono" name="id" value="${esc(existing?.id || '')}" ${isEdit ? 'readonly' : ''} required placeholder="建议命名空间化，如 team/weekly-report">`) +
-    frow('展示名', `<input class="field" name="label" value="${esc(existing?.label || '')}">`) +
-    frow('优先级', `<input class="field" name="priority" type="number" value="${existing?.priority || 0}" placeholder="越大越先求值">`) +
-    frow('关键词', `<input class="field" name="keywords" value="${esc((existing?.keywords || []).join(','))}" placeholder="逗号分隔；大小写不敏感子串匹配">`) +
-    frow('正则', `<textarea class="field mono" name="regexes" rows="3">${esc((existing?.regexes || []).join('\n'))}</textarea>`, '每行一条') +
-    frow('示例句', `<textarea class="field" name="examples" rows="3">${esc((existing?.examples || []).join('\n'))}</textarea>`,
-      '每行一条，≤5；注入 L1 提示词作 few-shot；任务规则按 ID 引用此意图'),
-  async (form) => {
-    const v = formVals(form);
-    const id = v.id.trim();
-    if (!id) throw new Error('意图 ID 不能为空');
-    const examples = lines(v.examples);
-    if (examples.length > 5) throw new Error('示例句最多 5 条（F8 词表约束）');
-    const regexes = lines(v.regexes);
-    for (const re of regexes) {
-      const err = compileCheck(re);
-      if (err) throw new Error(`正则非法（${re}）: ` + err);
-    }
-    const intents = await refreshIntents();
-    if (intents.some((d) => d.id === id && !isEdit)) throw new Error(`意图 ID ${id} 已存在`);
-    const def = {
-      id, label: v.label.trim(), priority: parseInt(v.priority, 10) || 0,
-      keywords: (v.keywords || '').split(',').map((x) => x.trim()).filter(Boolean),
-      regexes, examples,
-    };
-    const idx = intents.findIndex((d) => d.id === id);
-    if (idx >= 0) intents[idx] = def; else intents.push(def);
-    await api('/api/config/intents', {
+    status(`「${intentId}」调用链已保存${hadCond ? '（已更新既有规则的指向）' : '（热生效，写前备份已留底）'}`, 'ok');
+  } else {
+    // 清空 = 该意图走兜底：删规则；chain- 组无其他引用时一并删除
+    const ok = await confirmModal(`清空「${intentId}」调用链？`,
+      '该意图的路由规则将删除，请求走默认路由。写前备份已留底。', { yes: '清空', danger: false });
+    if (!ok) throw new Error('已取消');
+    const cur = await api('/api/config/rules');
+    const match = (r) => isFallback
+      ? !r.intent && !r.regex && !r.max_tokens && !r.caller_key
+      : r.intent === intentId && !r.regex && !r.max_tokens && !r.caller_key;
+    const rules = (cur.rules || []).filter((r) => !match(r));
+    await api('/api/config/rules', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ intents }),
+      body: JSON.stringify({ rules }),
     });
-    status('意图已保存（热生效，写前备份已留底）', 'ok');
-    afterWrite();
-  });
-}
-
-async function deleteIntent(id) {
-  const ok = await confirmModal(`删除意图 ${id}`, '引用它的任务规则将不再命中。当前文件将先备份到 backup/ 目录。');
-  if (!ok) return;
-  const intents = await refreshIntents();
-  await api('/api/config/intents', {
-    method: 'PUT', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ intents: intents.filter((d) => d.id !== id) }),
-  });
-  status('意图已删除（写前备份已留底）', 'ok');
+    const stillRef = rules.some((r) => r.target === 'group/' + gid);
+    if (!stillRef) {
+      await putProvidersDoc((c) => ({ ...c, groups: (c.groups || []).filter((g) => g.id !== gid) }));
+    }
+    status(`「${intentId}」调用链已清空（该意图走兜底）`, 'ok');
+  }
   afterWrite();
 }
+
+// 说明：任务规则的高级条件（正则 / token 上限 / 调用方）与自定义意图
+// 词表已从 UI 收敛（2026-11 融合定稿）——意图识别由网关内置（开发端维
+// 护），用户只做「编辑调用链」一个动作；CLI 的 groups/rules/intents 完整
+// 契约保留，服务端写路径校验不放松。
 
 function quotaModal(provID, accName) {
   const prov = (cache.providers?.providers || []).find((x) => x.id === provID);
@@ -1236,29 +1415,11 @@ function quotaModal(provID, accName) {
   });
 }
 
-// 路由页操作列事件委托（编辑/删除）+ 服务商页额度入口
-$('list-groups').addEventListener('click', (e) => {
-  const g = e.target.dataset.g;
-  if (!g) return;
-  const cur = (cache.state.groups || []).find((x) => x.id === g);
-  if (e.target.classList.contains('edit')) groupModal(cur);
-  if (e.target.classList.contains('del')) deleteGroup(g);
-});
-$('list-rules').addEventListener('click', async (e) => {
-  const id = e.target.dataset.r;
-  if (!id) return;
-  const cur = await api('/api/config/rules');
-  const rule = (cur.rules || []).find((x) => x.id === id);
-  if (e.target.classList.contains('edit')) ruleModal(rule);
-  if (e.target.classList.contains('del')) deleteRule(id);
-});
-$('list-intents').addEventListener('click', async (e) => {
-  const id = e.target.dataset.i;
-  if (!id) return;
-  const intents = await refreshIntents();
-  const def = intents.find((x) => x.id === id);
-  if (e.target.classList.contains('edit')) intentModal(def);
-  if (e.target.classList.contains('del')) deleteIntent(id);
+// 路由页操作列事件委托（编辑链）+ 服务商页额度入口
+$('list-intents').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-chain]');
+  if (!btn) return;
+  intentChainModal(btn.dataset.chain, btn.dataset.label, btn.dataset.rec);
 });
 $('prov-list').addEventListener('click', (e) => {
   const btn = e.target.closest('.quota-btn');
@@ -1278,9 +1439,6 @@ $('prov-list').addEventListener('click', (e) => {
   }
 });
 $('btn-add-provider').addEventListener('click', addProviderModal);
-$('btn-add-group').addEventListener('click', () => groupModal(null));
-$('btn-add-rule').addEventListener('click', () => ruleModal(null));
-$('btn-add-intent').addEventListener('click', () => intentModal(null));
 
 // ---------- 观测：决策追溯（行卡片 + 展开详情） ----------
 
@@ -1803,33 +1961,166 @@ setInterval(() => {
   }
 }, 5000);
 
-// ---------- 插件（M7-W5：子进程插件管理面） ----------
+// ---------- 插件（2026-11 定稿：订阅适配走社区插件 + 商店索引 + 信息分层） ----------
 
 function pluginBadge(st) {
   const cls = { running: 'ok', starting: 'resting', backoff: 'resting', failed: 'prefail', stopped: 'disabled' }[st] || '';
   return `<span class="pill ${cls}">${esc(st)}</span>`;
 }
 
+// 能力 → 分类（开发端定映射，插件声明能力即自动归类）
+const PLUGIN_CATS = {
+  'provider.oauth': '订阅适配',
+  'classify.intent': '意图分类',
+  'events.trace': '观测订阅',
+  'dispatch.parse': '派发解析',
+  'vendor.verdict': '厂商判定',
+};
+
+// 订阅适配注册表（静态目录）：适配本体在社区插件，主程序无厂商代码；
+// 启用后到「服务商」页添加账号（授权走 CLI add-oauth）。
+const SUB_ADAPTERS = [
+  { id: 'claude-auth', pkg: '@ym-community/claude-auth', vendor: 'Claude 订阅', src: 'claude-code' },
+  { id: 'codex-auth', pkg: '@ym-community/codex-auth', vendor: 'Codex 订阅', src: 'codex' },
+  { id: 'gemini-auth', pkg: '@ym-community/gemini-auth', vendor: 'Gemini 订阅', src: 'gemini-cli' },
+];
+
+// 插件商店目录（批1 内置索引 + 分类筛选；安装器随批3 接入——当前安装
+// 按钮给出接入指引，不代下载）。
+const STORE_INDEX = [
+  { id: 'incident-intents', ver: '0.3.0', author: '@ym-community', cap: 'classify.intent',
+    desc: 'SRE 事故分类词表：oncall / rollback / postmortem',
+    intents: [{ id: 'sre/oncall', label: '值班响应', desc: '值班期间告警与快速处置' },
+      { id: 'sre/postmortem', label: '复盘分析', desc: '事故复盘与改进项跟踪' }] },
+  { id: 'cost-alert', ver: '0.2.1', author: '@ym-community', cap: 'events.trace',
+    desc: '按账号/意图设成本阈值，超额触发系统通知' },
+  { id: 'otel-exporter', ver: '0.1.9', author: '@ym-community', cap: 'events.trace',
+    desc: '决策 trace 转发 OTLP 后端（Jaeger / Tempo / Langfuse）' },
+  { id: 'qwen-vendor', ver: '0.4.2', author: '@ym-community', cap: 'vendor.verdict',
+    desc: 'Qwen 200 伪装拒绝长尾特判词表' },
+];
+let storeFilter = '';
+
 async function loadPlugins() {
+  let views = [];
   try {
     const r = await api('/api/plugins');
-    $('list-plugins').innerHTML = (r.plugins || []).map((p) => {
-      const granted = (p.granted || []).map((c) => `<code>${esc(c)}</code>`).join(' ') || '<span class="muted2">无</span>';
-      const drops = p.dropped_events ? ` · <span class="pill prefail" style="padding:0 7px">丢 ${p.dropped_events}</span>` : '';
-      return `<div class="row">
-        <div class="who">
-          <div class="name"><code>${esc(p.id)}</code></div>
-          <div class="sub wrap">能力 ${granted} · 崩溃(1h) ${p.crash_1h || 0}${drops}</div>
-        </div>
-        ${pluginBadge(p.status)}
-        <button type="button" class="lib-switch ${p.enabled ? 'on' : ''}" data-plug="toggle" data-id="${esc(p.id)}" role="switch" aria-checked="${p.enabled}" aria-label="启停 ${esc(p.id)}"><i></i></button>
-        <button type="button" class="text" data-plug="log" data-id="${esc(p.id)}">日志</button>
-      </div>`;
-    }).join('') || listEmpty('未配置插件（plugins.json）');
+    views = r.plugins || [];
   } catch (e) {
     $('list-plugins').innerHTML = errBox('插件清单加载失败: ' + e.message, 'plugins');
   }
+  renderSubAdapters(views);
+  renderStore(views);
+  renderPluginsList(views);
 }
+
+function renderSubAdapters(views) {
+  $('list-subadapters').innerHTML = SUB_ADAPTERS.map((a) => {
+    const plug = views.find((x) => x.id === a.id);
+    const on = !!(plug && plug.enabled);
+    const state = on ? '<span class="pill ok">已启用</span>'
+      : plug ? '<span class="pill disabled">已停用</span>'
+      : '<span class="pill disabled">未安装</span>';
+    const acts = !plug
+      ? '<button type="button" class="text add" data-subact="install" data-s="' + esc(a.id) + '">安装</button>'
+      : '<button type="button" class="text add" data-subact="goacct">去添加账号</button>';
+    return '<div class="row"><div class="who">' +
+      '<div class="name">' + esc(a.vendor) + ' <code>' + esc(a.pkg) + '</code></div>' +
+      '<div class="sub">授权走 CLI：<code>yardmaster provider add-oauth ' + esc(a.src) + '</code> · 多账号轮换</div></div>' +
+      state +
+      (plug ? '<button type="button" class="lib-switch ' + (on ? 'on' : '') + '" data-subtoggle="' + esc(a.id) + '" role="switch" aria-checked="' + on + '" aria-label="启停 ' + esc(a.id) + '"><i></i></button>' : '') +
+      '<div class="row-acts" style="opacity:1">' + acts + '</div>' +
+      '</div>';
+  }).join('');
+}
+
+function renderStore(views) {
+  const chips = [''].concat([...new Set(Object.values(PLUGIN_CATS))]);
+  $('store-chips').innerHTML = chips.map((c) =>
+    '<button type="button" class="cat-chip' + (storeFilter === c ? ' on' : '') + '" data-cat="' + esc(c) + '">' + esc(c || '全部') + '</button>').join('');
+  const installed = new Set(views.map((p) => p.id));
+  const list = STORE_INDEX.filter((s) => !installed.has(s.id) && (!storeFilter || PLUGIN_CATS[s.cap] === storeFilter));
+  $('list-store').innerHTML = list.map((s) =>
+    '<div class="row"><div class="who">' +
+    '<div class="name"><code>' + esc(s.id) + '</code><span class="pill">' + esc(PLUGIN_CATS[s.cap] || '扩展') + '</span><span class="muted2" style="font-weight:400">' + esc(s.ver) + ' · ' + esc(s.author) + '</span></div>' +
+    '<div class="sub wrap">' + esc(s.desc) + '</div>' +
+    ((s.intents || []).length ? '<div class="sub wrap">安装后声明意图：' + s.intents.map((i) => '<code>' + esc(i.id) + '</code>').join(' ') + '</div>' : '') +
+    '</div>' +
+    '<button type="button" class="btn-primary" data-store-install="' + esc(s.id) + '">安装</button>' +
+    '</div>').join('') || listEmpty('该分类下暂无可安装插件');
+}
+
+// 安装指引（批1 过渡）：网关不代下载不代装——商店给出接入路径，安装器
+// 随批3 落地后切换为真安装。
+function installGuideModal(id, cap) {
+  openDialog({
+    title: `安装插件 ${id}`,
+    body:
+      '<p>插件安装器随后续版本提供（网关不代下载、不代装插件）。当前请按社区插件指引手动接入：</p>' +
+      '<div class="oauth-cmd"><code>在 plugins.json 增加条目 { "id": "' + esc(id) + '", "command": ["…"], "capabilities": ["' + esc(cap) + '"] }</code></div>' +
+      '<p class="muted2">保存后热生效；插件的声明意图会自动出现在「路由 › 意图分配」。</p>',
+    yes: '知道了',
+    onSubmit: async () => {},
+  }).catch(() => {});
+}
+
+function renderPluginsList(views) {
+  $('list-plugins').innerHTML = views.map((p) => {
+    const granted = (p.granted || []).map((c) => `<code>${esc(c)}</code>`).join(' ') || '<span class="muted2">无</span>';
+    const cat = PLUGIN_CATS[(p.granted || [])[0]] || '扩展';
+    const ints = (p.intents || []).map((i) => `<code>${esc(i.id)}</code>`).join(' ');
+    const intsLine = ints ? `<div class="sub wrap">声明意图 ${ints}（可在「路由 › 意图分配」为其配调用链）</div>` : '';
+    const drops = p.dropped_events ? ` · <span class="pill prefail" style="padding:0 7px">丢 ${p.dropped_events}</span>` : '';
+    return `<div class="row">
+      <div class="who">
+        <div class="name"><code>${esc(p.id)}</code><span class="pill">${esc(cat)}</span></div>
+        ${p.desc ? `<div class="sub wrap">${esc(p.desc)}</div>` : ''}
+        <div class="sub wrap">能力 ${granted} · 崩溃(1h) ${p.crash_1h || 0}${drops}</div>
+        ${intsLine}
+      </div>
+      ${pluginBadge(p.status)}
+      <button type="button" class="lib-switch ${p.enabled ? 'on' : ''}" data-plug="toggle" data-id="${esc(p.id)}" role="switch" aria-checked="${p.enabled}" aria-label="启停 ${esc(p.id)}"><i></i></button>
+      <button type="button" class="text" data-plug="log" data-id="${esc(p.id)}">日志</button>
+    </div>`;
+  }).join('') || listEmpty('未配置插件（plugins.json）');
+}
+
+$('list-subadapters').addEventListener('click', async (e) => {
+  const act = e.target.closest('[data-subact]');
+  if (act) {
+    if (act.dataset.subact === 'install') {
+      const a = SUB_ADAPTERS.find((x) => x.id === act.dataset.s);
+      if (a) installGuideModal(a.id, 'provider.oauth');
+      return;
+    }
+    if (act.dataset.subact === 'goacct') { show('providers'); return; }
+  }
+  const sw = e.target.closest('[data-subtoggle]');
+  if (!sw) return;
+  const id = sw.dataset.subtoggle;
+  const wasOn = sw.classList.contains('on');
+  sw.disabled = true;
+  try {
+    await api(`/api/plugins/${encodeURIComponent(id)}/${wasOn ? 'disable' : 'enable'}`, { method: 'POST' });
+    status(wasOn ? '已停用（订阅适配下线后其服务商账号不可用）' : '已启用（热生效）', 'ok');
+    await loadPlugins();
+  } catch (err) {
+    status('操作失败: ' + err.message, 'err');
+    sw.disabled = false;
+  }
+});
+$('store-chips').addEventListener('click', (e) => {
+  const chip = e.target.closest('[data-cat]');
+  if (!chip) return;
+  storeFilter = chip.dataset.cat;
+  loadPlugins();
+});
+$('list-store').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-store-install]');
+  if (!btn) return;
+  const s = STORE_INDEX.find((x) => x.id === btn.dataset.storeInstall);
+  if (s) installGuideModal(s.id, s.cap);
+});
 
 $('list-plugins').addEventListener('click', async (e) => {
   const sw = e.target.closest('.lib-switch[data-plug]');

@@ -32,6 +32,7 @@ import (
 
 	"yardmaster/internal/classify"
 	"yardmaster/internal/dispatch"
+	"yardmaster/internal/netproxy"
 	"yardmaster/internal/plugin"
 	"yardmaster/internal/provider"
 	"yardmaster/internal/store"
@@ -375,6 +376,62 @@ func (s *Server) handleProviderPresets(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, provider.Presets)
 }
 
+// handleProviderProbe POST /api/provider/probe（添加服务商「检测并获取
+// 模型」）：验证凭证并按协议拉取上游模型清单（复用 CLI add 同一探测
+// 实现）。api_key 仅进内存用于本次探测，不落盘不落日志；探测经全局
+// 代理（F3 链），错误片段经 netproxy.Snippet 截断。
+func (s *Server) handleProviderProbe(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Protocol  string `json:"protocol"`
+		BaseURL   string `json:"base_url"`
+		APIKey    string `json:"api_key"`
+		Proxy     string `json:"proxy,omitempty"`
+		AuthStyle string `json:"auth_style,omitempty"` // messages 协议认证头；""=x-api-key，"bearer"=Bearer
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		writeAPIErr(w, badRequest(fmt.Errorf("请求体解析失败: %w", err)))
+		return
+	}
+	req.BaseURL = strings.TrimSpace(req.BaseURL)
+	req.APIKey = strings.TrimSpace(req.APIKey)
+	switch provider.Protocol(req.Protocol) {
+	case provider.ProtocolChat, provider.ProtocolMessages:
+	case provider.ProtocolResponses, provider.ProtocolGemini:
+		writeAPIErr(w, badRequest(errors.New("该协议暂不支持自动检测模型，请在高级选项手动维护清单")))
+		return
+	default:
+		writeAPIErr(w, badRequest(fmt.Errorf("协议非法: %q（openai-chat | anthropic-messages）", req.Protocol)))
+		return
+	}
+	if req.BaseURL == "" || !strings.HasPrefix(req.BaseURL, "http://") && !strings.HasPrefix(req.BaseURL, "https://") {
+		writeAPIErr(w, badRequest(errors.New("base_url 不能为空（http(s)://…）")))
+		return
+	}
+	if req.APIKey == "" {
+		writeAPIErr(w, badRequest(errors.New("api_key 不能为空")))
+		return
+	}
+	prov := &provider.Provider{ID: "probe", Protocol: provider.Protocol(req.Protocol), BaseURL: req.BaseURL}
+	acc := provider.Account{Name: "probe", APIKey: req.APIKey}
+	eff, _ := ResolveProxyRef(req.Proxy, "", s.GlobalProxy)
+	rt, err := netproxy.SharedTransport(netproxy.Ref(eff))
+	if err != nil {
+		writeAPIErr(w, badRequest(fmt.Errorf("代理解析失败: %w", err)))
+		return
+	}
+	models, err := ProbeAccount(r.Context(), prov, acc, s.GlobalProxy, rt, req.AuthStyle)
+	if err != nil {
+		slog.Warn("provider 探测失败", "base_url", req.BaseURL, "err", err)
+		writeAPIErr(w, badRequest(err))
+		return
+	}
+	ids := make([]string, len(models))
+	for i, m := range models {
+		ids[i] = m.ID
+	}
+	writeJSON(w, map[string]any{"ok": true, "models": ids})
+}
+
 // handleReload 重读 providers.json 并热替换 Planner（providers.json
 // 解析失败时拒绝重载，保留旧快照——读不懂=未知）。响应为写响应包
 // （api.md）：携带写后全量 state；providers 计数字段增量保留。
@@ -616,7 +673,8 @@ func validateProviders(f store.ProvidersFile) error {
 }
 
 // validateMember 校验组成员引用："provider/model"、"provider"（裸
-// provider，取其清单）或 "group/<id>"。
+// provider，取其清单）、"provider/model@account"（账号席位——限定该
+// 成员仅用指定账号）或 "group/<id>"。
 func validateMember(m string, provs []provider.Provider, groups map[string]bool) error {
 	if strings.TrimSpace(m) == "" {
 		return fmt.Errorf("成员引用为空")
@@ -627,11 +685,24 @@ func validateMember(m string, provs []provider.Provider, groups map[string]bool)
 		}
 		return nil
 	}
-	provID, _, _ := strings.Cut(m, "/")
-	for _, p := range provs {
-		if p.ID == provID {
+	head, acc, hasAcc := strings.Cut(m, "@")
+	if hasAcc && strings.TrimSpace(acc) == "" {
+		return fmt.Errorf("成员 %q 的账号席位名为空", m)
+	}
+	provID, _, _ := strings.Cut(head, "/")
+	for i := range provs {
+		if provs[i].ID != provID {
+			continue
+		}
+		if !hasAcc {
 			return nil
 		}
+		for _, a := range provs[i].Accounts {
+			if a.Name == acc {
+				return nil
+			}
+		}
+		return fmt.Errorf("成员 %q 引用的账号不存在", m)
 	}
 	return fmt.Errorf("成员 %q 引用的 provider 不存在", m)
 }

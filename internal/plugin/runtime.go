@@ -471,15 +471,17 @@ func (p *Plugin) Stop() {
 
 // StatusView 是管理面的插件状态视图。
 type StatusView struct {
-	ID           string   `json:"id"`
-	Command      []string `json:"command"`
-	Enabled      bool     `json:"enabled"`
-	Capabilities []string `json:"capabilities"`
-	Granted      []string `json:"granted,omitempty"`
-	Status       Status   `json:"status"`
-	Crash1H      int      `json:"crash_1h"`
-	Dropped      int64    `json:"dropped_events,omitempty"`
-	LogTail      []string `json:"log_tail,omitempty"`
+	ID           string      `json:"id"`
+	Command      []string    `json:"command"`
+	Enabled      bool        `json:"enabled"`
+	Capabilities []string    `json:"capabilities"`
+	Desc         string      `json:"desc,omitempty"`
+	Intents      []IntentRef `json:"intents,omitempty"`
+	Granted      []string    `json:"granted,omitempty"`
+	Status       Status      `json:"status"`
+	Crash1H      int         `json:"crash_1h"`
+	Dropped      int64       `json:"dropped_events,omitempty"`
+	LogTail      []string    `json:"log_tail,omitempty"`
 }
 
 func (p *Plugin) view() StatusView {
@@ -487,8 +489,9 @@ func (p *Plugin) view() StatusView {
 	defer p.mu.Unlock()
 	return StatusView{
 		ID: p.spec.ID, Command: p.spec.Command, Enabled: p.spec.Enabled,
-		Capabilities: p.spec.Capabilities, Granted: p.granted,
-		Status: p.status, Crash1H: len(p.failAt), Dropped: p.dropN.Load(),
+		Capabilities: p.spec.Capabilities, Desc: p.spec.Desc, Intents: p.spec.Intents,
+		Granted: p.granted,
+		Status:  p.status, Crash1H: len(p.failAt), Dropped: p.dropN.Load(),
 		LogTail: append([]string(nil), p.logTail...),
 	}
 }
@@ -511,6 +514,33 @@ type Registry struct {
 type cooldown struct {
 	fails []time.Time
 	until time.Time
+}
+
+// DeclaredIntents 返回「enabled 且 granted 含 classify.intent 且运行中」
+// 的插件声明的全部意图（路由页词表并入与分类校验的同一口径——声明即
+// 同步，停用/崩溃即摘除）。
+func (r *Registry) DeclaredIntents() []IntentRef {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []IntentRef
+	for _, id := range r.order {
+		p := r.plugins[id]
+		if p == nil || !p.spec.Enabled || p.status != StatusRunning {
+			continue
+		}
+		has := false
+		for _, g := range p.granted {
+			if g == CapClassify {
+				has = true
+				break
+			}
+		}
+		if !has {
+			continue
+		}
+		out = append(out, p.spec.Intents...)
+	}
+	return out
 }
 
 // NewRegistry 构造空注册表（Start/Reload 装载）。

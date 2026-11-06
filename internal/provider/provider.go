@@ -171,6 +171,6 @@ const (
 type Group struct {
 	ID       string         `json:"id"`
 	Strategy Strategy       `json:"strategy"`
-	Members  []string       `json:"members"`           // 形如 "provider/model"
+	Members  []string       `json:"members"`           // 形如 "provider/model"、"provider/model@account"（席位）或 "provider"
 	Weights  map[string]int `json:"weights,omitempty"` // weight 策略：成员引用 → 权重（缺省 1）
 }

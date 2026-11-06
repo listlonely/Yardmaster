@@ -136,28 +136,16 @@
       <div id="prov-list"></div>
       <div class="after-list">
         <button type="button" class="text add" id="btn-add-provider">＋ 添加服务商</button>
-        <span class="sub">OAuth 订阅类请用 CLI：<code>yardmaster provider add-oauth</code></span>
+        <span class="sub">订阅类由社区插件提供适配（主程序无厂商代码）；授权走 CLI</span>
       </div>
       <div class="empty-state" id="prov-none" hidden><b>尚未配置服务商</b>点击上方「＋ 添加服务商」，从厂商预设开始（或用 CLI <code>yardmaster provider add</code>）</div>
     </section>
 
-    <!-- 路由 -->
+    <!-- 路由（融合：意图 = 一条有序调用链，2026-11 原型定稿） -->
     <section id="page-routing" class="view" hidden>
-      <div class="label">路由组 <span class="label-note">策略决定组内账号的选取顺序</span></div>
-      <div class="list" id="list-groups"></div>
-      <div class="after-list"><button type="button" class="text add" id="btn-add-group">＋ 新建组</button></div>
-
-      <div class="label">任务规则 <span class="label-note">意图/正则/token 上限/调用方 → 目标</span></div>
-      <div class="list" id="list-rules"></div>
-      <div class="after-list"><button type="button" class="text add" id="btn-add-rule">＋ 新建规则</button></div>
-
-      <div class="label">调用方默认模型绑定</div>
-      <div class="list" id="list-keys"></div>
-
-      <div class="label">自定义意图词表 <span class="label-note">求值顺序：自定义（优先级降序）→ 内置 L0 → L1 → 默认组；正则对原文匹配</span></div>
+      <div class="label">意图分配 <span class="label-note">意图由网关内置识别；每类任务配一条有序模型链，按策略自动分配</span></div>
       <div class="list" id="list-intents"></div>
-      <div class="after-list"><button type="button" class="text add" id="btn-add-intent">＋ 新建意图</button></div>
-      <p class="foot-note">所有写操作经管理 API：严格校验、写前备份（backup/ 目录）、审计日志；校验失败不落盘。</p>
+      <p class="foot-note">选型建议：编程 / 兜底 → 配 2~3 个模型的链（自动容灾）；问答 → 便宜快速的模型；长上下文 / 图片理解 → 具备对应能力的模型。改动即时热生效（写前备份 + 审计）。</p>
     </section>
 
     <!-- 观测 -->
@@ -248,8 +236,15 @@
       <p class="foot-note">派发配置经管理 API（PUT /api/config/dispatch：严格校验、写前备份、审计）；会话终态写入观测页 trace（RoutePath=dispatch）。</p>
     </section>
 
-    <!-- 插件 -->
+    <!-- 插件（2026-11 定稿：订阅适配走社区插件 + 插件商店 + 信息分层） -->
     <section id="page-plugins" class="view" hidden>
+      <div class="label">订阅适配 <span class="label-note">社区插件承接订阅厂商适配；先启用，再到「服务商」页添加账号</span></div>
+      <div class="list" id="list-subadapters"></div>
+
+      <div class="label">插件商店 <span class="label-note">社区插件目录，安装即出现在下方清单并热生效</span></div>
+      <div class="view-head" id="store-chips"></div>
+      <div class="list" id="list-store"></div>
+
       <div class="view-head">
         <div class="label inline">插件</div>
         <span class="grow"></span>
@@ -267,7 +262,7 @@
         </div>
         <pre id="plugin-log" class="disp-output"></pre>
       </div>
-      <p class="foot-note">清单源 plugins.json（写路径严格校验+备份+审计）；启停即时热生效。能力词表：events.trace / dispatch.parse / classify.intent / vendor.verdict。示例见仓库 examples/。</p>
+      <p class="foot-note">能力词表：events.trace / dispatch.parse / classify.intent / vendor.verdict / provider.oauth。示例见仓库 examples/；插件与网关同用户身份运行，网关不代登录订阅。</p>
     </section>
   </main>
 
