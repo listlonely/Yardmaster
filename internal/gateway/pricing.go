@@ -96,6 +96,9 @@ type CostReport struct {
 	To        string                `json:"to"`                   // "2006-01-02"（含）
 	ByAccount map[string]CostBucket `json:"by_account"`           // key: "provider/account"
 	ByModel   map[string]CostBucket `json:"by_model"`             // key: 上游模型名
+	// 账号×模型二级聚合（2026-11 批3）：key "provider/account/model"——
+	// 服务商页账号行「明细」弹层的数据源（按 "provider/account/" 前缀过滤）。
+	ByAccountModel map[string]CostBucket `json:"by_account_model"`
 	Unpriced  int                   `json:"unpriced"`             // 有用量但无单价的调用次数
 	FxUsdCNY  float64               `json:"fx_usd_cny,omitempty"` // 展示换算汇率（0=仅美元；调用方自 settings 注入，不参与计费）
 }
@@ -116,6 +119,7 @@ func ComputeCost(traces []Trace, prices []PriceEntry, days int, now time.Time) *
 		To:        toDay,
 		ByAccount: map[string]CostBucket{},
 		ByModel:   map[string]CostBucket{},
+		ByAccountModel: map[string]CostBucket{},
 	}
 	add := func(m map[string]CostBucket, key string, calls int, in, out, cached int64, cost float64, pu PriceUse) {
 		b := m[key]
@@ -165,6 +169,9 @@ func ComputeCost(traces []Trace, prices []PriceEntry, days int, now time.Time) *
 		pu := PriceUse{Key: pe.Model, In: pe.InputPerM, Out: pe.OutputPerM, Calls: 1}
 		add(rep.ByAccount, tr.Served, 1, tr.Usage.Prompt, tr.Usage.Completion, cached, cost, pu)
 		add(rep.ByModel, tr.ServedModel, 1, tr.Usage.Prompt, tr.Usage.Completion, cached, cost, pu)
+		if tr.ServedModel != "" {
+			add(rep.ByAccountModel, tr.Served+"/"+tr.ServedModel, 1, tr.Usage.Prompt, tr.Usage.Completion, cached, cost, pu)
+		}
 	}
 	return rep
 }

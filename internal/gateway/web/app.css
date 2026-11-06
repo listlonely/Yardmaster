@@ -557,6 +557,10 @@ html.theming, html.theming body, html.theming body * { transition: background-co
 .modal-err { color: var(--red); font-size: 12px; flex: 1; min-width: 0; }
 .dlg-bar .btn-primary, .dlg-bar .btn-danger { margin-left: auto; }
 
+/* 账号×模型用量明细（弹层内行内数值组） */
+.acct-um { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--fg-2); }
+.acct-um b { color: var(--fg); font-weight: 600; }
+
 /* ---------- 命令面板（A1：Magpie .pop 构造裁剪版，复用 .dialog 弹层体系） ---------- */
 .dialog.cmdk {
   width: 30rem; margin-top: 12vh; padding: 0; overflow: hidden;

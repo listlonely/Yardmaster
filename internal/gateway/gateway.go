@@ -128,6 +128,10 @@ func (s *Server) routes() http.Handler {
 		s.handleTokenDelete(w, r.PathValue("id"))
 	})
 	mux.HandleFunc("GET /api/plugins", s.handlePluginsView)              // M7-W5：插件状态视图
+	mux.HandleFunc("GET /api/plugin-store", s.handleStoreView)           // 插件商店索引（只读）
+	mux.HandleFunc("POST /api/plugin-store/{id}/install", func(w http.ResponseWriter, r *http.Request) {
+		s.handleStoreInstall(w, r.PathValue("id"))
+	})
 	mux.HandleFunc("POST /api/plugins/{id}/enable", func(w http.ResponseWriter, r *http.Request) {
 		s.handlePluginToggle(w, r.PathValue("id"), "enable")
 	})

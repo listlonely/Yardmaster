@@ -21,7 +21,7 @@
 | :-- | :-- | :-- |
 | `GET /api/state` | 全量 live 状态（版本/运行时长/Planner 锁内快照/账号用量/额度） | state 对象 |
 | `GET /api/trace` | 调用链路追踪 | trace 列表 |
-| `GET /api/cost?days=N` | 成本报告（1~30，默认 7） | cost 对象 |
+| `GET /api/cost?days=N` | 成本报告（1~30，默认 7）；[2026-11-批3] 含 `by_account_model` 二级聚合（键 `provider/account/model`，服务商页账号行「明细」数据源） | cost 对象 |
 | `GET /api/config/{name}` | 配置脱敏视图（`providers \| settings \| rules \| keys \| intents \| pricing`） | 该配置的脱敏 JSON |
 | `PUT /api/config/{name}` | 整文件写（键级编辑器的提交端点） | **写响应包**（见下） |
 | `POST /api/reload` | 重读 providers.json 并热替换 Planner | **写响应包** |
@@ -31,6 +31,8 @@
 | `POST /api/tokens` | 生成命名令牌（2026-11 批2 多令牌；`{"name":"归属"}`；plain 仅本次响应返回，落盘只存 sha256 hash；即时热生效） | **写响应包** + `plain` + `token` + `tokens` |
 | `POST /api/tokens/{id}/rotate` | 轮换命名令牌（旧 plain 即刻失效，新 plain 仅本次返回） | **写响应包** + `plain` + `token` + `tokens` |
 | `DELETE /api/tokens/{id}` | 删除命名令牌（该客户端即刻失去访问；删光回到本机信任态） | **写响应包** + `tokens` |
+| `GET /api/plugin-store` | 社区插件商店内置索引（2026-11 批3；前端商店页单一事实源，不再内嵌副本） | `{ok, store: [storeEntry]}` |
+| `POST /api/plugin-store/{id}/install` | 一键安装：下载 zip（全局代理 + 32MiB 上限 + SHA256 强校验可选）→ zip slip 防护 + manifest 契约（id 一致 / command 非空 / `plugin.Validate` 全文档）→ 落盘 `<AppDir>/plugins/<id>/` → 注册 plugins.json（备份+审计）→ 热生效；相对 command 物化为插件目录绝对路径；409=已安装，503=安装包未发布 | **写响应包** + `installed` |
 
 管理面非回环监听时全部路由强制 token（M2-W5 三口基线，不变）。
 

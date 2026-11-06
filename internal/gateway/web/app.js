@@ -868,6 +868,7 @@ function acctRow(p, a, live, resting, global) {
     </div>
     <div class="acct-usage">${usageBar(view_)}</div>
     <div class="row-acts">
+      <button type="button" class="text um-btn" data-p="${esc(p.id)}" data-a="${esc(a.name)}" title="该账号近 7 天按模型用量（成本报告同源）">明细</button>
       <button type="button" class="text quota-btn" data-p="${esc(p.id)}" data-a="${esc(a.name)}">额度</button>
       <button type="button" class="text del del-acct" data-p="${esc(p.id)}" data-a="${esc(a.name)}" title="从 providers.json 移除该账号（写前备份留底）">删除</button>
     </div>
@@ -1595,6 +1596,36 @@ async function saveIntentChain(intentId, strategy, members) {
 // 护），用户只做「编辑调用链」一个动作；CLI 的 groups/rules/intents 完整
 // 契约保留，服务端写路径校验不放松。
 
+// acctDetailModal：账号×模型用量明细（批3；数据源 GET /api/cost 的
+// by_account_model 二级聚合，与「观测 › 成本报告」同源）。
+async function acctDetailModal(provID, accName) {
+  const prefix = `${provID}/${accName}/`;
+  let rep;
+  try {
+    rep = await api('/api/cost?days=7');
+  } catch (e) {
+    status('成本报告加载失败: ' + e.message, 'err');
+    return;
+  }
+  const rows = Object.entries(rep.by_account_model || {})
+    .filter(([k]) => k.startsWith(prefix))
+    .sort((a, b) => b[1].cost - a[1].cost);
+  const fx = rep.fx_usd_cny || 0;
+  const fmtUSDv = (n) => '$' + Number(n || 0).toFixed(4);
+  const body = rows.length
+    ? rows.map(([k, b]) => {
+      const model = k.slice(prefix.length);
+      const prices = (b.prices || []).map((p) => p.in_per_m + '/' + p.out_per_m).join(' ');
+      return `<div class="frow"><span><code>${esc(model)}</code></span>` +
+        `<div class="acct-um"><span>${b.calls} 次</span><span>${fmtTokens(b.input_tokens)} in</span>` +
+        `<span>${fmtTokens(b.output_tokens)} out</span><b>${fmtUSDv(b.cost)}${fx > 0 ? ` <span class="muted2">≈¥${(b.cost * fx).toFixed(2)}</span>` : ''}</b></div>` +
+        (prices ? `<div class="hint">单价 in/out（$/1M）：${esc(prices)}</div>` : '') + `</div>`;
+    }).join('') +
+      `<p class="foot-note">窗口 ${esc(rep.from)} ~ ${esc(rep.to)}；失败请求不计费，无单价调用计入「未计价」。</p>`
+    : `<p class="muted2">近 7 天该账号暂无模型调用（或全部未计价）。</p>`;
+  openDialog({ title: `按模型用量 · ${provID}/${accName}`, body, yes: '关闭', onSubmit: async () => {} }).catch(() => {});
+}
+
 function quotaModal(provID, accName) {
   const prov = (cache.providers?.providers || []).find((x) => x.id === provID);
   const acc = (prov?.accounts || []).find((x) => x.name === accName);
@@ -1630,6 +1661,8 @@ $('list-intents').addEventListener('click', (e) => {
 $('prov-list').addEventListener('click', (e) => {
   const btn = e.target.closest('.quota-btn');
   if (btn) { quotaModal(btn.dataset.p, btn.dataset.a); return; }
+  const um = e.target.closest('.um-btn');
+  if (um) { acctDetailModal(um.dataset.p, um.dataset.a); return; }
   const del = e.target.closest('.del-acct');
   if (del) { removeAccount(del.dataset.p, del.dataset.a); return; }
   // 账号折叠：纯 class 切换（grid-rows 动画播得出来；不重绘）
@@ -2183,29 +2216,27 @@ const PLUGIN_CATS = {
   'vendor.verdict': '厂商判定',
 };
 
-// 订阅适配注册表（静态目录）：适配本体在社区插件，主程序无厂商代码；
-// 启用后到「服务商」页添加账号（授权走 CLI add-oauth）。
+// 订阅适配注册表（展示元数据）：适配本体在社区插件，主程序无厂商代
+// 码；安装走 /api/plugin-store/{id}/install（后端内置索引），授权走
+// CLI add-oauth。
 const SUB_ADAPTERS = [
   { id: 'claude-auth', pkg: '@ym-community/claude-auth', vendor: 'Claude 订阅', src: 'claude-code' },
   { id: 'codex-auth', pkg: '@ym-community/codex-auth', vendor: 'Codex 订阅', src: 'codex' },
   { id: 'gemini-auth', pkg: '@ym-community/gemini-auth', vendor: 'Gemini 订阅', src: 'gemini-cli' },
 ];
+let storeCache = null;
+let storeFilter = ''; // 商店分类筛选（''=全部）
 
-// 插件商店目录（批1 内置索引 + 分类筛选；安装器随批3 接入——当前安装
-// 按钮给出接入指引，不代下载）。
-const STORE_INDEX = [
-  { id: 'incident-intents', ver: '0.3.0', author: '@ym-community', cap: 'classify.intent',
-    desc: 'SRE 事故分类词表：oncall / rollback / postmortem',
-    intents: [{ id: 'sre/oncall', label: '值班响应', desc: '值班期间告警与快速处置' },
-      { id: 'sre/postmortem', label: '复盘分析', desc: '事故复盘与改进项跟踪' }] },
-  { id: 'cost-alert', ver: '0.2.1', author: '@ym-community', cap: 'events.trace',
-    desc: '按账号/意图设成本阈值，超额触发系统通知' },
-  { id: 'otel-exporter', ver: '0.1.9', author: '@ym-community', cap: 'events.trace',
-    desc: '决策 trace 转发 OTLP 后端（Jaeger / Tempo / Langfuse）' },
-  { id: 'qwen-vendor', ver: '0.4.2', author: '@ym-community', cap: 'vendor.verdict',
-    desc: 'Qwen 200 伪装拒绝长尾特判词表' },
-];
-let storeFilter = '';
+async function loadStore() {
+  if (storeCache) return storeCache;
+  try {
+    const r = await api('/api/plugin-store');
+    storeCache = r.store || [];
+  } catch {
+    storeCache = []; // 索引拉取失败不阻塞插件页其余区块
+  }
+  return storeCache;
+}
 
 async function loadPlugins() {
   let views = [];
@@ -2215,20 +2246,22 @@ async function loadPlugins() {
   } catch (e) {
     $('list-plugins').innerHTML = errBox('插件清单加载失败: ' + e.message, 'plugins');
   }
-  renderSubAdapters(views);
-  renderStore(views);
+  const store = await loadStore();
+  renderSubAdapters(views, store);
+  renderStore(views, store);
   renderPluginsList(views);
 }
 
-function renderSubAdapters(views) {
+function renderSubAdapters(views, store) {
   $('list-subadapters').innerHTML = SUB_ADAPTERS.map((a) => {
     const plug = views.find((x) => x.id === a.id);
     const on = !!(plug && plug.enabled);
     const state = on ? '<span class="pill ok">已启用</span>'
       : plug ? '<span class="pill disabled">已停用</span>'
       : '<span class="pill disabled">未安装</span>';
+    const entry = (store || []).find((x) => x.id === a.id);
     const acts = !plug
-      ? '<button type="button" class="text add" data-subact="install" data-s="' + esc(a.id) + '">安装</button>'
+      ? `<button type="button" class="text add" data-subact="install" data-s="${esc(a.id)}" ${entry && !entry.download_url ? 'title="安装包暂未发布，可先手动接入 plugins.json".' : ''}>安装</button>`
       : '<button type="button" class="text add" data-subact="goacct">去添加账号</button>';
     return '<div class="row"><div class="who">' +
       '<div class="name">' + esc(a.vendor) + ' <code>' + esc(a.pkg) + '</code></div>' +
@@ -2240,34 +2273,42 @@ function renderSubAdapters(views) {
   }).join('');
 }
 
-function renderStore(views) {
+function renderStore(views, store) {
   const chips = [''].concat([...new Set(Object.values(PLUGIN_CATS))]);
   $('store-chips').innerHTML = chips.map((c) =>
     '<button type="button" class="cat-chip' + (storeFilter === c ? ' on' : '') + '" data-cat="' + esc(c) + '">' + esc(c || '全部') + '</button>').join('');
   const installed = new Set(views.map((p) => p.id));
-  const list = STORE_INDEX.filter((s) => !installed.has(s.id) && (!storeFilter || PLUGIN_CATS[s.cap] === storeFilter));
-  $('list-store').innerHTML = list.map((s) =>
-    '<div class="row"><div class="who">' +
+  // 订阅适配在上方专区展示，商店列表不重复
+  const list = (store || []).filter((s) => s.cap !== 'provider.oauth')
+    .filter((s) => !installed.has(s.id) && (!storeFilter || PLUGIN_CATS[s.cap] === storeFilter));
+  $('list-store').innerHTML = list.map((s) => {
+    const unpublished = !s.download_url;
+    return '<div class="row"><div class="who">' +
     '<div class="name"><code>' + esc(s.id) + '</code><span class="pill">' + esc(PLUGIN_CATS[s.cap] || '扩展') + '</span><span class="muted2" style="font-weight:400">' + esc(s.ver) + ' · ' + esc(s.author) + '</span></div>' +
-    '<div class="sub wrap">' + esc(s.desc) + '</div>' +
+    '<div class="sub wrap">' + esc(s.desc) + (unpublished ? ' <span class="pill disabled">安装包未发布</span>' : '') + '</div>' +
     ((s.intents || []).length ? '<div class="sub wrap">安装后声明意图：' + s.intents.map((i) => '<code>' + esc(i.id) + '</code>').join(' ') + '</div>' : '') +
     '</div>' +
-    '<button type="button" class="btn-primary" data-store-install="' + esc(s.id) + '">安装</button>' +
-    '</div>').join('') || listEmpty('该分类下暂无可安装插件');
+    '<button type="button" class="btn-primary" data-store-install="' + esc(s.id) + '"' + (unpublished ? ' title="安装包暂未发布，可先手动接入 plugins.json".' : '') + '>安装</button>' +
+    '</div>';
+  }).join('') || listEmpty('该分类下暂无可安装插件');
 }
 
-// 安装指引（批1 过渡）：网关不代下载不代装——商店给出接入路径，安装器
-// 随批3 落地后切换为真安装。
-function installGuideModal(id, cap) {
-  openDialog({
-    title: `安装插件 ${id}`,
-    body:
-      '<p>插件安装器随后续版本提供（网关不代下载、不代装插件）。当前请按社区插件指引手动接入：</p>' +
-      '<div class="oauth-cmd"><code>在 plugins.json 增加条目 { "id": "' + esc(id) + '", "command": ["…"], "capabilities": ["' + esc(cap) + '"] }</code></div>' +
-      '<p class="muted2">保存后热生效；插件的声明意图会自动出现在「路由 › 意图分配」。</p>',
-    yes: '知道了',
-    onSubmit: async () => {},
-  }).catch(() => {});
+// 一键安装（真端点）：POST /api/plugin-store/{id}/install——服务端下载
+// zip 校验落盘注册热生效；失败错误内联在状态行（未发布包如实提示）。
+async function installFromStore(id) {
+  const btn = document.querySelector(`[data-store-install="${CSS.escape(id)}"]`) ||
+    document.querySelector(`[data-subact="install"][data-s="${CSS.escape(id)}"]`);
+  busy(btn, true, '安装中…');
+  try {
+    await api(`/api/plugin-store/${encodeURIComponent(id)}/install`, { method: 'POST' });
+    status(`已安装并启用 ${id}（热生效）`, 'ok');
+    storeCache = null;
+    await loadPlugins();
+  } catch (e) {
+    status('安装失败: ' + e.message, 'err', 8000);
+  } finally {
+    busy(btn, false);
+  }
 }
 
 function renderPluginsList(views) {
@@ -2294,11 +2335,7 @@ function renderPluginsList(views) {
 $('list-subadapters').addEventListener('click', async (e) => {
   const act = e.target.closest('[data-subact]');
   if (act) {
-    if (act.dataset.subact === 'install') {
-      const a = SUB_ADAPTERS.find((x) => x.id === act.dataset.s);
-      if (a) installGuideModal(a.id, 'provider.oauth');
-      return;
-    }
+    if (act.dataset.subact === 'install') { installFromStore(act.dataset.s); return; }
     if (act.dataset.subact === 'goacct') { show('providers'); return; }
   }
   const sw = e.target.closest('[data-subtoggle]');
@@ -2324,8 +2361,7 @@ $('store-chips').addEventListener('click', (e) => {
 $('list-store').addEventListener('click', (e) => {
   const btn = e.target.closest('[data-store-install]');
   if (!btn) return;
-  const s = STORE_INDEX.find((x) => x.id === btn.dataset.storeInstall);
-  if (s) installGuideModal(s.id, s.cap);
+  installFromStore(btn.dataset.storeInstall);
 });
 
 $('list-plugins').addEventListener('click', async (e) => {
