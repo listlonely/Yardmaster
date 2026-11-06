@@ -547,9 +547,30 @@ async function loadSettings() {
     $('set-l1').value = s.l1_classifier || '';
     $('set-l1-timeout').value = s.l1_timeout_ms || '';
     $('set-listen').value = s.listen || '';
+    $('set-update').value = s.update || 'check';
+    $('set-fx').value = s.fx_usd_cny > 0 ? s.fx_usd_cny : '';
+    $('set-notify').classList.toggle('on', s.notify !== false); // 指针语义：nil=开
+    $('set-notify').setAttribute('aria-checked', String(s.notify !== false));
     renderTokens(s.tokens || []);
   } catch { /* settings.json 不存在：保持空表单 */ }
 }
+
+// ---------- 通用偏好（批2 界面收尾：通知/更新/汇率走 settings；色板本地） ----------
+
+bindSwitch($('set-notify'), () => {}); // 态随表单保存（无即时副作用）
+$('set-colorblind').addEventListener('click', () => {
+  const on = !$('set-colorblind').classList.contains('on');
+  setColorblind(on);
+});
+
+function setColorblind(on) {
+  if (on) document.documentElement.setAttribute('data-colorblind', '1');
+  else document.documentElement.removeAttribute('data-colorblind');
+  localStorage.setItem('ym-colorblind', on ? '1' : '0');
+  $('set-colorblind').classList.toggle('on', on);
+  $('set-colorblind').setAttribute('aria-checked', String(on));
+}
+setColorblind(localStorage.getItem('ym-colorblind') === '1'); // 启动即应用
 
 $('btn-save-settings').addEventListener('click', async () => {
   const b = $('btn-save-settings');
@@ -558,6 +579,9 @@ $('btn-save-settings').addEventListener('click', async () => {
     l1_classifier: $('set-l1').value.trim(),
     l1_timeout_ms: parseInt($('set-l1-timeout').value, 10) || 0,
     listen: $('set-listen').value.trim(),
+    notify: $('set-notify').classList.contains('on'),
+    update: $('set-update').value,
+    fx_usd_cny: parseFloat($('set-fx').value) || 0, // 0=保留现值（服务端语义）
   };
   busy(b, true, '保存中…');
   try {
@@ -2442,6 +2466,8 @@ function cmdkRegistry() {
       run: () => { show('providers'); addProviderModal(); } },
     { label: '生成访问令牌', hint: '为客户端发放命名令牌（设置页）', kw: 'token 令牌 发放 生成 apikey',
       run: () => { show('settings'); setTimeout(() => $('btn-token-gen').click(), 260); } },
+    { label: '显示上手引导', hint: '重新打开首页的三步引导卡', kw: 'guide 引导 上手 新手 接线',
+      run: () => { localStorage.removeItem('ym-guide-dismissed'); localStorage.removeItem('ym-guide-wired'); show('overview'); renderGuide(); } },
   ]);
 }
 

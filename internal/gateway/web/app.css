@@ -710,3 +710,25 @@ body.app .set-field { width: 18rem; }
 .snip-d summary::-webkit-details-marker { display: none; }
 .snip-d summary:hover { color: var(--fg); }
 .snip { margin-top: 6px; background: #14161b; color: #d6dbe6; border-radius: 8px; padding: 9px 11px; font: 11px/1.7 var(--code); white-space: pre; overflow-x: auto; }
+
+/* ---------- 色盲友好色板（§9.9 可采纳项 #4：Okabe-Ito 定性系列）----------
+   html[data-colorblind="1"] 切换（设置页开关，localStorage 持久化）。
+   特异性 :root[data-colorblind="1"] 高于全部主题来源（亮 :root /
+   media 暗 / [data-theme=dark]），置于文件末尾防顺序回退。 */
+:root[data-colorblind="1"] {
+  --green: #009E73; --green-soft: #d7efe8;   /* bluish green */
+  --amber: #B57900; --amber-soft: #faeed6;   /* orange（压深保 4.5:1） */
+  --red: #D55E00;   --red-soft: #fbe7da;     /* vermillion */
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"])[data-colorblind="1"] {
+    --green: #00c896; --green-soft: #10332b;
+    --amber: #ffc133; --amber-soft: #3a2c14;
+    --red: #ff8a3d;   --red-soft: #3a2417;
+  }
+}
+:root[data-theme="dark"][data-colorblind="1"] {
+  --green: #00c896; --green-soft: #10332b;
+  --amber: #ffc133; --amber-soft: #3a2c14;
+  --red: #ff8a3d;   --red-soft: #3a2417;
+}
