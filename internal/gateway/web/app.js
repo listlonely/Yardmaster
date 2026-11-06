@@ -184,7 +184,7 @@ function openDialog({ title, body, yes = '保存', danger = false, onSubmit }) {
           <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
         </button></div>
       <form><div class="ebody">${body}</div>
-        <div class="bar"><span class="modal-err"></span>
+        <div class="dlg-bar"><span class="modal-err"></span>
           <button type="button" class="text dlg-cancel">取消</button>
           <button type="submit" class="${danger ? 'btn-danger' : 'btn-primary'}">${esc(yes)}</button>
         </div></form></div>`;
