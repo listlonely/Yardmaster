@@ -18,9 +18,9 @@
     <div class="side-scroll">
       <nav id="tabs" aria-label="主导航">
         <span class="nav-gl">运行</span>
-        <button type="button" class="nav-it" data-tab="overview" data-title="总览">
+        <button type="button" class="nav-it" data-tab="overview" data-title="首页">
           <svg class="nav-ic" viewBox="0 0 20 20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="5.5" height="5.5" rx="1.2"/><rect x="11.5" y="3" width="5.5" height="5.5" rx="1.2"/><rect x="3" y="11.5" width="5.5" height="5.5" rx="1.2"/><rect x="11.5" y="11.5" width="5.5" height="5.5" rx="1.2"/></g></svg>
-          <span>总览</span></button>
+          <span>首页</span></button>
         <span class="nav-gl">路由</span>
         <button type="button" class="nav-it" data-tab="providers" data-title="服务商">
           <svg class="nav-ic" viewBox="0 0 20 20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3.5" width="14" height="5.5" rx="1.5"/><rect x="3" y="11" width="14" height="5.5" rx="1.5"/><path d="M6 6.2h.01M6 13.8h.01"/></g></svg>
@@ -52,6 +52,10 @@
           <svg viewBox="0 0 16 16" width="9" height="9" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
         </button>
       </div>
+      <button type="button" class="side-gw" id="btn-settings" title="设置">
+        <svg class="nav-ic" viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></g></svg>
+        <span>设置</span>
+      </button>
       <button type="button" class="side-gw" id="side-gw" hidden>
         <i aria-hidden="true"></i><span id="side-gw-text"></span>
       </button>
@@ -77,27 +81,65 @@
 
   <!-- 应用壳：body 不滚，各视图独立滚动（Magpie 构造） -->
   <main id="view-root">
-    <!-- 总览 -->
+    <!-- 首页（驾驶舱，2026-11 批2） -->
     <section id="page-overview" class="view" hidden>
-      <div id="stat-cards" class="cards"></div>
-      <div class="label">运行状态</div>
-      <div class="list">
-        <div class="row">
-          <div class="who">
-            <div class="name">网关</div>
-            <div class="sub" id="ov-state">读取中…</div>
+      <div class="hero" id="hero">
+        <div class="hero-main">
+          <div class="hero-status">
+            <span class="pill" id="ov-pill">连接中…</span>
+            <span class="gw-url">
+              <code id="gw-url">—</code>
+              <button type="button" class="icon" id="btn-copy-url" title="复制网关地址（给 Agent 配置用）" aria-label="复制网关地址">
+                <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="5.5" y="5.5" width="8" height="8" rx="1.6"/><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/></g></svg>
+              </button>
+            </span>
           </div>
-          <span class="pill" id="ov-pill">连接中…</span>
+          <div class="hero-meta" id="ov-state">读取中…</div>
+        </div>
+        <div class="hero-actions">
+          <button type="button" class="qa primary" id="qa-dispatch">
+            <svg class="nav-ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M17 3L9.5 10.5M17 3l-5 14-2.5-6.5L3 8l14-5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            派发任务</button>
+          <button type="button" class="qa" id="qa-pv-add">
+            <svg class="nav-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+            添加服务商</button>
+          <button type="button" class="qa" id="qa-probe">
+            <svg class="nav-ic" viewBox="0 0 20 20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 17a7 7 0 1 1 7-7"/><path d="M10 10l4-3"/></g></svg>
+            测额</button>
+          <button type="button" class="qa" id="qa-reload">
+            <svg class="nav-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2v3h-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            重载配置</button>
         </div>
       </div>
-      <div class="label">代理链 <span class="label-note">F3 继承：账号 → 服务商 → 全局 → 系统</span></div>
-      <div class="list" id="ov-proxy"><div class="row"><div class="who"><div class="name muted2">读取中…</div></div></div></div>
+
+      <div class="guide" id="guide" hidden></div>
+
+      <div id="stat-cards" class="cards"></div>
       <div class="label">休眠与额度</div>
       <div class="list" id="ov-rest"></div>
-      <div class="label">设置</div>
+      <div class="label">代理 <span class="label-note">全局设置一次；添加服务商/账号时按需选择是否走它</span></div>
+      <div class="list" id="ov-proxy"></div>
+    </section>
+
+    <!-- 设置（独立页，2026-11 批2 从总览拆出） -->
+    <section id="page-settings" class="view" hidden>
+      <div class="label">网关装配 <span class="label-note">Agent 与浏览器经由该地址访问网关</span></div>
       <div class="list prefs">
         <div class="row pref">
-          <div class="who"><div class="name">全局代理</div><div class="sub">留空=系统代理；direct=显式直连；http(s)/socks5://…</div></div>
+          <div class="who"><div class="name">监听地址</div><div class="sub">默认 127.0.0.1:8317；局域网共享填 0.0.0.0:8317（强制令牌）</div></div>
+          <input id="set-listen" class="set-field" spellcheck="false" autocomplete="off">
+        </div>
+      </div>
+      <div class="label">访问令牌 <span class="label-note">为每个客户端单独发放并命名归属；泄露时轮换，旧令牌即刻失效</span></div>
+      <div class="list" id="list-tokens"></div>
+      <div class="after-list">
+        <button type="button" class="btn-primary" id="btn-token-gen">＋ 生成令牌</button>
+        <span class="sub" id="tokens-sub"></span>
+      </div>
+      <div class="label">路由与分类</div>
+      <div class="list prefs">
+        <div class="row pref">
+          <div class="who"><div class="name">全局代理</div><div class="sub">只需在此设置一次；添加服务商/账号时选择是否走它。留空=跟随系统；direct=显式直连；http(s)/socks5://…</div></div>
           <input id="set-proxy" class="set-field" spellcheck="false" autocomplete="off">
         </div>
         <div class="row pref">
@@ -108,20 +150,12 @@
           <div class="who"><div class="name">L1 超时</div><div class="sub">毫秒</div></div>
           <input id="set-l1-timeout" class="set-field num" type="number" min="0" step="100">
         </div>
-        <div class="row pref">
-          <div class="who"><div class="name">监听地址</div><div class="sub">默认 127.0.0.1:8317；局域网共享填 0.0.0.0:8317（强制令牌）</div></div>
-          <input id="set-listen" class="set-field" spellcheck="false" autocomplete="off">
-        </div>
-        <div class="row pref">
-          <div class="who"><div class="name">访问令牌</div><div class="sub" id="set-token-sub">留空=保留现有；仅本机使用可留空</div></div>
-          <input id="set-token" class="set-field" type="password" autocomplete="new-password">
-        </div>
       </div>
       <div class="after-list">
         <button type="button" class="btn-primary" id="btn-save-settings">保存设置</button>
         <span class="sub" id="settings-msg"></span>
       </div>
-      <p class="foot-note">保存后写入 settings.json；监听地址与令牌等装配期字段需重启 serve 完全生效。所有写路径经备份栈 + 审计。</p>
+      <p class="foot-note">保存后写入 settings.json；监听地址等装配期字段需重启 serve 完全生效，令牌变更即时生效。所有写路径经备份栈 + 审计。</p>
     </section>
 
     <!-- 服务商 -->

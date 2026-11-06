@@ -665,3 +665,44 @@ body.app .set-field { width: 18rem; }
 .ap-adv summary .chev { transition: transform .25s; }
 .ap-adv[open] summary .chev { transform: rotate(90deg); }
 .ap-adv .ap-adv-body { padding: 2px 12px 10px; }
+
+/* ---------- 批2 落地（2026-11 原型定稿）：首页驾驶舱 + 三步引导 + 设置独立页 ---------- */
+
+/* hero（网关状态卡：状态 pill + 网关地址 + 快捷动作） */
+.hero { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; display: flex; gap: 18px; align-items: flex-start; flex-wrap: wrap; position: relative; overflow: hidden; }
+.hero::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: linear-gradient(180deg, var(--accent), color-mix(in srgb, var(--accent) 20%, transparent)); }
+.hero.err::before { background: linear-gradient(180deg, var(--red), transparent); }
+.hero-main { flex: 1 1 320px; min-width: 0; display: flex; flex-direction: column; gap: 7px; }
+.hero-status { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.hero-status .pill { font-size: 12.5px; padding: 3px 12px; }
+.gw-url { display: inline-flex; align-items: center; gap: 4px; }
+.gw-url code { font-size: 13.5px; padding: 4px 10px; border-radius: 8px; }
+.hero-meta { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.hero-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-start; }
+.qa { display: inline-flex; align-items: center; gap: 7px; padding: 8px 13px; border-radius: 9px; border: 1px solid var(--line); background: var(--card); font-size: 12.5px; font-weight: 500; transition: border-color .12s, color .12s, background .12s, transform .1s; }
+.qa:hover { border-color: var(--accent); color: var(--accent); }
+.qa:active { transform: scale(.97); }
+.qa.primary { background: var(--accent); color: var(--accent-fg); border-color: transparent; }
+.qa.primary:hover { background: var(--accent-deep); color: var(--accent-fg); }
+.qa:disabled { opacity: .55; pointer-events: none; }
+.qa .nav-ic { width: 14px; height: 14px; }
+
+/* 三步上手引导 */
+.guide { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 18px 16px; margin-top: 12px; position: relative; }
+.guide-head { display: flex; align-items: center; margin-bottom: 10px; }
+.guide-head b { font-size: 13px; font-weight: 600; }
+.guide-head .icon { margin-left: auto; }
+.gsteps { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; }
+.gstep { display: flex; gap: 10px; padding: 11px 12px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--card-2); align-items: flex-start; }
+.gstep.done { border-color: color-mix(in srgb, var(--green) 30%, var(--line-2)); background: color-mix(in srgb, var(--green-soft) 45%, var(--card-2)); }
+.gnum { flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-size: 11px; font-weight: 700; font-family: var(--code); margin-top: 1px; }
+.gstep.done .gnum { background: var(--green-soft); color: var(--green); }
+.gstep h4 { font-size: 12.5px; font-weight: 600; }
+.gstep p { font-size: 11.5px; color: var(--muted); margin: 2px 0 8px; line-height: 1.55; }
+.gstep .gact { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.gtick { color: var(--green); font-size: 11.5px; font-weight: 500; display: inline-flex; align-items: center; gap: 4px; }
+.snip-d { margin-top: 6px; }
+.snip-d summary { list-style: none; cursor: pointer; font-size: 11.5px; color: var(--ctl-fg); display: inline-flex; align-items: center; gap: 5px; }
+.snip-d summary::-webkit-details-marker { display: none; }
+.snip-d summary:hover { color: var(--fg); }
+.snip { margin-top: 6px; background: #14161b; color: #d6dbe6; border-radius: 8px; padding: 9px 11px; font: 11px/1.7 var(--code); white-space: pre; overflow-x: auto; }

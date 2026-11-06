@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"yardmaster/internal/credential"
@@ -68,6 +69,7 @@ type Server struct {
 	AppDir        string            // 数据目录（管理 API 备份/写配置用）；空=禁用写接口
 	ProvidersPath string            // providers.json 路径（/api/reload 热重载用）
 	Token         string            // 访问令牌（M2-W5）：非空时 /v1 与 /api 要求匹配；空=本机信任态
+	tokenHashes   atomic.Value      // 命名令牌 hash 集（[]string，2026-11 批2；atomic 零值可用）
 	Creds         *credential.Store // OAuth 凭证库（M3-W3）；nil=无 OAuth 能力
 	Dispatch      *dispatch.Engine  // 任务→Agent 派发引擎（M5-W4）；nil=未挂载
 	Plugins       *plugin.Registry  // 插件注册表（M7-W3）；nil=未挂载
@@ -118,6 +120,13 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/quota/probe", s.handleQuotaProbe)          // M9-W3：手动触发余额轮询
 	mux.HandleFunc("GET /api/provider-presets", s.handleProviderPresets) // M9：前端「添加 Provider」预填数据源（只读）
 	mux.HandleFunc("POST /api/provider/probe", s.handleProviderProbe)    // 添加服务商「检测并获取模型」（凭证验证 + 上游清单）
+	mux.HandleFunc("POST /api/tokens", s.handleTokenCreate)              // 命名令牌：生成（plain 仅本次返回）
+	mux.HandleFunc("POST /api/tokens/{id}/rotate", func(w http.ResponseWriter, r *http.Request) {
+		s.handleTokenRotate(w, r.PathValue("id"))
+	})
+	mux.HandleFunc("DELETE /api/tokens/{id}", func(w http.ResponseWriter, r *http.Request) {
+		s.handleTokenDelete(w, r.PathValue("id"))
+	})
 	mux.HandleFunc("GET /api/plugins", s.handlePluginsView)              // M7-W5：插件状态视图
 	mux.HandleFunc("POST /api/plugins/{id}/enable", func(w http.ResponseWriter, r *http.Request) {
 		s.handlePluginToggle(w, r.PathValue("id"), "enable")

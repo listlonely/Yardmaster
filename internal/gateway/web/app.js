@@ -287,7 +287,8 @@ function show(name) {
   } else {
     document.startViewTransition(swapViews);
   }
-  const title = tabsBox.querySelector(`.nav-it[data-tab="${name}"]`)?.dataset.title || name;
+  const title = tabsBox.querySelector(`.nav-it[data-tab="${name}"]`)?.dataset.title ||
+    ({ settings: '设置' }[name] || name);
   $('page-title').textContent = title;
   if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
   // 激活即拉数据（观察者打开什么就看什么，Magpie show() 语义）
@@ -297,6 +298,7 @@ function show(name) {
   if (name === 'observe') { loadTraces(); loadCost(); loadPricing(); }
   if (name === 'dispatch') { loadDispatchAgents(); loadDispatchTemplates(); loadDispatchSessions(); }
   if (name === 'plugins') loadPlugins();
+  if (name === 'settings') loadSettings();
 }
 
 // 视图激活且页面可见才轮询（Magpie 每视图自管轮询的纪律）
@@ -431,33 +433,43 @@ function statCard(label, value, sub) {
     ${sub ? `<div class="stat-s">${esc(sub)}</div>` : ''}</div>`;
 }
 
+// gwURL：网关对外地址（页面自身来源即网关地址，含端口最准确）
+const gwURL = () => location.origin;
+
 async function loadOverview() {
   try {
     const s = await refreshState();
     renderSideGw(true);
+    $('gw-url').textContent = gwURL();
     $('ov-pill').textContent = '运行中';
     $('ov-pill').className = 'pill ok';
+    $('hero').classList.remove('err');
+    const provs = cache.providers ? (cache.providers.providers || []) : [];
+    const accs = provs.reduce((n, p) => n + (p.accounts || []).length, 0);
     $('ov-state').textContent =
-      `版本 ${s.version} · 已运行 ${s.uptime} · ` +
-      `服务商 ${(s.providers || []).length} 个 · 路由组 ${(s.groups || []).length} 个`;
+      `版本 ${s.version} · 已运行 ${s.uptime} · 服务商 ${provs.length || '…'} 个（${accs ? accs + ' 个账号' : '…'}）`;
     renderRest(s);
   } catch (e) {
     renderSideGw(false);
     $('ov-pill').textContent = '无法连接';
     $('ov-pill').className = 'pill err';
+    $('hero').classList.add('err');
     $('ov-state').textContent = e.message;
+    renderGuide();
     return;
   }
   // 数据卡与代理链依赖 providers/settings（失败时独立降级，不拖垮状态区）
   try {
     if (!cache.providers) cache.providers = await api('/api/config/providers');
     if (!cache.settings) cache.settings = await api('/api/config/settings');
+    if (!cache.rules) cache.rules = await api('/api/config/rules');
     renderStatCards();
     renderProxyChain();
     renderSideGw(true);
   } catch (e) {
     $('stat-cards').innerHTML = `<div class="empty-state">数据卡加载失败：${esc(e.message)}</div>`;
   }
+  renderGuide();
 }
 
 function renderStatCards() {
@@ -470,12 +482,15 @@ function renderStatCards() {
     if (a.usage_day === localDay) used += a.used_tokens || 0;
     if (a.quota_tokens_day > 0) quotaAccs++;
   }
-  const rules = cache.rules ? (cache.rules.rules || []).length : '…';
+  // 意图分配统计（融合视图）：意图规则数 + 兜底（无条件规则）= 已配置链
+  const rules = (cache.rules && cache.rules.rules) || [];
+  const intentRules = rules.filter((r) => r.intent && r.target).length;
+  const hasFallback = rules.some((r) => r.target && !r.intent && !r.regex && !r.max_tokens && !r.caller_key);
+  const configured = intentRules + (hasFallback ? 1 : 0);
   $('stat-cards').innerHTML =
     statCard('服务商', provs.length, `${provs.filter((p) => !p.disabled).length} 个启用`) +
     statCard('账号', accCount, `${quotaAccs} 个配置额度`) +
-    statCard('路由组', (cache.state.groups || []).length) +
-    statCard('任务规则', rules) +
+    statCard('意图分配', configured, configured ? '在「路由」页编辑' : '尚未配置调用链') +
     statCard('当日用量', fmtTokens(used), 'tokens（全部账号累计）');
 }
 
@@ -522,7 +537,7 @@ function renderProxyChain() {
   $('ov-proxy').innerHTML = rows.join('');
 }
 
-// ---------- 设置（总览页 pref 行） ----------
+// ---------- 设置（独立页，2026-11 批2 从总览拆出） ----------
 
 async function loadSettings() {
   try {
@@ -532,10 +547,7 @@ async function loadSettings() {
     $('set-l1').value = s.l1_classifier || '';
     $('set-l1-timeout').value = s.l1_timeout_ms || '';
     $('set-listen').value = s.listen || '';
-    $('set-token').value = ''; // 令牌脱敏返回，留空即保留
-    $('set-token-sub').textContent = s.token
-      ? `已设置（${s.token}），留空=保留`
-      : '留空=保留现有；仅本机使用可留空';
+    renderTokens(s.tokens || []);
   } catch { /* settings.json 不存在：保持空表单 */ }
 }
 
@@ -546,7 +558,6 @@ $('btn-save-settings').addEventListener('click', async () => {
     l1_classifier: $('set-l1').value.trim(),
     l1_timeout_ms: parseInt($('set-l1-timeout').value, 10) || 0,
     listen: $('set-listen').value.trim(),
-    token: $('set-token').value, // 空值由服务端按「保留现有」处理
   };
   busy(b, true, '保存中…');
   try {
@@ -567,6 +578,185 @@ $('btn-save-settings').addEventListener('click', async () => {
   }
 });
 
+// ---------- 访问令牌（批2 多令牌 · 命名归属；plain 仅生成/轮换时可见） ----------
+
+// copyText：剪贴板写入 + 状态反馈（令牌弹框/引导复制共用）。clipboard
+// API 失败（权限/失焦）时 textarea + execCommand 兜底（原型同构）。
+async function copyText(text, okMsg) {
+  try {
+    await navigator.clipboard.writeText(text);
+    status(okMsg || '已复制', 'ok');
+    return true;
+  } catch {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed;opacity:0';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      ta.remove();
+      if (!ok) throw new Error('execCommand 复制失败');
+      status(okMsg || '已复制', 'ok');
+      return true;
+    } catch (e2) {
+      status('复制失败: ' + e2.message, 'err');
+      return false;
+    }
+  }
+}
+
+function renderTokens(toks) {
+  const list = $('list-tokens');
+  if (!list) return; // 设置页未挂载（HTML 兜底）
+  list.innerHTML = toks.map((t) =>
+    `<div class="row"><div class="who">
+      <div class="name">${esc(t.name)} <code>${esc(t.mask)}</code></div>
+      <div class="sub">创建于 ${esc(t.created || '—')}</div></div>
+      <div class="row-acts" style="opacity:1">
+        <button type="button" class="text" data-ttok="rotate" data-id="${esc(t.id)}">轮换</button>
+        <button type="button" class="text del" data-ttok="del" data-id="${esc(t.id)}">删除</button>
+      </div></div>`).join('') || listEmpty('尚无令牌——生成一枚发给客户端（如 Trae、claude-code）');
+  const sub = $('tokens-sub');
+  if (sub) sub.textContent = toks.length
+    ? `共 ${toks.length} 枚令牌 · 按客户端隔离，泄露时轮换该枚即可，其余不受影响`
+    : '';
+}
+
+// 生成/轮换后的弹框：网关地址 + 令牌明文，两项各自可复制
+function tokenCreatedDialog(name, plain) {
+  const url = gwURL();
+  const back = openDialog({
+    title: `令牌已就绪 · ${name}`,
+    body:
+      '<p>请立即复制保存——落盘只存哈希，关闭后只显示掩码。把下面两项填进客户端即可接入网关。</p>' +
+      '<div class="frow"><span>网关地址</span><div class="oauth-cmd" style="margin:0"><code>' + esc(url) + '</code>' +
+      '<button type="button" class="text add" data-tcopy="' + esc(url) + '">复制</button></div></div>' +
+      '<div class="frow"><span>访问令牌</span><div class="oauth-cmd" style="margin:0"><code>' + esc(plain) + '</code>' +
+      '<button type="button" class="text add" data-tcopy="' + esc(plain) + '">复制</button></div></div>' +
+      '<p class="muted2">示例（Trae）：API 地址 ' + esc(url) + '/v1 · API Key = 此令牌 · 模型选链上的模型。</p>',
+    yes: '完成',
+    onSubmit: async () => {},
+  }).catch(() => {});
+  void back;
+  q('#modal-root .dialog:last-child').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-tcopy]');
+    if (b) copyText(b.dataset.tcopy, '已复制');
+  });
+}
+
+$('btn-token-gen').addEventListener('click', () => {
+  openDialog({
+    title: '生成访问令牌',
+    body: frow('归属（发给谁）', '<input class="field" name="tname" required placeholder="如 Trae · 笔记本 / claude-code · 台式机">', '按客户端隔离：泄露时轮换这一枚即可，其余令牌不受影响'),
+    yes: '生成',
+    onSubmit: async (form) => {
+      const name = formVals(form).tname.trim();
+      if (!name) throw new Error('归属名不能为空');
+      const r = await api('/api/tokens', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      status('令牌已生成：' + name + '（写前备份已留底）', 'ok');
+      loadSettings(); // 刷新列表（含旧条目）
+      setTimeout(() => tokenCreatedDialog(name, r.plain), 60);
+    },
+  }).catch(() => {});
+});
+
+$('list-tokens').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-ttok]');
+  if (!b) return;
+  const id = b.dataset.id;
+  const name = b.closest('.row')?.querySelector('.name')?.childNodes[0]?.textContent?.trim() || id;
+  if (b.dataset.ttok === 'rotate') {
+    const ok = await confirmModal(`轮换「${name}」的令牌？`, '旧令牌即刻失效——该客户端需要换成新令牌，其他令牌不受影响。', { yes: '轮换', danger: true });
+    if (!ok) return;
+    try {
+      const r = await api(`/api/tokens/${encodeURIComponent(id)}/rotate`, { method: 'POST' });
+      status('令牌已轮换：' + name, 'ok');
+      loadSettings();
+      setTimeout(() => tokenCreatedDialog(name, r.plain), 60);
+    } catch (err) {
+      status('轮换失败: ' + err.message, 'err');
+    }
+    return;
+  }
+  if (b.dataset.ttok === 'del') {
+    const ok = await confirmModal(`删除「${name}」的令牌？`, '该客户端将无法访问网关，需删除其配置或重新发令牌。', { yes: '删除', danger: true });
+    if (!ok) return;
+    try {
+      await api(`/api/tokens/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      status('令牌已删除：' + name, 'ok');
+      loadSettings();
+    } catch (err) {
+      status('删除失败: ' + err.message, 'err');
+    }
+  }
+});
+
+// ---------- 三步上手引导（首页驾驶舱；状态持久化 localStorage） ----------
+
+const guide = {
+  get dismissed() { return localStorage.getItem('ym-guide-dismissed') === '1'; },
+  set dismissed(v) { v ? localStorage.setItem('ym-guide-dismissed', '1') : localStorage.removeItem('ym-guide-dismissed'); },
+  get wired() { return localStorage.getItem('ym-guide-wired') === '1'; },
+  set wired(v) { v ? localStorage.setItem('ym-guide-wired', '1') : localStorage.removeItem('ym-guide-wired'); },
+};
+
+function gstep(n, title, desc, done, actionHTML) {
+  return '<div class="gstep' + (done ? ' done' : '') + '">' +
+    '<span class="gnum">' + (done ? '✓' : n) + '</span>' +
+    '<div><h4>' + esc(title) + '</h4><p>' + desc + '</p>' +
+    (done ? '<span class="gtick">已完成</span>' : '<div class="gact">' + (actionHTML || '') + '</div>') +
+    '</div></div>';
+}
+
+function renderGuide() {
+  const g = $('guide');
+  if (!g) return;
+  const provs = cache.providers ? (cache.providers.providers || []) : [];
+  const done1 = provs.length > 0;
+  const done2 = guide.wired;
+  const done3 = !!cache.state && (cache.state.uptime || '') !== '';
+  if ((done1 && done2 && done3) || guide.dismissed) { g.hidden = true; return; }
+  g.hidden = false;
+  const url = gwURL();
+  const snip =
+    '# Claude Code（环境变量）\n' +
+    'ANTHROPIC_BASE_URL=' + url + '\n' +
+    'ANTHROPIC_AUTH_TOKEN=<网关令牌；未设令牌可留空>\n\n' +
+    '# Trae（设置 → 模型 → 添加模型 · OpenAI 兼容）\n' +
+    'API 地址 ' + url + '/v1 · API Key <网关令牌，未设可任意> · 模型选链上的模型\n\n' +
+    '# 或用 CLI 一键接线（自动改写配置，可回滚）：\n' +
+    'yardmaster agents wire claude-code -model yardmaster-main';
+  g.innerHTML =
+    '<div class="guide-head"><b>三步完成接线</b>' +
+    '<button type="button" class="icon" id="guide-dismiss" title="隐藏引导（可在命令面板重新打开）" aria-label="隐藏引导">' +
+    '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>' +
+    '</button></div>' +
+    '<div class="gsteps">' +
+    gstep(1, '添加第一个服务商', 'Key 类：粘贴 Key 检测模型即可；订阅类：先在插件页启用适配，再按指引 CLI 授权导入账号。', done1,
+      done1 ? '' : '<button type="button" class="text add" id="guide-add-pv">添加服务商</button>') +
+    gstep(2, '把 Agent 指向网关', '复制网关地址写进 Agent 配置；或用 CLI 一键接线。', done2,
+      done2 ? '' : '<button type="button" class="text add" id="guide-copy-url">复制网关地址</button>' +
+        '<details class="snip-d"><summary>接线示例</summary><pre class="snip">' + esc(snip) + '</pre></details>') +
+    gstep(3, '发出第一个请求', '在任意 Agent 里发一句话；观测页会出现完整路由决策。', done3,
+      done3 ? '' : '<button type="button" class="text add" id="guide-go-observe">打开观测</button>' +
+        '<button type="button" class="text add" id="guide-go-dispatch">派发一个任务试试</button>') +
+    '</div>';
+  $('guide-dismiss').addEventListener('click', () => { guide.dismissed = true; renderGuide(); });
+  $('guide-add-pv')?.addEventListener('click', () => addProviderModal());
+  $('guide-copy-url')?.addEventListener('click', async () => {
+    if (await copyText(gwURL(), '已复制网关地址：' + gwURL() + '（粘到 Agent 配置里）')) {
+      guide.wired = true;
+      renderGuide();
+    }
+  });
+  $('guide-go-observe')?.addEventListener('click', () => show('observe'));
+  $('guide-go-dispatch')?.addEventListener('click', () => { show('dispatch'); setTimeout(() => $('disp-task').focus(), 260); });
+}
+
 // reloadConfig：重读 providers.json 并热替换路由快照（顶栏按钮与命令面板共用）。
 async function reloadConfig() {
   const r = await api('/api/reload', { method: 'POST' });
@@ -576,6 +766,22 @@ async function reloadConfig() {
   if (!q('#page-providers').hidden) loadProviders();
   if (!q('#page-routing').hidden) loadRouting();
 }
+
+// ---------- 首页驾驶舱快捷动作（批2：hero 四动作 + 复制地址点亮引导） ----------
+
+$('btn-copy-url').addEventListener('click', async () => {
+  if (await copyText(gwURL(), '已复制网关地址：' + gwURL() + '（粘到 Agent 配置里）')) {
+    guide.wired = true;
+    renderGuide();
+  }
+});
+$('qa-dispatch').addEventListener('click', () => { show('dispatch'); setTimeout(() => $('disp-task').focus(), 260); });
+$('qa-pv-add').addEventListener('click', () => { show('providers'); addProviderModal(); });
+$('qa-probe').addEventListener('click', () => probeQuotas());
+$('qa-reload').addEventListener('click', async () => {
+  try { await reloadConfig(); } catch (e) { status('重载失败: ' + e.message, 'err'); }
+});
+$('btn-settings').addEventListener('click', () => show('settings'));
 $('btn-reload').addEventListener('click', async () => {
   const b = $('btn-reload');
   b.classList.add('spin');
@@ -2188,6 +2394,8 @@ function cmdkRegistry() {
     run: () => show(b.dataset.tab),
   }));
   return views.concat([
+    { label: '设置', hint: '监听 / 令牌 / 代理 / 分类器', kw: 'settings 设置 配置 令牌',
+      run: () => show('settings') },
     { label: '切换主题', hint: '跟随系统 → 亮 → 暗 循环', kw: 'theme 主题 亮色 暗色',
       run: cycleTheme },
     { label: '重载配置', hint: '重读 providers.json 并热替换路由快照', kw: 'reload 配置 重载 provider 服务商',
@@ -2196,6 +2404,8 @@ function cmdkRegistry() {
       run: probeQuotas },
     { label: '添加服务商', hint: '从厂商预设新建上游（或追加账号）', kw: 'add provider 新增 供应商 服务商 预设',
       run: () => { show('providers'); addProviderModal(); } },
+    { label: '生成访问令牌', hint: '为客户端发放命名令牌（设置页）', kw: 'token 令牌 发放 生成 apikey',
+      run: () => { show('settings'); setTimeout(() => $('btn-token-gen').click(), 260); } },
   ]);
 }
 

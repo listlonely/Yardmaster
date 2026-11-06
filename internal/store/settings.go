@@ -1,6 +1,8 @@
 // 用户设置（settings.json）：全局代理、L1 分类器、监听与访问令牌。
 package store
 
+import "fmt"
+
 // Settings 是用户级设置。
 type Settings struct {
 	GlobalProxy string `json:"global_proxy,omitempty"` // 空=跟随系统代理；direct=显式直连（F3 继承链末端）
@@ -18,6 +20,11 @@ type Settings struct {
 	// Bearer、x-api-key 或 X-Gw-Token 均可）；仅本机使用可留空。
 	// 任何输出必须脱敏（§4.4，与 api_key 同规）。
 	Token string `json:"token,omitempty"`
+
+	// 多令牌（2026-11 批2，命名归属）：每个客户端一枚，泄露时轮换该枚
+	// 即可。plain 生成后不落盘（只存 sha256 hash + mask）；与 Token
+	//（legacy 单令牌）叠加生效。管理 API 输出剥除 hash。
+	Tokens []TokenEntry `json:"tokens,omitempty"`
 
 	// Gemini CLI OAuth client secret（M3-W3）：Google installed-app 客户端
 	// 的公开常量，但 GitHub secret scanning 拦截仓库内字面量，故经设置
@@ -42,6 +49,51 @@ type Settings struct {
 	// check=只提示（缺省，现状行为）；auto=发现新版全自动下载安装重启。
 	// 自动替换 exe 属高敏动作，缺省永不 auto——用户显式开启才启用。
 	Update string `json:"update,omitempty"`
+}
+
+// TokenEntry 是一枚命名访问令牌（多令牌，按客户端隔离）：生成时返回
+// plain 仅此一次，落盘只存 sha256 hash + mask（plain 不可从文件恢复）。
+type TokenEntry struct {
+	ID      string `json:"id"`                // 稳定 ID（tk-<8hex>）
+	Name    string `json:"name"`              // 归属名（发给谁，如 "Trae · 笔记本"）
+	Hash    string `json:"hash,omitempty"` // sha256(plain) 小写 hex（64 位）；管理面输出剥除
+	Mask    string `json:"mask"`              // 脱敏形 ***+末 4 位
+	Created string `json:"created,omitempty"` // 创建日期（2006-01-02）
+}
+
+// ValidateTokenEntries 校验多令牌清单（写入口与加载共用，fail-closed）。
+func ValidateTokenEntries(ts []TokenEntry) error {
+	seen := map[string]bool{}
+	for _, t := range ts {
+		if t.ID == "" {
+			return fmt.Errorf("令牌 id 不能为空")
+		}
+		if seen[t.ID] {
+			return fmt.Errorf("令牌 id 重复: %s", t.ID)
+		}
+		seen[t.ID] = true
+		if t.Name == "" {
+			return fmt.Errorf("令牌 %s 缺少归属名", t.ID)
+		}
+		if len(t.Hash) != 64 {
+			return fmt.Errorf("令牌 %s 的 hash 须为 sha256 hex（64 位）", t.ID)
+		}
+		if t.Mask == "" {
+			return fmt.Errorf("令牌 %s 缺少脱敏形", t.ID)
+		}
+	}
+	return nil
+}
+
+// StripTokenHashes 返回剥除 hash 的副本（管理 API 输出脱敏：hash 不出
+// 管理面——枚举无收益，宁严勿宽）。
+func StripTokenHashes(ts []TokenEntry) []TokenEntry {
+	out := make([]TokenEntry, len(ts))
+	for i, t := range ts {
+		out[i] = t
+		out[i].Hash = ""
+	}
+	return out
 }
 
 // 自动更新三态取值。

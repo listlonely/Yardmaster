@@ -28,6 +28,9 @@
 | `POST /api/quota/probe` | 手动触发一次余额轮询（M9-W3；与后台 30min ticker 同 `pollQuotas` 路径） | **写响应包** + `probes` 数组 |
 | `GET /api/provider-presets` | 内置厂商预设表（M9：前端「添加 Provider」表单预填；与 CLI `provider add -preset` 同一 `provider.Presets` 事实源，只读） | `Preset[]` |
 | `POST /api/provider/probe` | 凭证验证 + 按协议拉取上游模型清单（2026-11 批1：添加服务商「检测并获取模型」，复用 CLI 同一 `ProbeAccount`；api_key 仅进内存，探测经全局代理） | `{ok, models: [id]}` |
+| `POST /api/tokens` | 生成命名令牌（2026-11 批2 多令牌；`{"name":"归属"}`；plain 仅本次响应返回，落盘只存 sha256 hash；即时热生效） | **写响应包** + `plain` + `token` + `tokens` |
+| `POST /api/tokens/{id}/rotate` | 轮换命名令牌（旧 plain 即刻失效，新 plain 仅本次返回） | **写响应包** + `plain` + `token` + `tokens` |
+| `DELETE /api/tokens/{id}` | 删除命名令牌（该客户端即刻失去访问；删光回到本机信任态） | **写响应包** + `tokens` |
 
 管理面非回环监听时全部路由强制 token（M2-W5 三口基线，不变）。
 

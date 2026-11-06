@@ -124,7 +124,7 @@ func setupGateway() (*serveSetup, error) {
 	if listen == "" {
 		listen = gateway.DefaultAddr
 	}
-	if err := gateway.ValidateSecurity(listen, settings.Token); err != nil {
+	if err := gateway.ValidateSecurityN(listen, settings.Token, len(settings.Tokens)); err != nil {
 		return nil, err
 	}
 
@@ -143,6 +143,9 @@ func setupGateway() (*serveSetup, error) {
 		Intents: gateway.NewIntentChain(paths.IntentsPath(), settings.L1Classifier,
 			l1TimeoutOrDefault(settings), newL1Caller(listen, settings.Token, settings.L1Classifier)),
 	}
+	// 命名令牌（2026-11 批2）：启动时装载 hash 集（生成/轮换/删除经
+	// 管理 API 后即时热替换，不依赖重启）。
+	srv.SetTokenHashes(gateway.TokenHashesOf(settings.Tokens))
 
 	// 派发引擎（M5-W4）：dispatch.json 损坏 → fail-closed 禁用派发并
 	// 指引修复（网关其余功能不受影响）；不存在 → 无 agent 空引擎。

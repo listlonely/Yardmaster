@@ -71,8 +71,10 @@ func (s *Server) handleConfigGet(w http.ResponseWriter, name string) {
 			writeAPIErr(w, err)
 			return
 		}
-		// Token 脱敏输出（§4.4，与 api_key 同规）。
+		// Token 脱敏输出（§4.4，与 api_key 同规）；命名令牌剥除 hash
+		//（管理面只需 id/name/mask/created——hash 无出管面的收益）。
 		f.Token = maskAPIKey(f.Token)
+		f.Tokens = store.StripTokenHashes(f.Tokens)
 		writeJSON(w, f)
 	case cfgRules:
 		var f RulesFile
@@ -174,6 +176,15 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, name st
 		if f.Token == "" || f.Token == maskAPIKey(cur.Token) {
 			f.Token = cur.Token
 		}
+		// 命名令牌（批2）：控制台设置表单不提供该数组（管理走
+		// /api/tokens 三件套）——nil 保留现值；显式提供（CLI 全文档写）
+		// 才采纳并校验。写后热替换 hash 集（即时生效）。
+		if f.Tokens == nil {
+			f.Tokens = cur.Tokens
+		} else if err := store.ValidateTokenEntries(f.Tokens); err != nil {
+			writeAPIErr(w, badRequest(err))
+			return
+		}
 		if f.Listen == "" {
 			f.Listen = cur.Listen
 		}
@@ -214,7 +225,7 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, name st
 		if listen == "" {
 			listen = DefaultAddr
 		}
-		if err := ValidateSecurity(listen, f.Token); err != nil {
+		if err := ValidateSecurityN(listen, f.Token, len(f.Tokens)); err != nil {
 			writeAPIErr(w, badRequest(err))
 			return
 		}
@@ -222,9 +233,12 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, name st
 			writeAPIErr(w, err)
 			return
 		}
+		// 命名令牌热替换：tokens 变更即时生效（listen 仍为装配期字段）。
+		s.SetTokenHashes(TokenHashesOf(f.Tokens))
 		// 写响应包：Token 脱敏（f 为本请求局部值，Settings 不入运行态）。
 		view := f
 		view.Token = maskAPIKey(f.Token)
+		view.Tokens = store.StripTokenHashes(f.Tokens)
 		s.writeResult(w, effectRestart, view)
 	case cfgRules:
 		var f RulesFile
