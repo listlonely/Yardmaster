@@ -44,7 +44,7 @@
 - 首字节（ttfb_ms）= 请求进入到上游 2xx 响应头到达；total_ms = 到响应写完。token：非流式与流式均尽力从上游响应体提取（usage 正则、取最后一次出现；流式只扫尾部 8KB 窗口，usage 跨块截断时可能漏计——尽力而为语义）。
 - 观测通道：`GET /api/trace?limit=&agent=&result=(ok|fail|switch)`；CLI `yardmaster trace list [-agent -result -limit]` / `trace show <id>`（失败链 ✗ 标注原因，成功 ✓）。
 - TUI（M2-W6 最小版，M9-W5 增量）：`yardmaster tui [-addr -token]`——行交互面板（status/trace/keys/**dispatch** 四视图 + switch 改绑定），数据全经管理 API（支持远程与令牌态），10s 自动刷新；status 视图附派发汇总行（会话数/进行中），dispatch 视图列最近 15 条会话（时间/agent/状态/耗时/任务摘要）；不做全屏 raw-mode（跨平台按键原始模式需平台代码或第三方依赖，违背纯 Go 少依赖选型，全屏版留 M3）。
-- OTLP metrics（M9-W5，M4 砍项回收）：与 traces 同一观察流在导出器内聚合，累积型（cumulative）快照周期推送 `<endpoint>/v1/metrics`（30s；失败保留聚合下次重发——累积型幂等，无重试队列）；指标最小集：`yardmaster.requests`（sum by outcome）、`yardmaster.request.duration`（histogram ms 七档）、`yardmaster.tokens`（sum by kind=prompt|completion）；随 `settings.otel.enabled` 同启停（无独立开关）；`service.version` 资源属性随构建注入（此前硬编码 v0.4.0 的陈旧值顺带修正）。
+- OTLP metrics（M9-W5，M4 砍项回收）：与 traces 同一观察流在导出器内聚合，累积型（cumulative）快照周期推送 `<endpoint>/v1/metrics`（30s；失败保留聚合下次重发——累积型幂等，无重试队列）；指标最小集：`yardmaster.requests`（sum by outcome）、`yardmaster.request.duration`（histogram ms 七档）、`yardmaster.tokens`（sum by kind=prompt|completion）；随 `settings.otel.enabled` 同启停（无独立开关）；`service.version` 资源属性随构建注入（此前硬编码陈旧值顺带修正）。
 - 落盘：`<数据目录>/trace/trace-YYYYMMDD.jsonl`（0600）；启动时清理 + 跨天滚动时清理；只存元数据与失败原因，永不落盘对话内容（§4.4）。
 - 用量：`NoteUsage` 累计（内存 + 账号快照字段，跨日按 UsageDay 重置）；`FlushUsage` 重读 providers.json 只更新跟踪账号（不覆盖运行期 CLI 编辑），serve 期间每分钟 + 退出前各一次；`yardmaster provider quota <p> <acc> <tokens|0>` 配置账号当日额度，>0 后 smart 策略按剩余比例排序。
 - 额度感知路由（M2-W4）：`accountExhausted` 读侧计算（QuotaTokensDay>0 且当日 UsedTokens≥Quota），耗尽账号进入候选末段（与短休眠段独立，休眠至次日 UsageDay 翻转自动恢复）；亲和候选耗尽同样不提前；`NoteUsage` 跨线时告警一次；`/api/state` 的 `exhausted` 数组展示。

@@ -5,8 +5,8 @@
 > 主线采纳——载体选型终局：子进程插件协议（长驻进程），yaegi 降为
 > 未来「轻量内联钩子」备选，不作为 W3 载体**。依据见 §二。
 
-> [2026-11-02-插件交付] M7-W3~W6 全部落地（提交 e7a4176 / 76caff3 /
-> v0.7.0）。实测与设计偏差备注：
+> [2026-11-02-插件交付] M7-W3~W6 全部落地（提交 e7a4176 / 76caff3）。
+> 实测与设计偏差备注：
 > - 四扩展点全部接线并测试；vendor.verdict 响应契约落地形态为
 >   `{action:"error"|"retry","status","base_url"}`（比设计稿的
 >   `verdict:"error:<code>"` 字符串编码更直接；语义不变：error 映射
@@ -172,7 +172,7 @@ P99 <10ms（httptest 计时，不碰网络）。
 | W3 | internal/plugin 运行时（注册表/生命周期/NDJSON/重启退避/崩溃隔离）+ plugins.json fail-closed + 扇出 dispatcher + events.trace 落地 + 网关接线（配置闸/状态视图/启停 API） | 已交付（e7a4176） |
 | W4 | 三个钩子契约（dispatch.parse / classify.intent / vendor.verdict）+ dispatch 配置 parser 字段 | 已交付（e7a4176） |
 | W5 | 管理面（控制台插件页：清单/启停/日志尾/崩溃计数；CLI plugin list/enable/disable）+ examples/ 示例插件 | 已交付（76caff3） |
-| W6 | 全链路冒烟（示例插件→装载→事件落盘→崩溃隔离演练→管理面启停，浏览器 4/4 PASS）+ 发布 v0.7.0 | 已交付 |
+| W6 | 全链路冒烟（示例插件→装载→事件落盘→崩溃隔离演练→管理面启停，浏览器 4/4 PASS）+ 发布 | 已交付 |
 
 ## 九、边界与铁律对照
 

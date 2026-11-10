@@ -26,7 +26,7 @@
 > - 生命周期收敛：Ctrl-C 与托盘退出统一经 ctx→`app.Quit()` 单路径；
 >   原生壳启动后故障回退浏览器窗口且网关不陪葬（§五第二道闸，代码
 >   路径落实）。
-> - A/B 对照（git worktree v0.7.0）：`systray error: unable to set
+> - A/B 对照（git worktree）：`systray error: unable to set
 >   icon: The operation completed successfully` 为**既有怪癖**（fyne
 >   systray 的 Shell_NotifyIcon 假阴性），非 W2 引入，图标实际正常。
 > - 依赖边界：TestCorePackagesNoWailsDependency（7 核心包 go list 零
@@ -70,7 +70,7 @@
 > - **exe 资源嵌入**：tools/genwinres（tc-hib/winres v0.3.1 纯 Go，wails
 >   同源依赖）预生成 `cmd/yardmaster/rsrc_windows_amd64.syso` 入库——
 >   图标（trayIcon 同款矢量按 32 网格放大，256/64/48/32/16）、版本信息
->   （v0.8.0，中文 FileDescription UTF-16 正常）、per-monitor-v2 DPI
+>   （中文 FileDescription UTF-16 正常）、per-monitor-v2 DPI
 >   manifest（进程启动即 aware，wails 运行时检测另有兜底）。`go generate
 >   ./cmd/yardmaster` 再生成；发版更新 genwinres 里 appVersion 常量。
 >   实证：exe 属性 ProductName/FileVersion/中文描述/MIT 齐全、图标
@@ -84,10 +84,10 @@
 >   （.syso 已链接进二进制，打包层无感知）；install.ps1 下载解压加
 >   PATH——与壳层改动零耦合；产物清单形态不变（2 tar.gz + 1 zip +
 >   SHA256SUMS + 2 install 脚本）。
-> - 资源版本（0.8.0）与运行时版本（-ldflags 注入）互不依赖，如实
+> - 资源版本与运行时版本（-ldflags 注入）互不依赖，如实
 >   记录。TUI/CLI 对齐小项按可砍清单砍除。
 
-> [2026-11-03-M8W6 冒烟发布交付] §9.9 W6 全项落地，v0.8.0 发布。冒烟
+> [2026-11-03-M8W6 冒烟发布交付] §9.9 W6 全项落地。冒烟
 > 记录：①Windows 真机全链路——无参数启动原生窗口（标题 Yardmaster）+
 > healthz 200 + **控制台写路径闭环**（settings 同值回写经完整写路径，
 > effect=restart + 写响应含 config）+ 关窗语义（WM_CLOSE → 隐藏到托盘，
@@ -228,7 +228,7 @@ internal/app/
 2. **双兜底**：探测缺失 → 直接走浏览器窗口（`openAppWindow` 原样）；
    探测在位但 wails 启动失败（error 返回）→ 同样回退浏览器窗口并
    stderr 留痕（可观测，不静默）。
-3. 回退路径即 v0.7.0 现行为——降级永不阻塞「二进制直接运行即有界面」。
+3. 回退路径即现行为——降级永不阻塞「二进制直接运行即有界面」。
 
 ### 五·甲、平台行为差异（M8-W4 文档化）
 
@@ -475,10 +475,10 @@ MIT（Copyright (c) 2026 yetone）：设计模式借鉴无义务；若逐字复�
 - ~~深浅色跟随系统（v3 WindowsOptions 主题字段 W2 核实后定）~~ **已
   落地（W3）**：CSS 双主题 + 初始窗口背景色按 AppsUseLightTheme 探测。
 - ~~托盘菜单真机点击（「打开窗口」重开 / 「退出」收尾顺序）~~ **已实测
-  （M9-W4/W6，2026-11-03）**：v0.9.0 构建真机确认——菜单形态正确
-  （v0.9.0 版本行禁用态 + 状态摘要行 + 打开窗口/退出）、「打开窗口」
+  （M9-W4/W6，2026-11-03）**：构建真机确认——菜单形态正确
+  （版本行禁用态 + 状态摘要行 + 打开窗口/退出）、「打开窗口」
   点击 → 浏览器弹出控制台（用户确认）+ 派发完成气泡弹出；「退出」
-  收尾路径与 v0.8.x 同构（stop 信号 + systray.Quit，多次 serve 信号
+  收尾路径同构（stop 信号 + systray.Quit，多次 serve 信号
   收尾已验证），日常使用自然覆盖。
 - 窗口状态记忆的 DPI 缩放/多显示器表现——**正式留档**（本机单显示器
   无缩放切换场景）：验证指引=多显示器/不同缩放率机器拖窗跨屏 → 关窗 →
@@ -489,13 +489,13 @@ MIT（Copyright (c) 2026 yetone）：设计模式借鉴无义务；若逐字复�
   断言）；验证指引=ARM64 设备安装 windows zip 产物，按 M8-W6 S1~S4
   口径冒烟。
 - Linux 侧原生窗口为非目标（webkit2gtk cgo 非目标），浏览器窗口方案
-  与 v0.7.0 行为等价由 W4 回归验证；**Linux 真机 D-Bus 托盘冒烟正式
+  行为等价性由 W4 回归验证；**Linux 真机 D-Bus 托盘冒烟正式
   留档**（无 Linux 桌面）：验证指引=Linux 桌面机器安装 release 产物，
   运行 app/serve -tray，确认托盘图标出现且菜单（打开控制台/退出）可点。
 
 ## 十一、自动更新（M11-W1 方案定稿）[2026-11-04]
 
-> 开发文档 §9.13 排期（四周，目标 v0.11.0）。现状基线：update 仅检测
+> 开发文档 §9.13 排期（四周）。现状基线：update 仅检测
 > （CLI updateCheck / 托盘动态入口 / 控制台 B1 pill 均只开 releases 页）；
 > release 产物 `pack/*.zip + SHA256SUMS` 复用。
 
@@ -580,7 +580,7 @@ MIT（Copyright (c) 2026 yetone）：设计模式借鉴无义务；若逐字复�
 >   报错文案与暂存整体清理）+ SHA256SUMS 变体 + CLI 三态（testenv
 >   沙箱）+ API 三态（webapi_test）；**真机守卫测试**
 >   TestRealReleaseStageUpdate（YM_REAL_RELEASE=vX.Y.Z 才跑，CI 恒
->   Skip）：对 v0.10.0 真资产全管线核销通过——12MB zip 流式 SHA256
+>   Skip）：对真资产全管线核销通过——12MB zip 流式 SHA256
 >   （146d6330d943…）+ 双 exe（>10MB 断言）+ VERSION。
 > - **网络环境偏差（如实留档）**：本机 api.github.com 直连可通但
 >   objects.githubusercontent.com 阻断（release 资产 CDN）；挂本地
@@ -590,9 +590,9 @@ MIT（Copyright (c) 2026 yetone）：设计模式借鉴无义务；若逐字复�
 >   （settings global_proxy），纯环境代理在中国网络环境不可依赖。
 
 > [2026-11-04-M11W3W4 自替换引擎与收官交付] §9.13 W3/W4 全项落地，
-> **v0.11.0 发布（CI+release 双绿 6 产物）**。提交链 ad79fa6（W3 引擎）
+> **发布（CI+release 双绿 6 产物）**。提交链 ad79fa6（W3 引擎）
 > →a8b8f67（off 静默）→0299aa4（app-only 修复，真机演练实证缺陷）
-> →286d001（版本资源）→tag v0.11.0。实测与偏差：
+> →286d001（版本资源）。实测与偏差：
 > - **引擎形态**（internal/app/update_install.go）：installStaged（锁
 >   单飞 O_EXCL+pid 存活复核/版本闸防降级重装/swapAside 换侧核心/
 >   spawn 接力）+ relayInit（等旧 pid 退出端口让位——**relayEnv=
@@ -620,12 +620,12 @@ MIT（Copyright (c) 2026 yetone）：设计模式借鉴无义务；若逐字复�
 >   级验证；④app 模式闭环——GUI 双 exe 换代 2 秒、app.log 链、**app-
 >   only 安装（原位无 console exe）首发失败抓真缺陷**：无条件 aside
 >   对缺失文件 rename 报错→修为「原位缺失直接落位不产 .old」。
-> - **三态矩阵**（真 v0.11.0 release 环境）：off=22s 无查询无下载无
+> - **三态矩阵**（真 release 环境）：off=22s 无查询无下载无
 >   升级（彻底静默）✓；check=22s 不自动装（只提示）✓；auto=托盘
 >   15s 首查命中→自动触发→**GitHub API 403（代理出口 IP 匿名限流，
 >   一小时窗口未恢复）→WARN「auto 安装失败 1h 后重试」留痕** ✓——
 >   触发链与失败重试语义实证；**下载段被网络环境阻断，分段留档**：
->   真包下载 W2 守卫测试已核销（v0.10.0 12MB 流式 SHA256+双 exe）、
+>   真包下载 W2 守卫测试已核销（12MB 流式 SHA256+双 exe）、
 >   安装段四场景已核销，完整一键真 release 升级留待网络通畅环境复核。
 > - **演练方法论留档**：Shell 工具命令结束后子进程树被清（job object）
 >   ——演练进程生命周期=命令生命周期，「起+触发+验证」必须单命令内
