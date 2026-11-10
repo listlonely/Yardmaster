@@ -5,7 +5,7 @@
 #   ./install.sh                       # 最新 release → /usr/local/bin
 #   ./install.sh v0.2.0                # 指定版本
 #   ./install.sh --user                # 安装到 ~/.local/bin（无需 root）
-#   ./install.sh --file yardmaster-linux-amd64.tar.gz   # 离线安装
+#   ./install.sh --file yardmaster-linux-amd64   # 离线安装（裸二进制）
 #
 # 数据目录固定 ~/.yardmaster；卸载只需删除安装的二进制与数据目录。
 set -euo pipefail
@@ -18,7 +18,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --user) DEST="$HOME/.local/bin"; shift ;;
     --file) FILE="$2"; shift 2 ;;
-    -h|--help) echo "用法: install.sh [版本] [--user] [--file <tar.gz>]"; exit 0 ;;
+    -h|--help) echo "用法: install.sh [版本] [--user] [--file <二进制>]"; exit 0 ;;
     *) VERSION="$1"; shift ;;
   esac
 done
@@ -33,22 +33,20 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 if [ -n "$FILE" ]; then
-  TGZ="$FILE"
-  echo "离线安装：$TGZ"
+  SRC="$FILE"
+  echo "离线安装：$SRC"
 else
   if [ -z "$VERSION" ]; then
     VERSION="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" |
       grep -o '"tag_name": *"[^"]*"' | head -n1 | cut -d'"' -f4)"
   fi
-  URL="https://github.com/$REPO/releases/download/$VERSION/yardmaster-linux-$ARCH.tar.gz"
+  URL="https://github.com/$REPO/releases/download/$VERSION/yardmaster-linux-$ARCH"
   echo "下载 $URL"
-  TGZ="$TMP/yardmaster.tar.gz"
-  curl -fsSL "$URL" -o "$TGZ"
+  SRC="$TMP/yardmaster"
+  curl -fsSL "$URL" -o "$SRC"
 fi
 
-tar xzf "$TGZ" -C "$TMP"
-SRC="$TMP/yardmaster-linux-$ARCH/yardmaster"
-[ -f "$SRC" ] || { echo "包内未找到 yardmaster（期望 $SRC）" >&2; exit 1; }
+[ -f "$SRC" ] || { echo "未找到二进制（期望 $SRC）" >&2; exit 1; }
 
 mkdir -p "$DEST"
 install -m 0755 "$SRC" "$DEST/yardmaster"

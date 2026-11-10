@@ -1,16 +1,14 @@
-// M11-W2 下载与校验管线（app.md §十一）：release 资产枚举 → 平台
-// zip 匹配 → SHA256SUMS 解析 → 流式下载边下边校验 → 解包暂存 update/
-// 子目录（双 exe + VERSION 标记）。自替换与接力重启（W3 --update-relay）
-// 在本管线产物之上工作。
+// M11-W2 下载与校验管线（app.md §十一）：release 资产枚举 → 平台裸
+// 二进制匹配（release 产物无压缩包层）→ SHA256SUMS 解析 → 流式下载
+// 边下边校验 → 暂存 update/ 子目录（exe + VERSION 标记）。自替换与
+// 接力重启（W3 --update-relay）在本管线产物之上工作。
 //
 // 安全语义：SHA256 不匹配即弃（删文件报错，绝不留半成品）；任何一步
-// 失败整体清理暂存目录；磁盘空间预检（zip×3：本体+解包+替换余量）；
-// zip 按文件名白名单提取（yardmaster.exe / yardmaster-app.exe，输出
-// 名固定），无 zip-slip 面。
+// 失败整体清理暂存目录；磁盘空间预检（资产×2：本体+替换余量）；暂存
+// 文件名取固定常量（与下载资产名解耦），裸二进制落位后补执行位。
 package app
 
 import (
-	"archive/zip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -41,14 +39,14 @@ type releaseInfo struct {
 	Assets []releaseAsset `json:"assets"`
 }
 
-// stagedUpdate 是已校验解包的暂存产物（W3 自替换引擎的输入）。
+// stagedUpdate 是已校验落位的暂存产物（W3 自替换引擎的输入）。
 type stagedUpdate struct {
-	Dir        string // 暂存目录（双 exe + VERSION）
+	Dir        string // 暂存目录（exe + VERSION）
 	GatewayExe string // update/yardmaster.exe（必有）
 	AppExe     string // update/yardmaster-app.exe（桌面入口，可缺）
-	Tag        string // 如 v0.11.0（与 VERSION 标记一致）
-	SHA256     string // zip 资产十六进制校验和
-	Size       int64  // zip 字节数
+	Tag        string // 如 v0.1.0（与 VERSION 标记一致）
+	SHA256     string // 网关二进制资产十六进制校验和
+	Size       int64  // 网关二进制字节数
 }
 
 // fetchRelease 查询 release 元数据（含资产清单）。
@@ -74,12 +72,18 @@ func fetchRelease(ctx context.Context, client *http.Client, apiURL string) (*rel
 	return &out, nil
 }
 
-// platformAssetName 返回当前平台的 release 资产名（package.sh 实证：
-// 仅 Windows 打 zip；其他平台真 release 中查无此资产而自然报错，不
-// 做硬编码平台拦截）。
+// platformAssetName 返回当前平台的网关二进制资产名（release.yml 命名：
+// yardmaster-<os>-<arch>[.exe]；无压缩包层，下载即用）。
 func platformAssetName() string {
-	return fmt.Sprintf("yardmaster-%s-%s.zip", runtime.GOOS, runtime.GOARCH)
+	if runtime.GOOS == "windows" {
+		return fmt.Sprintf("yardmaster-%s-%s.exe", runtime.GOOS, runtime.GOARCH)
+	}
+	return fmt.Sprintf("yardmaster-%s-%s", runtime.GOOS, runtime.GOARCH)
 }
+
+// appAssetName 返回桌面入口资产名（仅 Windows amd64 发布；其他平台
+// release 查无此资产而自然缺省——暂存无桌面入口，仅换网关侧）。
+func appAssetName() string { return "yardmaster-windows-app.exe" }
 
 // defaultStageDir 返回默认暂存目录（exe 同级 update/）。
 func defaultStageDir() (string, error) {
@@ -108,23 +112,26 @@ func parseSHA256SUMS(data []byte) map[string]string {
 	return sums
 }
 
-// stageUpdate 执行完整管线：平台 zip 匹配 → SHA256SUMS 解析 → 磁盘
-// 预检 → 流式下载边下边校验 → 解包暂存。任何一步失败即整体清理暂存
-// 目录并返回错误。progress 为下载进度回调（已收/总字节；nil=无回调）
-// ——W3 托盘气泡经此节流推送。
+// stageUpdate 执行完整管线：平台裸二进制匹配 → SHA256SUMS 解析 → 磁盘
+// 预检 → 流式下载边下边校验 → 落位暂存（Windows 追加桌面入口资产）。
+// 任何一步失败即整体清理暂存目录并返回错误。progress 为网关二进制
+// 下载进度回调（已收/总字节；nil=无回调）——W3 托盘气泡经此节流推送。
 func stageUpdate(ctx context.Context, client *http.Client, rel *releaseInfo, stageDir string, progress func(done, total int64)) (*stagedUpdate, error) {
-	zipName := platformAssetName()
-	var asset, sumsAsset *releaseAsset
+	gwName := platformAssetName()
+	appName := appAssetName()
+	var gwAsset, appAsset, sumsAsset *releaseAsset
 	for i := range rel.Assets {
 		switch rel.Assets[i].Name {
-		case zipName:
-			asset = &rel.Assets[i]
+		case gwName:
+			gwAsset = &rel.Assets[i]
+		case appName:
+			appAsset = &rel.Assets[i]
 		case "SHA256SUMS":
 			sumsAsset = &rel.Assets[i]
 		}
 	}
-	if asset == nil {
-		return nil, fmt.Errorf("release %s 缺少本平台资产 %s（非 zip 平台请手动更新）", rel.Tag, zipName)
+	if gwAsset == nil {
+		return nil, fmt.Errorf("release %s 缺少本平台资产 %s", rel.Tag, gwName)
 	}
 	if sumsAsset == nil {
 		return nil, fmt.Errorf("release %s 缺少 SHA256SUMS 资产，拒绝无校验下载", rel.Tag)
@@ -144,33 +151,44 @@ func stageUpdate(ctx context.Context, client *http.Client, rel *releaseInfo, sta
 		return nil, err
 	}
 
-	// 磁盘空间预检：zip×3（本体+解包产物+替换余量）；探测失败不阻断
-	//（ exotic 文件系统交给后续真实写错误兜底）。
-	if free, derr := diskFree(stageDir); derr == nil && free < uint64(asset.Size)*3 {
-		return fail(fmt.Errorf("磁盘空间不足：可用 %d MB < 需约 %d MB", free>>20, uint64(asset.Size)*3>>20))
+	// 磁盘空间预检：资产合计×2（本体+替换余量）；探测失败不阻断
+	//（exotic 文件系统交给后续真实写错误兜底）。
+	need := uint64(gwAsset.Size) * 2
+	if appAsset != nil {
+		need += uint64(appAsset.Size) * 2
+	}
+	if free, derr := diskFree(stageDir); derr == nil && free < need {
+		return fail(fmt.Errorf("磁盘空间不足：可用 %d MB < 需约 %d MB", free>>20, need>>20))
 	}
 
 	sums, err := fetchAssetBytes(ctx, client, sumsAsset, 64<<10)
 	if err != nil {
 		return nil, err // 尚未落任何文件，无需清理
 	}
-	want, ok := parseSHA256SUMS(sums)[zipName]
+	parsed := parseSHA256SUMS(sums)
+	want, ok := parsed[gwName]
 	if !ok {
-		return fail(fmt.Errorf("SHA256SUMS 未收录 %s 的校验和", zipName))
+		return fail(fmt.Errorf("SHA256SUMS 未收录 %s 的校验和", gwName))
 	}
 
-	zipPath := filepath.Join(stageDir, zipName+".part")
-	size, err := downloadVerified(ctx, client, asset, want, zipPath, progress)
+	st := &stagedUpdate{Dir: stageDir, Tag: strings.TrimSpace(rel.Tag), SHA256: want}
+	gwPath := filepath.Join(stageDir, gatewayExeName)
+	size, err := downloadStageAsset(ctx, client, gwAsset, want, gwPath, progress)
 	if err != nil {
 		return fail(err)
 	}
-	st := &stagedUpdate{Dir: stageDir, Tag: strings.TrimSpace(rel.Tag), SHA256: want, Size: size}
-	if st.GatewayExe, st.AppExe, err = unzipExes(zipPath, stageDir); err != nil {
-		return fail(err)
-	}
-	// zip 本体解包后即弃（暂存只留可执行产物+标记）——删除失败非致命
-	if rerr := os.Remove(zipPath); rerr != nil {
-		slog.Warn("删除已解包 zip 暂存失败（非致命）", "path", zipPath, "err", rerr)
+	st.GatewayExe, st.Size = gwPath, size
+	// 桌面入口（Windows 发布才有资产；校验和缺席则跳过并留痕，不阻断）
+	if appAsset != nil {
+		if wantApp, aok := parsed[appName]; aok {
+			appPath := filepath.Join(stageDir, appExeName)
+			if _, aerr := downloadStageAsset(ctx, client, appAsset, wantApp, appPath, nil); aerr != nil {
+				return fail(aerr)
+			}
+			st.AppExe = appPath
+		} else {
+			slog.Warn("SHA256SUMS 未收录桌面入口校验和，本次仅更新网关入口", "asset", appName)
+		}
 	}
 	if err := os.WriteFile(filepath.Join(stageDir, "VERSION"), []byte(st.Tag+"\n"), 0o644); err != nil {
 		return fail(err)
@@ -266,66 +284,28 @@ func downloadVerified(ctx context.Context, client *http.Client, a *releaseAsset,
 	return n, nil
 }
 
-// unzipExes 从 zip 中按文件名白名单提取双 exe（package.sh 实证布局：
-// yardmaster-windows-amd64/{yardmaster.exe, yardmaster-app.exe, README.md}；
-// 目录前缀任意，按 basename 匹配以兼容打包调整，README 等其余条目
-// 不进暂存）。输出文件名取自固定白名单而非条目路径——zip-slip 无面。
-func unzipExes(zipPath, stageDir string) (gatewayExe, appExe string, err error) {
-	zr, err := zip.OpenReader(zipPath)
+// downloadStageAsset 流式下载资产经 SHA256 校验后落位为 dst（先写
+// .part 再改名——半成品绝不以最终名出现），并补可执行位（裸二进制
+// 下载不保留权限位，chmod 失败即弃）。返回实际字节数。
+func downloadStageAsset(ctx context.Context, client *http.Client, a *releaseAsset, want, dst string, progress func(done, total int64)) (int64, error) {
+	part := dst + ".part"
+	size, err := downloadVerified(ctx, client, a, want, part, progress)
 	if err != nil {
-		return "", "", fmt.Errorf("打开 zip 失败: %w", err)
+		return 0, err
 	}
-	defer func() { _ = zr.Close() }()
-	for _, f := range zr.File {
-		if f.FileInfo().IsDir() {
-			continue
-		}
-		var dst string
-		switch filepath.Base(f.Name) {
-		case "yardmaster.exe":
-			dst = filepath.Join(stageDir, "yardmaster.exe")
-			gatewayExe = dst
-		case "yardmaster-app.exe":
-			dst = filepath.Join(stageDir, "yardmaster-app.exe")
-			appExe = dst
-		default:
-			continue
-		}
-		rc, oerr := f.Open()
-		if oerr != nil {
-			return "", "", fmt.Errorf("读取 zip 条目 %s 失败: %w", f.Name, oerr)
-		}
-		oerr = writeExeFile(rc, dst)
-		rc.Close()
-		if oerr != nil {
-			return "", "", oerr
-		}
+	if err := os.Rename(part, dst); err != nil {
+		_ = os.Remove(part)
+		return 0, fmt.Errorf("落位 %s 失败: %w", dst, err)
 	}
-	if gatewayExe == "" {
-		return "", "", fmt.Errorf("zip 内未找到 yardmaster.exe")
-	}
-	return gatewayExe, appExe, nil
-}
-
-// writeExeFile 把 r 完整写入 dst（可执行权限位）。
-func writeExeFile(r io.Reader, dst string) error {
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
-	if err != nil {
-		return fmt.Errorf("写 %s 失败: %w", dst, err)
-	}
-	if _, err := io.Copy(out, r); err != nil {
-		_ = out.Close()
+	if err := os.Chmod(dst, 0o755); err != nil {
 		_ = os.Remove(dst)
-		return fmt.Errorf("解包 %s 失败: %w", dst, err)
+		return 0, fmt.Errorf("补执行位 %s 失败: %w", dst, err)
 	}
-	if err := out.Close(); err != nil {
-		return fmt.Errorf("写 %s 失败: %w", dst, err)
-	}
-	return nil
+	return size, nil
 }
 
 // updateDownloadCmd 实现 `yardmaster update download`：拉取最新
-// release，校验并解包到暂存目录（缺省 exe 同级 update/；-dir 覆盖）。
+// release，校验后落位暂存目录（缺省 exe 同级 update/；-dir 覆盖）。
 // 只交付已校验的暂存产物——安装与接力重启是 W3（update install）。
 func updateDownloadCmd(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("update download", flag.ContinueOnError)
