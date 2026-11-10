@@ -84,6 +84,8 @@
 >   （.syso 已链接进二进制，打包层无感知）；install.ps1 下载解压加
 >   PATH——与壳层改动零耦合；产物清单形态不变（2 tar.gz + 1 zip +
 >   SHA256SUMS + 2 install 脚本）。
+>   **追记（2026-11-10）**：打包层已整体移除——产物改裸二进制直发
+>   （见文末「发布形态改造」记录），本条留档为当时形态。
 > - 资源版本与运行时版本（-ldflags 注入）互不依赖，如实
 >   记录。TUI/CLI 对齐小项按可砍清单砍除。
 
@@ -235,8 +237,9 @@ internal/app/
 矩阵实证（2026-11-02，-trimpath 本地三目标）：windows/amd64 21.1MB
 （含 wails，增量 ~4.7MB）、linux/amd64 16.4MB、linux/arm64 15.2MB
 （两目标 `go list -deps` 零 wailsapp 断言——build tag 隔离有效，纯 Go
-矩阵不变）。release.yml 无需改动：单 job 串行 `CGO_ENABLED=0` 交叉
-三目标 + package.sh 打包形态与 app 壳层改动无耦合。
+矩阵不变）。release.yml 单 job 串行 `CGO_ENABLED=0` 交叉三目标直出
+裸二进制（无打包层，见文末「发布形态改造」记录），与 app 壳层改动
+无耦合。
 
 | 维度 | Windows（Wails v3 原生壳） | Linux / 其他（浏览器 `--app` 窗口，M5.5 方案） |
 | :-- | :-- | :-- |
@@ -486,8 +489,8 @@ MIT（Copyright (c) 2026 yetone）：设计模式借鉴无义务；若逐字复�
 - 托盘与 wails 窗口长期共存稳定性——**转为日常观察项**（非未实测：
   W4~W6 期间 serve -tray 长跑无异常，退出语义由托盘菜单/信号收尾覆盖）。
 - Windows ARM64——**正式留档**（无设备）：矩阵内构建验证覆盖（CI 交叉
-  断言）；验证指引=ARM64 设备安装 windows zip 产物，按 M8-W6 S1~S4
-  口径冒烟。
+  断言）；验证指引=ARM64 设备安装 windows exe 产物（x64 模拟），按
+  M8-W6 S1~S4 口径冒烟。
 - Linux 侧原生窗口为非目标（webkit2gtk cgo 非目标），浏览器窗口方案
   行为等价性由 W4 回归验证；**Linux 真机 D-Bus 托盘冒烟正式
   留档**（无 Linux 桌面）：验证指引=Linux 桌面机器安装 release 产物，
@@ -497,7 +500,9 @@ MIT（Copyright (c) 2026 yetone）：设计模式借鉴无义务；若逐字复�
 
 > 开发文档 §9.13 排期（四周）。现状基线：update 仅检测
 > （CLI updateCheck / 托盘动态入口 / 控制台 B1 pill 均只开 releases 页）；
-> release 产物 `pack/*.zip + SHA256SUMS` 复用。
+> release 产物 `pack/` 裸二进制 + SHA256SUMS 复用（2026-11-10 起无
+> 压缩包层，见文末「发布形态改造」记录；原文产物为 zip，管线已随
+> 之改造）。
 
 ### Magpie updater 交叉参考（internal/update + internal/gui，v0.1.2890）
 
@@ -525,10 +530,14 @@ MIT（Copyright (c) 2026 yetone）：设计模式借鉴无义务；若逐字复�
    → 拉起原路径主程序 → **healthz HTTP 探活**（网关自带，优于 Magpie 的
    进程存活判断）→ 超时/秒退 → 回滚（exe→`.new-failed`，`.old`→原位，
    拉起旧版）。`--update-relay` 标记防循环（接力进程自身不触发更新）。
-2. **资产管线**：latestRelease 扩展资产枚举（windows-amd64 zip +
-   SHA256SUMS 定位本平台行）→ 流式下载（进度回调→托盘气泡节流）+
-   SHA256 边下边验（不匹配即弃+留痕）→ 解包暂存数据目录 update/
-   子目录（磁盘空间预检；失败清理）→ 双 exe 就位。
+2. **资产管线**（2026-11-10 起裸二进制形态）：latestRelease 扩展资产
+   枚举（本平台 `yardmaster-<GOOS>-<GOARCH>[.exe]` + Windows 追加
+   `yardmaster-windows-app.exe` 桌面入口 + SHA256SUMS）→ 多资产逐个
+   流式下载（进度回调→托盘气泡节流）+ SHA256 边下边验（不匹配即弃
+   +留痕）→ `.part` 校验后改名落位暂存 update/ 子目录并补执行位
+   （磁盘空间预检；失败清理）→ exe 就位。暂存契约（`update/
+   yardmaster.exe` + `yardmaster-app.exe` + VERSION）与安装引擎解耦
+   不变。
 3. **settings `update` 三态**：off（完全静默）/ **check（默认，现状
    行为：只提示）** / auto（发现即下载安装重启）——cfgSettings 键级
    编辑器兼容；自动替换 exe 高敏，auto 默认关。
@@ -537,8 +546,9 @@ MIT（Copyright (c) 2026 yetone）：设计模式借鉴无义务；若逐字复�
    API 写路径纪律：令牌强制 + 审计 + 单飞防并发）；CLI `update
    -install`（headless 手动全管线）。
 5. **范围砍项**：断点续传 / 增量更新 / GUI 安装向导 / macOS 产物。
-   Linux：zip/校验逻辑跨平台，自替换路径按 GOOS 分支（无实机，留档
-   附验证指引）。
+   Linux：裸二进制/校验逻辑跨平台且 Linux 资产正式发布（此前 zip 仅
+   Windows，Linux 更新器报缺资产；裸二进制后自动升级全平台可用），
+   自替换路径按 GOOS 分支（无实机，留档附验证指引）。
 
 ### 探针实证（%TEMP%\ym-relay-probe，双 exe 三场景）
 
@@ -550,7 +560,10 @@ MIT（Copyright (c) 2026 yetone）：设计模式借鉴无义务；若逐字复�
   WaitForSingleObject + healthz，见上）。
 
 > [2026-11-04-M11W2 下载与校验管线交付] §9.13 W2 全项落地（提交
-> df15171）。实测与偏差：
+> df15171）。实测与偏差（**注**：本记录描述 zip 时代的管线——资产
+> 名/解包/预检倍数已于 2026-11-10 改裸二进制形态，见文末「发布形态
+> 改造」记录；其余机制——SHA256SUMS 容错解析、流式边下边验、失败
+> 整体清理——原样延续）：
 > - **管线形态**（internal/app/update_download.go）：
 >   fetchRelease（含资产清单）→ 平台 zip 匹配
 >   （`yardmaster-<GOOS>-<GOARCH>.zip`，package.sh 实证命名；非 zip
@@ -637,7 +650,8 @@ MIT（Copyright (c) 2026 yetone）：设计模式借鉴无义务；若逐字复�
 >   200/409/503 三态）；浏览器端点击交互留用户日常确认。
 > - **未实测项（如实标注）**：Linux 真机替换路径（无实机——引擎代码
 >   跨平台编译+单测双平台覆盖，aside/rename 语义 Linux 同构，验证
->   指引：下载 zip 解包双 exe 后手动模拟 aside/moveIn）；托盘「更新
+>   指引：下载裸二进制（Linux 资产现已正式发布，可直接 `update
+>   download` 暂存）后手动模拟 aside/moveIn）；托盘「更新
 >   失败（点击重试）」菜单恢复路径（依赖真实点击序列）；.new-failed
 >   文件的自动清理（当前留档供诊断，下次安装 aside 前不删——收尾清
 >   理仅 .old）。
@@ -671,3 +685,35 @@ MIT（Copyright (c) 2026 yetone）：设计模式借鉴无义务；若逐字复�
 >   notify_icon.png 嵌入，托盘/通知格式各归其位。
 > - **DPI/深浅色未实测项**：任务栏深浅色切换下的实际观感、高 DPI 缩
 >   放下的帧选择（16/20/24/32/48 已备）——留用户日常确认。
+
+> [2026-11-10-发布形态改造：裸二进制直发] 用户定向「不要打包成压缩
+> 包，直接推送二进制文件」——release 产物去 tar.gz/zip 打包层，
+> 裸二进制直传（提交 c6563e8，随版本重置后首发布 v0.1.0 重发实证，
+> CI+release 双绿）。改动与实测：
+> - **release.yml**：Build 步骤连字符命名直出四资产
+>   （`yardmaster-linux-amd64` / `yardmaster-linux-arm64` /
+>   `yardmaster-windows-amd64.exe` / `yardmaster-windows-app.exe`）；
+>   package.sh 打包步骤整体删除（脚本一并移除）；Checksums 步骤对
+>   裸二进制生成 SHA256SUMS；Release 步骤直传。新增**清理步骤**——
+>   重发同号 tag（删 tag 重推）时先用 GITHUB_TOKEN 删该 tag 名下既有
+>   Release 再发布，杜绝 action-gh-release 追加产物导致新旧资产混挂
+>   （本次 v0.1.0 重发即靠它清掉旧压缩包版）。
+> - **更新管线**（internal/app/update_download.go）：platformAssetName
+>   改 `yardmaster-<GOOS>-<GOARCH>[.exe]`；新增 appAssetName
+>   （`yardmaster-windows-app.exe`，资产缺席自然缺省）；stageUpdate
+>   改多资产逐个流式下载+SHA256 校验（`.part` 校验后改名落位+chmod
+>   0755 补执行位——裸二进制下载不保留权限位）；解包路径
+>   （unzipExes/writeExeFile）删除，archive/zip 依赖移除；磁盘预检
+>   zip×3 改资产合计×2。暂存契约（`update/yardmaster.exe` +
+>   `yardmaster-app.exe` + VERSION）不变，W3 安装引擎零改动。
+>   **附带收益**：此前 zip 仅 Windows 发布，Linux 更新器报「缺少本
+>   平台资产」；裸二进制后 Linux 资产正式发布，自动升级全平台可用。
+> - **安装脚本**：install.sh/install.ps1 直连下载裸二进制（Linux
+>   `install -m 0755` 落执行位；--file/-File 离线参数改收二进制）。
+> - **测试**：update_download_test.go 重写为裸二进制假 release 服务
+>   （Windows 含桌面入口资产、Linux 断言无桌面入口；happy+三降级
+>   语义不变）；真机守卫测试 YM_REAL_RELEASE 资产名同步。CI 双平台
+>   全绿（含 gofmt——本机无 Go 工具链，格式靠这道闸核销）。
+> - **体积对比**：压缩包版 linux-amd64 4.7MB tar.gz → 裸二进制
+>   11.5MB（`-s -w` 已剥符号表；无压缩层的自然增量，换取下载即用与
+>   全平台自动升级）。
