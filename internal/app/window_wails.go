@@ -29,6 +29,8 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
 	"golang.org/x/sys/windows/registry"
+
+	"yardmaster/internal/store"
 )
 
 // webview2ClientKey 是 WebView2 Evergreen 运行时的 EdgeUpdate 注册表
@@ -114,7 +116,22 @@ func runWailsShell(st *serveSetup, ctx context.Context, stop context.CancelFunc,
 	serveDone := make(chan error, 1)
 	go func() { serveDone <- serveUntilDone(st, ctx) }()
 
-	app := application.New(application.Options{Name: "Yardmaster"})
+	app := application.New(application.Options{
+		Name: "Yardmaster",
+		// 单实例互斥（2026-11-10，兑现 §二「勿自建」盘点）：锁在 New 时
+		// 获取，二次启动进程通知首实例后自动 os.Exit——不再出现第二个
+		// 窗口/第二份托盘（二次启动早期托盘图标会短暂闪现 ~1s，锁在此
+		// 才获取，留档）。首实例回调=前置既有窗口（托盘「打开窗口」同
+		// 语义）；首实例为 serve/浏览器回退态时不持有锁（端口绑定天然
+		// 防双网关），如实留档。
+		SingleInstance: &application.SingleInstanceOptions{
+			UniqueID: "yardmaster-app",
+			ExitCode: 0,
+			OnSecondInstanceLaunch: func(application.SecondInstanceData) {
+				reopenNativeWindow(consoleURL)
+			},
+		},
+	})
 	// 切断平台 WindowClosing→Common 的默认映射：Common.WindowClosing
 	// 的内部订阅者会无条件销毁窗口（NewWindow 内置），我们要的是
 	// 「关窗=隐藏」。其余映射原样保留。
@@ -149,8 +166,18 @@ func runWailsShell(st *serveSetup, ctx context.Context, stop context.CancelFunc,
 	}
 	win := app.Window.NewWithOptions(opts)
 	snapshot := func() { saveWindowState(st.paths.AppDir, snapshotWindowBounds(win)) }
+	// 关窗行为（settings.close_action，2026-11-10）：关窗事件时实时读盘
+	//——设置保存后下次关窗即生效，无需重启。hide=隐藏到托盘（缺省，
+	// W1 现状）；exit=直接退出（stop+Quit，与 Ctrl-C 同一收敛路径，托盘
+	// 图标随进程退出消失）。读盘失败/未知值按 hide 处理（读不懂=缺省，
+	// 绝不因配置异常把常驻网关悄悄退出）。
 	win.OnWindowEvent(events.Windows.WindowClosing, func(*application.WindowEvent) {
 		snapshot()
+		if s, err := store.LoadSettings(st.paths); err == nil && s.CloseActionMode() == store.CloseExit {
+			stop() // 触发 ctx 取消：网关收尾 + 下面的 Quit goroutine 兜底
+			app.Quit()
+			return
+		}
 		win.Hide() // 关窗=隐藏到托盘；重开走托盘「打开窗口」
 	})
 	// 标题栏图标补设（wails 只发 ICON_BIG，小图标仍为窗口类默认——

@@ -214,6 +214,16 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, name st
 			writeAPIErr(w, badRequest(fmt.Errorf("update 取值非法 %q（合法：off / check / auto）", f.Update)))
 			return
 		}
+		// 窗口关闭行为（2026-11-10）：空值保留现值；显式值必须合法
+		//（hide/exit），读不懂=拒绝落盘。桌面壳关窗时实时读盘，保存后
+		// 下次关窗即生效，无需重启。
+		if f.CloseAction == "" {
+			f.CloseAction = cur.CloseAction
+		}
+		if !store.ValidCloseAction(f.CloseAction) {
+			writeAPIErr(w, badRequest(fmt.Errorf("close_action 取值非法 %q（合法：hide / exit）", f.CloseAction)))
+			return
+		}
 		// 安全基线（F10）：非回环监听必须带令牌；非法地址拒绝落盘。
 		if f.Listen != "" {
 			if _, _, err := net.SplitHostPort(f.Listen); err != nil {

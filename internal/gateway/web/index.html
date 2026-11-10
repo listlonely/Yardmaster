@@ -154,6 +154,13 @@
           </select>
         </div>
         <div class="row pref">
+          <div class="who"><div class="name">窗口关闭行为</div><div class="sub">点击窗口 × 的行为：hide=隐藏到托盘（默认，后台继续运行）；exit=直接退出程序（含托盘）。保存后下次关窗即生效，无需重启</div></div>
+          <select id="set-close" class="sel">
+            <option value="hide">hide · 缩小到托盘</option>
+            <option value="exit">exit · 直接退出</option>
+          </select>
+        </div>
+        <div class="row pref">
           <div class="who"><div class="name">汇率（美元→人民币）</div><div class="sub">成本报告旁显示 ≈¥ 换算；0 = 仅美元；填 0 保存 = 保留现值</div></div>
           <input id="set-fx" class="set-field num" type="number" min="0" step="0.01" placeholder="如 7.24">
         </div>

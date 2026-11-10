@@ -270,6 +270,15 @@ internal/app/
 - 窗口状态记忆（尺寸/位置/最大化）持久化到 settings.json 新键（走
   既有 settings 写路径），W3 落地。
 
+> **追记（2026-11-10）：关窗行为可配**。settings 新键
+> `close_action`（hide=隐藏到托盘（缺省，本节决策）；exit=直接退出
+> 程序含托盘）——管理 API（非法值 400 fail-closed、空值保留现值）/
+> CLI `settings set close-action` / 控制台「通用偏好」三入口。桌面壳
+> 在关窗事件时**实时重读** settings.json（读失败/未知值按 hide 处理
+> ——绝不因配置异常把常驻网关悄悄退出），保存后下次关窗即生效，无
+> 需重启。exit 路径 stop()+Quit 与 Ctrl-C 同一收敛。浏览器窗口（回退
+> 路径）关闭行为不归本设置管（浏览器自有语义）。
+
 ## 七、Magpie 设计语言参考（2026-11-02 增补，W3 输入）
 
 > 用户定向：Magpie 界面设计优秀，作为控制台视觉与交互参考。核实结
@@ -685,6 +694,27 @@ MIT（Copyright (c) 2026 yetone）：设计模式借鉴无义务；若逐字复�
 >   notify_icon.png 嵌入，托盘/通知格式各归其位。
 > - **DPI/深浅色未实测项**：任务栏深浅色切换下的实际观感、高 DPI 缩
 >   放下的帧选择（16/20/24/32/48 已备）——留用户日常确认。
+
+> [2026-11-10-关窗行为设置与单实例互斥] 用户两项定向：①「设置中控制
+> 点击关闭是直接退出还是缩小到任务栏」；②「为什么点击 EXE 会重新新增
+> 一个界面」。落地（同批提交，CI 双绿为准）：
+> - **close_action 设置键**（store 常量对 hide/exit，镜像 update 三态
+>   成对模式）：管理 API PUT（非法 400/空值保留现值）+ CLI
+>   `settings set close-action` + 控制台「通用偏好」select 三入口；
+>   webapi 测试镜像 TestConfigPutSettingsUpdateMode。
+> - **关窗实时读盘**：WindowClosing 回调先 snapshot 后 LoadSettings
+>   （失败/未知→hide 缺省）——exit 走 stop()+Quit（与 Ctrl-C 同收敛），
+>   hide 走现行为；保存后下次关窗即生效、无需重启。
+> - **单实例互斥**：兑现 §二「勿自建」盘点——wails 内置
+>   SingleInstance（UniqueID=yardmaster-app）接进 application.Options：
+>   锁在 New 获取，二次启动进程 WM_COPYDATA 通知首实例后 os.Exit(0)
+>   ——根因修复「二次双击 exe 新开界面」（旧根因：新进程窗口仍加载
+>   127.0.0.1:8317=首实例的网关，观感即新界面；其自身网关端口绑定
+>   失败只落 app.log）。首实例回调=reopenNativeWindow（前置既有窗口）。
+>   留档边界：锁覆盖 wails 壳路径（windows/amd64）；首实例为 serve/
+>   浏览器回退态时不持有锁（端口绑定已天然防双网关）；二次启动早期
+>   托盘图标短暂闪现 ~1s（锁在 New 时才获取）。真机核销留待发布后
+>   （CI 无法覆盖 GUI 交互）。
 
 > [2026-11-10-发布形态改造：裸二进制直发] 用户定向「不要打包成压缩
 > 包，直接推送二进制文件」——release 产物去 tar.gz/zip 打包层，

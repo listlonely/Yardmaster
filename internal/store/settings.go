@@ -49,6 +49,11 @@ type Settings struct {
 	// check=只提示（缺省，现状行为）；auto=发现新版全自动下载安装重启。
 	// 自动替换 exe 属高敏动作，缺省永不 auto——用户显式开启才启用。
 	Update string `json:"update,omitempty"`
+
+	// 窗口关闭行为（2026-11-10，app.md §六追记）：hide=关窗隐藏到托盘
+	//（缺省，W1 决策现状）；exit=关窗直接退出程序（含托盘）。桌面壳在
+	// 关窗事件时实时读盘（保存后下次关窗即生效，无需重启）。
+	CloseAction string `json:"close_action,omitempty"`
 }
 
 // TokenEntry 是一枚命名访问令牌（多令牌，按客户端隔离）：生成时返回
@@ -122,6 +127,28 @@ func ValidUpdateMode(v string) bool {
 // NotifyEnabled 返回桌面气泡通知是否开启（nil=缺省开启）。
 func (s Settings) NotifyEnabled() bool {
 	return s.Notify == nil || *s.Notify
+}
+
+// 窗口关闭行为取值。
+const (
+	CloseHide = "hide"
+	CloseExit = "exit"
+)
+
+// CloseActionMode 归一关窗行为：空值与未知值回落 hide（缺省=W1 现状
+// 「关窗隐藏到托盘」——读不懂=按最保守的可观察行为处理，绝不因配置
+// 异常把用户的常驻网关悄悄退出）。
+func (s Settings) CloseActionMode() string {
+	if s.CloseAction == CloseExit {
+		return CloseExit
+	}
+	return CloseHide
+}
+
+// ValidCloseAction 报告 v 是否为合法 close_action 取值（"" 合法=缺省
+// hide）。
+func ValidCloseAction(v string) bool {
+	return v == "" || v == CloseHide || v == CloseExit
 }
 
 // OTelSettings 是 OTLP 导出配置。

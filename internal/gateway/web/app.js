@@ -601,6 +601,7 @@ async function loadSettings() {
     $('set-l1-timeout').value = s.l1_timeout_ms || '';
     $('set-listen').value = s.listen || '';
     $('set-update').value = s.update || 'check';
+    $('set-close').value = s.close_action || 'hide';
     $('set-fx').value = s.fx_usd_cny > 0 ? s.fx_usd_cny : '';
     $('set-notify').classList.toggle('on', s.notify !== false); // 指针语义：nil=开
     $('set-notify').setAttribute('aria-checked', String(s.notify !== false));
@@ -634,6 +635,7 @@ $('btn-save-settings').addEventListener('click', async () => {
     listen: $('set-listen').value.trim(),
     notify: $('set-notify').classList.contains('on'),
     update: $('set-update').value,
+    close_action: $('set-close').value,
     fx_usd_cny: parseFloat($('set-fx').value) || 0, // 0=保留现值（服务端语义）
   };
   busy(b, true, '保存中…');

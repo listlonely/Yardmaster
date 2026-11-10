@@ -212,6 +212,45 @@ func TestConfigPutSettingsUpdateMode(t *testing.T) {
 	}
 }
 
+// 窗口关闭行为（2026-11-10）：非法值 400 且不改现值（fail-closed）；
+// 空值保留现值；合法值落盘（镜像 update 三态测试）。
+func TestConfigPutSettingsCloseAction(t *testing.T) {
+	s, srv := newConfigServer(t, nil)
+	settingsPath := filepath.Join(s.AppDir, "settings.json")
+	if err := os.WriteFile(settingsPath, []byte(`{"close_action":"exit"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, body := doPut(t, srv.URL, "/api/config/settings", `{"close_action":"bogus"}`)
+	if st != http.StatusBadRequest {
+		t.Fatalf("非法 close_action 应 400，得到 HTTP %d: %s", st, body)
+	}
+	var cur store.Settings
+	if err := store.LoadJSON(settingsPath, &cur); err != nil {
+		t.Fatal(err)
+	}
+	if cur.CloseAction != "exit" {
+		t.Fatalf("被拒请求不得改值: %+v", cur)
+	}
+	if st, body = doPut(t, srv.URL, "/api/config/settings", `{}`); st != http.StatusOK {
+		t.Fatalf("空体（未提供字段）应保留现值: HTTP %d: %s", st, body)
+	}
+	if err := store.LoadJSON(settingsPath, &cur); err != nil {
+		t.Fatal(err)
+	}
+	if cur.CloseAction != "exit" {
+		t.Fatalf("空值应保留 exit: %+v", cur)
+	}
+	if st, body = doPut(t, srv.URL, "/api/config/settings", `{"close_action":"hide"}`); st != http.StatusOK {
+		t.Fatalf("合法 hide 应落盘: HTTP %d: %s", st, body)
+	}
+	if err := store.LoadJSON(settingsPath, &cur); err != nil {
+		t.Fatal(err)
+	}
+	if cur.CloseAction != "hide" {
+		t.Fatalf("hide 未落盘: %+v", cur)
+	}
+}
+
 func TestConfigPutRulesInvalidRegexRejected(t *testing.T) {
 	s, srv := newConfigServer(t, nil)
 	st, body := doPut(t, srv.URL, "/api/config/rules",
