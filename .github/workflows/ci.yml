@@ -1,0 +1,68 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      # M8-W2 依赖边界第二道闸（app.md §三）：wails 仅允许在 internal/app
+      # 壳层（windows build tag），网关核心依赖链零 webview——第一道为
+      # 单测 TestCorePackagesNoWailsDependency。
+      - if: matrix.os == 'ubuntu-latest'
+        run: |
+          go list -deps ./internal/gateway ./internal/store ./internal/dispatch ./internal/plugin ./internal/otlp ./internal/credential ./internal/netproxy > /tmp/core-deps.txt
+          if grep -q wailsapp /tmp/core-deps.txt; then
+            echo "::error::wails 泄漏进网关核心依赖链（铁律 app.md §三）"
+            exit 1
+          fi
+      # 显式 bash：windows-latest 默认 shell 是 PowerShell，会把
+      # -coverprofile=coverage.out 在「.」处拆成两个参数（.out 被当作
+      # 包名，setup failed）——CI 曾因自 W1 起长期红标。
+      - run: go test -race -coverprofile=coverage.out ./...
+        shell: bash
+      - uses: actions/upload-artifact@v4
+        if: matrix.os == 'ubuntu-latest'
+        with:
+          name: coverage
+          path: coverage.out
+
+  cross-vet:
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [linux, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: GOOS=${{ matrix.goos }} go vet ./...
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@v7
+        with:
+          # 锁定与 go.mod（go 1.27）匹配的版本：旧版 golangci-lint 无法
+          # 加载更高 Go 版本的模块（load 失败 exit 3）；golangci-lint v2
+          # 需要 action v7。
+          version: v2.15
+          args: --timeout 5m

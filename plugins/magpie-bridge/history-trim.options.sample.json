@@ -1,0 +1,6 @@
+{
+  "_comment": "history-trim 中间件 options 示例（上游 package.json magpie.options 同款）。仅作用于 body.messages 形态（chat/anthropic）；当前正在发送的回合（最后一条 assistant 之后的所有消息）四步全部不动：空行折叠 → 逐字重复的系统提示去重 → 历史工具结果按 maxToolLength 词边界截断（唯一丢字的步骤）→ 紧随其后的完全重复消息去重。",
+  "maxToolLength": 2000,
+  "compressToolResults": true,
+  "preserveSystemPrompt": false
+}

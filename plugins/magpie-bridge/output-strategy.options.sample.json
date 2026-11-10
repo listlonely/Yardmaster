@@ -1,0 +1,12 @@
+{
+  "_comment": "output-strategy 中间件 options 示例（上游 package.json magpie.options 同款）：styles 按开关选择输出风格（terse-prose=caveman 精简体 / less-code / ponytail 最小改动 / i-have-adhd / terse-cjk / antislop-ui / antislop-copy），注入到各协议的系统提示位置（responses 走独立 developer input item，保 Codex instructions 字节不变）；重复注入有 marker 防护。全部 false = 不注入。",
+  "styles": {
+    "terse-prose": true,
+    "less-code": false,
+    "ponytail": false,
+    "i-have-adhd": false,
+    "terse-cjk": false,
+    "antislop-ui": false,
+    "antislop-copy": false
+  }
+}

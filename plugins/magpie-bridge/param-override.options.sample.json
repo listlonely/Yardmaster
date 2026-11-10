@@ -1,0 +1,7 @@
+{
+  "_comment": "param-override 中间件 options 示例（上游 package.json magpie.options 同款；New API param_override JSON 直接可用）。形态一：operations 外的键 = 直接设置；形态二：operations 按序执行，conditions 支持 full/prefix/suffix/contains/gt/gte/lt/lte + invert + AND/OR。",
+  "operations": [
+    { "path": "max_tokens", "mode": "set", "value": 32000, "conditions": [{ "path": "max_tokens", "mode": "gt", "value": 32000 }] },
+    { "path": "temperature", "mode": "delete", "conditions": [{ "path": "model", "mode": "contains", "value": "reasoner" }] }
+  ]
+}

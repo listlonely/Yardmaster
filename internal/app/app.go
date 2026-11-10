@@ -1,0 +1,637 @@
+// Package app 装配用户入口：CLI 子命令与网关 serve（M3-W6 起含托盘）。
+package app
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
+
+	"fyne.io/systray"
+
+	"yardmaster/internal/credential"
+	"yardmaster/internal/dispatch"
+	"yardmaster/internal/gateway"
+	"yardmaster/internal/netproxy"
+	"yardmaster/internal/otlp"
+	"yardmaster/internal/plugin"
+	"yardmaster/internal/store"
+)
+
+// Version 由 release 流程注入（-ldflags -X yardmaster/internal/app.Version=…），
+// 开发态为 dev（开发文档 §8.2）。
+var Version = "dev"
+
+// guiSubsystem 由 yardmaster-app.exe 构建注入（-ldflags -X …guiSubsystem=1，
+// Windows GUI subsystem 桌面入口）：无控制台，app 模式恒走 app.log 留痕；
+// console 版（yardmaster.exe）保持空值，孤立启动语义见 hideConsoleIfDetached。
+var guiSubsystem = ""
+
+// ErrUsage 表示命令行用法错误（区别于运行时故障）。
+var ErrUsage = errors.New("usage")
+
+// Run 解析并执行一条子命令。无参数缺省 app（桌面应用模式：网关 +
+// 托盘 + 应用窗口——「二进制直接运行即有界面」）；无头场景显式 serve。
+// M11-W3 起 Run 入口先检接力环境（relayEnv）：更新换代的新进程在此等
+// 旧进程退出（端口让位），随后按普通路径启动并在 serve 起来后收尾
+// （healthz 自探/回滚，见 attachUpdateHooks 与 relayFinalize）。
+func Run(args []string, stdout, stderr io.Writer) error {
+	relay := relayInit()
+	if len(args) == 0 {
+		args = []string{"app"}
+	}
+	switch args[0] {
+	case "serve":
+		return runServe(args[1:], stdout, relay)
+	case "app": // 桌面应用模式（M5.5：零 cgo 应用窗口 + 托盘 + 进程内网关）
+		return runApp(args[1:], stdout, relay)
+	case "console": // 显式打开网页控制台（serve/app 不再自动开网页）
+		return runConsole(args[1:], stdout)
+	case "version":
+		fmt.Fprintln(stdout, "yardmaster "+Version)
+		return nil
+	case "provider":
+		return runProvider(args[1:], stdout, stderr)
+	case "group":
+		return runGroup(args[1:], stdout, stderr)
+	case "rules":
+		return runRules(args[1:], stdout, stderr)
+	case "keys":
+		return runKeys(args[1:], stdout, stderr)
+	case "intents":
+		return runIntents(args[1:], stdout, stderr)
+	case "trace":
+		return runTrace(args[1:], stdout, stderr)
+	case "price":
+		return runPrice(args[1:], stdout, stderr)
+	case "cost":
+		return runCost(args[1:], stdout, stderr)
+	case "settings":
+		return runSettings(args[1:], stdout, stderr)
+	case "plugin": // M7-W5：插件清单管理（list/enable/disable）
+		return runPlugin(args[1:], stdout, stderr)
+	case "agents":
+		return runAgents(args[1:], stdout, stderr)
+	case "update":
+		return updateCheck(args[1:], stdout, stderr)
+	case "tui":
+		return runTUI(args[1:], stdout, stderr)
+	case "run": // M5-W3：headless Agent 启动原语（stdin 任务 → stdout 透传）
+		return runRun(args[1:], os.Stdin, stdout, stderr)
+	case "dispatch": // M5-W5：任务→Agent 派发（agents/init/run）
+		return runDispatch(args[1:], stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "未知子命令 %q；可用：app（缺省，桌面应用）、serve、console、version、provider、group、rules、keys、intents、trace、settings、plugin、agents、price、cost、update、tui、run、dispatch\n", args[0])
+		return ErrUsage
+	}
+}
+
+// serveSetup 是网关装配产物（serve 与 app 模式共用）。
+type serveSetup struct {
+	srv      *gateway.Server
+	planner  *gateway.Planner
+	paths    store.Paths
+	settings store.Settings
+	listen   string
+	disp     *dispatch.Engine // 派发引擎（dispatch.json 不可用时 nil）
+}
+
+// setupGateway 完成网关装配（配置读取、安全基线、Server 构造、派发挂载）。
+func setupGateway() (*serveSetup, error) {
+	paths, err := store.DefaultPaths()
+	if err != nil {
+		return nil, fmt.Errorf("定位数据目录: %w", err)
+	}
+	planner := loadPlanner(paths)
+	settings, serr := store.LoadSettings(paths)
+	if serr != nil && !errors.Is(serr, os.ErrNotExist) {
+		return nil, fmt.Errorf("读取设置: %w", serr)
+	}
+
+	// 监听地址归一化 + 安全基线把关（F10）：非回环监听必须配置令牌，
+	// 否则拒绝启动（宁可不起也不无鉴权暴露，M2-W5）。
+	listen := settings.Listen
+	if listen == "" {
+		listen = gateway.DefaultAddr
+	}
+	if err := gateway.ValidateSecurityN(listen, settings.Token, len(settings.Tokens)); err != nil {
+		return nil, err
+	}
+
+	srv := &gateway.Server{
+		Addr:          listen,
+		Planner:       planner,
+		Version:       Version,
+		GlobalProxy:   settings.GlobalProxy,
+		Rules:         gateway.NewRuleEngine(paths.RulesPath()),
+		Keys:          gateway.NewKeyStore(paths.KeysPath()),
+		Traces:        gateway.NewTraceLog(paths.TraceDir()),
+		AppDir:        paths.AppDir,
+		ProvidersPath: paths.ProvidersPath(),
+		Token:         settings.Token,
+		Creds:         &credential.Store{Path: paths.CredentialsPath(), BackupDir: paths.BackupDir()},
+		Intents: gateway.NewIntentChain(paths.IntentsPath(), settings.L1Classifier,
+			l1TimeoutOrDefault(settings), newL1Caller(listen, settings.Token, settings.L1Classifier)),
+	}
+	// 命名令牌（2026-11 批2）：启动时装载 hash 集（生成/轮换/删除经
+	// 管理 API 后即时热替换，不依赖重启）。
+	srv.SetTokenHashes(gateway.TokenHashesOf(settings.Tokens))
+
+	// 派发引擎（M5-W4）：dispatch.json 损坏 → fail-closed 禁用派发并
+	// 指引修复（网关其余功能不受影响）；不存在 → 无 agent 空引擎。
+	dispEngine, derr := dispatch.LoadEngine(paths.DispatchPath())
+	switch {
+	case derr != nil:
+		slog.Error("dispatch.json 不可用，派发功能已禁用", "err", derr)
+	case len(dispEngine.Agents()) > 0:
+		slog.Info("已加载派发配置", "agents", len(dispEngine.Agents()))
+	}
+	if derr == nil {
+		// 会话持久化（M6-W2）：终态追加落盘 + 启动恢复最近环形进内存
+		// ——控制台「派发」页历史跨重启可见。恢复的 running 会话标失败
+		// （进程重启即被杀，不猜结果）。
+		sstore := dispatch.NewSessionStore(paths.DispatchSessionsPath())
+		dispEngine.AttachStore(sstore)
+		dispEngine.RestoreSessions(sstore.Recent(dispatch.SessionRingCap))
+		if n := len(dispEngine.Sessions()); n > 0 {
+			slog.Info("已恢复派发会话历史", "count", n)
+		}
+		srv.AttachDispatch(dispEngine)
+	}
+	return &serveSetup{srv: srv, planner: planner, paths: paths, settings: settings, listen: listen, disp: dispEngine}, nil
+}
+
+// startHelpers 启动后台辅助（OTLP 导出、OAuth 刷新、余额轮询、用量落盘
+// 节流）；返回收尾函数（OTLP 关闭）。ctx 结束时各自退出。
+func (st *serveSetup) startHelpers(ctx context.Context) func() {
+	var stops []func()
+	if st.settings.OTel.Enabled && st.settings.OTel.Endpoint != "" {
+		exp := otlp.NewExporter(st.settings.OTel.Endpoint, st.settings.OTel.Headers, Version)
+		stops = append(stops, exp.Close)
+		st.srv.Traces.OnTrace = exp.Export
+		slog.Info("otlp traces 导出已开启", "endpoint", st.settings.OTel.Endpoint)
+	}
+
+	// 插件注册表无条件装配（LOW-1 修复）：此前空清单不挂注册表，管理
+	// API 首次添加插件时 s.Plugins==nil 跳过热生效（响应却声称
+	// immediate），须重启才挂载。空注册表 Start 仅置生命周期 ctx（Reload
+	// 依赖它），PUT /api/config/plugins 后即时挂载；Stop 对空表 no-op。
+	// plugins.json fail-closed：解析/校验失败=全部禁用+留痕（绝不当作
+	// 空配置静默跑）；enabled 条目长驻子进程。
+	pf, perr := plugin.Load(st.paths.PluginsPath())
+	if perr == nil {
+		perr = plugin.Validate(pf)
+	}
+	if perr != nil && !errors.Is(perr, os.ErrNotExist) {
+		slog.Warn("plugins.json 不可用，插件全部禁用（读不懂=未知）", "err", perr)
+		pf = plugin.File{}
+	}
+	reg := plugin.NewRegistry()
+	reg.Start(pf)
+	stops = append(stops, reg.Stop)
+	st.srv.AttachPlugins(reg) // OnTrace 链式扇出 + 派发解析钩子桥
+	if len(pf.Plugins) > 0 {
+		slog.Info("插件已装配", "count", len(pf.Plugins))
+	}
+
+	// OAuth 到期前主动刷新（M3-W3）：每分钟扫描，提前 10 分钟续期。
+	// gemini-cli 的 client secret 经 settings 注入（公开常量但不入仓库，
+	// GitHub secret scanning 拦截字面量）。
+	if st.settings.GeminiClientSecret != "" {
+		st.srv.SetRefreshSpec("gemini-cli", credential.RefreshSpec{
+			TokenURL:     "https://oauth2.googleapis.com/token",
+			ClientID:     "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com",
+			ClientSecret: st.settings.GeminiClientSecret,
+		})
+	}
+	st.srv.StartOAuthRefresher(ctx)
+	st.srv.StartQuotaPoller(ctx)
+
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := st.planner.FlushUsage(st.paths.ProvidersPath()); err != nil {
+					slog.Warn("用量落盘失败（下次重试）", "err", err)
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return func() {
+		for _, f := range stops {
+			f()
+		}
+	}
+}
+
+// banner 打印启动摘要。
+func (st *serveSetup) banner(stdout io.Writer) {
+	consoleURL := "http://" + st.listen + "/"
+	fmt.Fprintf(stdout, "yardmaster %s · 网关监听 http://%s · 数据目录 %s\n", Version, st.srv.Addr, st.paths.AppDir)
+	if st.settings.GlobalProxy != "" {
+		fmt.Fprintf(stdout, "  全局代理: %s\n", netproxy.Redact(st.settings.GlobalProxy))
+	}
+	fmt.Fprintf(stdout, "  端点: /v1/chat/completions · /v1/messages · /healthz · /api/state · /api/trace\n")
+	fmt.Fprintf(stdout, "  控制台: %s（总览/Provider/路由/观测/派发；管理 API /api/config/* · /api/reload）\n", consoleURL)
+	if st.settings.L1Classifier != "" {
+		fmt.Fprintf(stdout, "  L1 分类: %s（超时 %s）\n", st.settings.L1Classifier, l1TimeoutOrDefault(st.settings))
+	}
+}
+
+// wireDesktopHooks 装配桌面壳事件（M9-W4）：派发终态气泡（链式接在
+// 派发 trace 观察者之后，观察者语义不破坏）+ 上游账号休眠气泡。n 为
+// 通知器（settings.notify 关闭时为禁用态 notifier，send 空操作）。
+func (st *serveSetup) wireDesktopHooks(n *notifier) {
+	if st.disp != nil {
+		prev := st.disp.OnFinish
+		st.disp.OnFinish = func(s *dispatch.Session) {
+			if prev != nil {
+				prev(s)
+			}
+			title := "派发完成"
+			if s.Status != "done" {
+				title = "派发" + s.Status
+			}
+			n.send("dispatch/"+s.ID, title, s.Agent+" · "+firstRunes(s.Task, 48))
+		}
+	}
+	st.srv.OnAccountRest = func(key, reason string) {
+		n.send("rest/"+key, "上游账号休眠", key+" · "+reason)
+	}
+}
+
+// firstRunes 截取前 n 个 rune（通知正文摘要；超长加省略号）。
+func firstRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
+
+// trayStatus 托盘状态摘要行（30s 刷新）：休眠账号数 + 派发进行中。
+func (st *serveSetup) trayStatus() string {
+	resting := len(st.srv.Planner.Resting())
+	running := 0
+	if st.disp != nil {
+		for _, s := range st.disp.Sessions() {
+			if s.Status == "running" {
+				running++
+			}
+		}
+	}
+	if resting == 0 && running == 0 {
+		return "网关正常 · 无休眠账号"
+	}
+	return fmt.Sprintf("休眠 %d · 派发 %d 进行中", resting, running)
+}
+
+// trayUpdateLabel 托盘升级菜单项文本（M9-W4）：有新版本返回「升级到
+// vX.Y.Z」，已是最新/查询失败/dev 态返回 ""（菜单隐藏）。查询失败
+// 静默——升级提示是增强信息，不打扰。
+func trayUpdateLabel() string {
+	if Version == "dev" {
+		return ""
+	}
+	tag, _, err := latestRelease()
+	if err != nil {
+		return ""
+	}
+	if compareVersions(Version, strings.TrimPrefix(tag, "v")) < 0 {
+		return "升级到 " + tag
+	}
+	return ""
+}
+
+// trayUpdateQuery 托盘升级查询入口（M11-W3，trayUpdateLabel 的三态
+// 演进）：off=完全静默（不查 GitHub、不显示菜单）；auto=命中新版即
+// 自动触发安装（每轮查询至多一次；失败静默留痕，1h 后下轮重试）；
+// check=只提示（菜单文本，点击才安装）。
+func (st *serveSetup) trayUpdateQuery() string {
+	if st.settings.UpdateMode() == store.UpdateOff {
+		return "" // off 态彻底静默——连版本查询都不发
+	}
+	label := trayUpdateLabel()
+	if label == "" || st.srv.OnUpdateInstall == nil || st.settings.UpdateMode() != store.UpdateAuto {
+		return label
+	}
+	go func() {
+		if err := st.srv.OnUpdateInstall(); err != nil {
+			slog.Warn("auto 自动更新安装失败（1h 后重试）", "err", err)
+		}
+	}()
+	return label
+}
+
+// 原生窗口壳挂点（M8-W2）：支持的平台在各自 build tag 文件里接线
+// （window_wails.go=Windows/Wails v3，全仓库唯一 wails import 点）；
+// 其余平台保持 nil=浏览器窗口路径（行为同 v0.7.0）。依赖边界铁律：
+// webview 依赖禁止进入网关核心，TestCorePackagesNoWailsDependency 断言。
+var (
+	nativeShellProbe func() error
+	nativeShellRun   func(st *serveSetup, ctx context.Context, stop context.CancelFunc, consoleURL string, stdout io.Writer) error
+	nativeReopen     func(consoleURL string)
+)
+
+// serveUntilDone 阻塞服务网关直至 ctx 结束，随后用量落盘（serve/app
+// 两模式与原生窗口壳共用收尾语义）。
+func serveUntilDone(st *serveSetup, ctx context.Context) error {
+	if err := st.srv.Serve(ctx); err != nil {
+		return err
+	}
+	if ferr := st.planner.FlushUsage(st.paths.ProvidersPath()); ferr != nil {
+		slog.Warn("退出前用量落盘失败", "err", ferr)
+	}
+	return nil
+}
+
+// attachUpdateHooks 装配自动更新安装入口（M11-W3）：管理 API
+// /api/update/install、托盘「升级到 x.y.z」、控制台 B1 pill 三入口同
+// 走 Server.OnUpdateInstall——暂存缺失先下载校验（网络路径接 netproxy
+// 全局代理，W2 真机实证：release CDN 直连不可达）、锁单飞、aside 换侧
+// +spawn 接力，spawn 成功后延迟触发网关退出（响应送回余量）。auto 态
+// 托盘每轮版本查询命中新版即自动走此入口（无空闲保护，砍项留档）。
+func attachUpdateHooks(st *serveSetup, stop context.CancelFunc) {
+	st.srv.OnUpdateInstall = func() error {
+		dir, err := defaultStageDir()
+		if err != nil {
+			return err
+		}
+		client := &http.Client{}
+		if tr, terr := netproxy.Transport(netproxy.Ref(st.settings.GlobalProxy)); terr != nil {
+			slog.Warn("更新代理传输构造失败，回退直连", "err", terr)
+		} else if tr != nil {
+			client.Transport = tr
+		}
+		if _, _, _, serr := stagePaths(dir); serr != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer cancel()
+			rel, ferr := fetchRelease(ctx, client, repoAPI)
+			if ferr != nil {
+				return ferr
+			}
+			slog.Info("自动更新：开始下载", "tag", rel.Tag)
+			if _, ferr = stageUpdate(ctx, client, rel, dir, nil); ferr != nil {
+				return ferr
+			}
+		}
+		if err := installStaged(dir, func() {}, false); err != nil {
+			return err
+		}
+		go func() {
+			time.Sleep(800 * time.Millisecond) // 响应送回余量
+			slog.Info("自动更新已安装，网关重启")
+			stop()
+		}()
+		return nil
+	}
+}
+
+// serveRelayWrap 接力态的 serve 收尾包装：启动失败回滚（新版退出、旧版
+// 原位重启）；正常退出（用户 Ctrl-C/托盘）不回滚——.old 留待下轮安装
+// 前清除，暂存同理（换代成功语义见 relayFinalize）。
+func serveRelayWrap(relay relayState, serveErr error) error {
+	if relay.oldPid != 0 && serveErr != nil {
+		relayServeFailed(serveErr)
+	}
+	return serveErr
+}
+
+// serveUpdatePath 是 serve/app 两模式共用的更新装配+接力序列：hook 装配
+// 在 setup 成功后，finalize 探活 goroutine 在 banner 后启动。
+func serveUpdatePath(st *serveSetup, relay relayState, stop context.CancelFunc) {
+	attachUpdateHooks(st, stop)
+	if relay.oldPid != 0 {
+		go relayFinalize(st, relay)
+	}
+}
+
+// runServe 无头启动网关（不打开任何界面——网页控制台经 `yardmaster
+// console` 或 app 模式窗口显式打开）。-tray 启用托盘常驻。
+func runServe(args []string, stdout io.Writer, relay relayState) error {
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	tray := fs.Bool("tray", false, "启用系统托盘常驻（打开控制台/退出）")
+	if err := fs.Parse(args); err != nil {
+		return ErrUsage
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	st, err := setupGateway()
+	if err != nil {
+		return serveRelayWrap(relay, err)
+	}
+	defer st.srv.Traces.Close()
+	defer st.startHelpers(ctx)()
+	st.banner(stdout)
+	serveUpdatePath(st, relay, stop)
+	if *tray {
+		n := newNotifier(st.settings.NotifyEnabled())
+		st.wireDesktopHooks(n)
+		go runTrayIsolated(TrayOptions{
+			OnOpen: func() { _ = openBrowser("http://" + st.listen + "/") },
+			OnExit: func() {
+				slog.Info("托盘请求退出")
+				stop()
+				systray.Quit()
+			},
+			Status:          st.trayStatus,
+			Update:          st.trayUpdateQuery,
+			OnUpdateInstall: st.srv.OnUpdateInstall,
+		})
+		fmt.Fprintln(stdout, "  托盘: 已启用（系统托盘区图标）")
+	}
+	return serveRelayWrap(relay, serveUntilDone(st, ctx))
+}
+
+// runApp 桌面应用模式（无参数缺省）：进程内网关 + 托盘常驻 + 应用窗口。
+// M8-W2 起 Windows 走 Wails v3 原生窗口（关窗=隐藏到托盘，app.md §六），
+// 不可用/其他平台回退浏览器 --app 窗口（M5.5 零依赖方案，exec 纯 Go）。
+// 退出走托盘。
+func runApp(args []string, stdout io.Writer, relay relayState) error {
+	fs := flag.NewFlagSet("app", flag.ContinueOnError)
+	noTray := fs.Bool("no-tray", false, "不启动系统托盘（窗口关闭后 Ctrl-C 退出）")
+	noWindow := fs.Bool("no-window", false, "不打开应用窗口（等同 serve -tray）")
+	if err := fs.Parse(args); err != nil {
+		return ErrUsage
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// 桌面入口留痕：GUI 版（无控制台）恒落 app.log；console 版孤立启动
+	//（双击/开始菜单，父进程为 explorer）FreeConsole 收起黑窗后同落
+	// app.log。终端启动的 console 版零变化（M8 收官后用户反馈）。
+	if guiSubsystem == "1" || hideConsoleIfDetached() {
+		if paths, perr := store.DefaultPaths(); perr == nil {
+			setupAppLog(paths.AppDir)
+		}
+	}
+
+	st, err := setupGateway()
+	if err != nil {
+		return serveRelayWrap(relay, err)
+	}
+	defer st.srv.Traces.Close()
+	defer st.startHelpers(ctx)()
+	st.banner(stdout)
+	serveUpdatePath(st, relay, stop)
+	consoleURL := "http://" + st.listen + "/?app=1"
+	onOpen := func() { _ = openAppWindow(consoleURL) }
+	if nativeReopen != nil {
+		onOpen = func() { nativeReopen(consoleURL) }
+	}
+	if !*noTray {
+		n := newNotifier(st.settings.NotifyEnabled())
+		st.wireDesktopHooks(n)
+		go runTrayIsolated(TrayOptions{
+			OnOpen: onOpen,
+			OnExit: func() {
+				slog.Info("托盘请求退出")
+				stop()
+				systray.Quit()
+			},
+			Status:          st.trayStatus,
+			Update:          st.trayUpdateQuery,
+			OnUpdateInstall: st.srv.OnUpdateInstall,
+		})
+		fmt.Fprintln(stdout, "  托盘: 已启用（系统托盘区图标；退出请走托盘菜单）")
+	}
+	if !*noWindow {
+		if nativeShellProbe != nil {
+			if nerr := nativeShellProbe(); nerr == nil && nativeShellRun != nil {
+				fmt.Fprintln(stdout, "  应用窗口: 原生窗口（Wails v3/WebView2；关窗=隐藏到托盘）")
+				return nativeShellRun(st, ctx, stop, consoleURL, stdout)
+			} else {
+				// 回退浏览器窗口（app.md §五）：原生壳可用性不阻塞主功能
+				slog.Warn("原生窗口壳不可用，回退浏览器窗口", "reason", nerr)
+				fmt.Fprintln(stdout, "  应用窗口: 原生窗口不可用（"+nerr.Error()+"），回退浏览器窗口")
+			}
+		}
+		if werr := openAppWindow(consoleURL); werr == nil {
+			fmt.Fprintln(stdout, "  应用窗口: 已打开（关闭窗口后台仍运行；重开走托盘菜单）")
+		} else {
+			fmt.Fprintln(stdout, "  应用窗口: 打开失败（"+werr.Error()+"），可用 yardmaster console 在浏览器打开")
+		}
+	}
+	return serveUntilDone(st, ctx)
+}
+
+// runConsole 显式在浏览器打开控制台（用户指令；serve/app 不再自动开网页）。
+// -addr 指向已运行的网关（本机或远程，远程需带令牌场景由控制台 401 引导）。
+func runConsole(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("console", flag.ContinueOnError)
+	addr := fs.String("addr", "", "网关地址（空=本机 127.0.0.1:8317，或 settings.listen）")
+	if err := fs.Parse(args); err != nil {
+		return ErrUsage
+	}
+	target := consoleTarget(*addr)
+	fmt.Fprintf(stdout, "打开控制台: %s\n", target)
+	return openBrowser(target)
+}
+
+// consoleTarget 归一控制台地址：显式 addr > settings.listen > 缺省回环；
+// 无协议前缀时补 http:// 与尾斜杠。
+func consoleTarget(addr string) string {
+	target := addr
+	if target == "" {
+		if paths, err := store.DefaultPaths(); err == nil {
+			if settings, serr := store.LoadSettings(paths); serr == nil && settings.Listen != "" {
+				target = settings.Listen
+			}
+		}
+	}
+	if target == "" {
+		target = gateway.DefaultAddr
+	}
+	if !strings.Contains(target, "://") {
+		target = "http://" + target + "/"
+	}
+	return target
+}
+
+// newL1Caller 构造 L1 分类回调：经网关自身推断端点调用分类模型
+// （享受故障转移与代理，F8），带内部标记头防止递归分类；token 非空时
+// 携带访问令牌（M2-W5：本机回环 + token 态下自调用也须过闸）。
+func newL1Caller(addr, token, model string) gateway.L1Caller {
+	if model == "" {
+		return nil
+	}
+	url := "http://" + addr + "/v1/chat/completions"
+	client := &http.Client{} // 超时由 IntentChain 的 ctx 控制
+	return func(ctx context.Context, prompt string) (string, error) {
+		body, err := json.Marshal(map[string]any{
+			"model":      model,
+			"messages":   []map[string]string{{"role": "user", "content": prompt}},
+			"max_tokens": 16,
+		})
+		if err != nil {
+			return "", err
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			return "", err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set(gateway.L1SelfHeader, gateway.L1SelfValue)
+		if token != "" {
+			req.Header.Set("X-Gw-Token", token)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return "", err
+		}
+		defer resp.Body.Close()
+		b, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		if err != nil {
+			return "", err
+		}
+		if resp.StatusCode != http.StatusOK {
+			return "", fmt.Errorf("L1 调用 HTTP %d: %s", resp.StatusCode, netproxy.Snippet(b))
+		}
+		var out struct {
+			Choices []struct {
+				Message struct {
+					Content string `json:"content"`
+				} `json:"message"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal(b, &out); err != nil {
+			return "", fmt.Errorf("解析 L1 响应: %w", err)
+		}
+		if len(out.Choices) == 0 {
+			return "", errors.New("L1 响应无 choices")
+		}
+		return out.Choices[0].Message.Content, nil
+	}
+}
+
+// loadPlanner 从 providers.json 读取 provider/组快照；文件不存在或损坏时
+// 以空配置启动（「读不懂=未知」：损坏必须记日志并保留空配置运行，
+// 绝不当作有配置——调用方报错行为一致）。
+func loadPlanner(paths store.Paths) *gateway.Planner {
+	logger := slog.Default()
+	cfg, err := store.LoadProvidersFile(paths.ProvidersPath())
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		logger.Warn("providers.json 不存在，网关将以无 provider 状态启动", "path", paths.ProvidersPath())
+	case err != nil:
+		logger.Error("providers.json 解析失败，按未知处理并以空配置启动（保留原文件）", "path", paths.ProvidersPath(), "err", err)
+	default:
+		logger.Info("已加载 provider 配置", "providers", len(cfg.Providers), "groups", len(cfg.Groups))
+	}
+	return gateway.NewPlanner(cfg.Providers, cfg.Groups)
+}

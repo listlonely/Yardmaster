@@ -1,0 +1,7 @@
+{
+  "name": "@ym-community/magpie-bridge",
+  "version": "0.1.0",
+  "description": "magpie-community middleware → yardmaster plugin protocol bridge（上游包结构同构：type=module 使 .js 中间件按 ESM 加载——Magpie 跑 Bun 无此约束，node 需要）",
+  "type": "module",
+  "license": "MIT"
+}

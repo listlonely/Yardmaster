@@ -1,0 +1,8 @@
+{
+  "_comment": "system-prompt 中间件 options 示例（上游同款语义）。无系统提示词的请求注入 system_prompt；已有则保持原样（override=true 时按 position=prepend/append 并入，默认 append 保提示词缓存）。agents/models 可选过滤——注意 models 条件经路由组的请求匹配不到成员模型（onProvider 钩子已裁剪，见中间件头注）。",
+  "system_prompt": "Answer in English.",
+  "override": false,
+  "position": "append",
+  "agents": [],
+  "models": []
+}

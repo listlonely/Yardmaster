@@ -1,0 +1,7 @@
+{
+  "_comment": "codex-history 中间件 options 示例（上游语义）。按 provider 显式开启：providers 键为 magpie:<provider-id>，historyFilter:true 才生效——滤除历史 reasoning 项与加密内容、剥服务端 item id（保 call_id 配对），保证 Codex 会话历史可跨账号/资源迁移。preserveEncryptedInclude=true 时保留 include 里的 reasoning.encrypted_content。经路由组的请求按成员注入（onProvider 钩子已裁剪，见头注）——仅 provider/model 直连形态生效。",
+  "providers": {
+    "magpie:prov": { "historyFilter": true }
+  },
+  "aliases": {}
+}

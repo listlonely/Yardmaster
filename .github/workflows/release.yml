@@ -1,0 +1,54 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # GitHub Release 上传产物
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # 单 job 串行完成构建→打包→校验和→发布：消除跨 job artifact
+      # 传输的结构不确定性（曾两次在 SHA256SUMS 步骤失败且无日志可查）。
+      - name: Build
+        shell: bash
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          for t in linux/amd64: linux/arm64: windows/amd64:.exe; do
+            os=${t%%/*}; rest=${t#*/}; arch=${rest%%:*}; ext=${rest#*:}
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch \
+              go build -trimpath -ldflags "-s -w -X yardmaster/internal/app.Version=$ver" \
+              -o "pack/yardmaster_$os-$arch$ext" ./cmd/yardmaster
+          done
+          # GUI 桌面入口（v0.8.1+）：Windows GUI subsystem，双击/开始菜单
+          # 零终端黑窗（console 版 serve/CLI/headless 契约不变，见
+          # docs/subsystems/app.md 五·甲）。
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
+            go build -trimpath -ldflags "-s -w -H=windowsgui -X yardmaster/internal/app.Version=$ver -X yardmaster/internal/app.guiSubsystem=1" \
+            -o "pack/yardmaster_windows-app.exe" ./cmd/yardmaster-app
+      - name: Package
+        shell: bash
+        run: |
+          bash scripts/package.sh > pack/package.log 2>&1 || {
+            cp pack/package.log ./package-failed.log
+            cat ./package-failed.log
+            exit 1
+          }
+          tail -20 pack/package.log
+      - name: GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            pack/*.tar.gz
+            pack/*.zip
+            pack/SHA256SUMS
+            scripts/install.sh
+            scripts/install.ps1
+          generate_release_notes: true # changelog 由 PR/commit 生成

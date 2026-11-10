@@ -1,0 +1,10 @@
+{
+  "_comment": "word-guard 中间件 options 示例（上游同款语义）。words/patterns 命中的处理：action=reject 拒绝请求（message 为拒绝原因）或 mask 替换为 mask 值；check=last 只查最后一条带文本的用户消息 / all 全查；replies=true 时回复侧（非流式 onResponse + 流式 onEvent）同样掩码。",
+  "words": ["project-x"],
+  "patterns": ["\\b\\d{3}-\\d{4}\\b"],
+  "action": "mask",
+  "check": "last",
+  "mask": "***",
+  "replies": true,
+  "message": ""
+}
