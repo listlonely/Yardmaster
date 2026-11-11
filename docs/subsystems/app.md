@@ -182,6 +182,20 @@
 > 管道与 stderr 转发不受影响。genwinres appVersion → 0.1.3。派发
 > Agent（用户主动派发、输出事件流可观测）不在本修复范围。
 
+> [2026-11-11-托盘菜单开机自启动开关] 用户截图（托盘右键菜单）需求
+> 「此处可直接配置是否自启动」——进设置页路径太深。方案：托盘菜单
+> 「打开窗口」下新增 **checkbox 菜单项**（fyne systray v1.12.2 的
+> AddMenuItemCheckbox）：AutostartEnabled（初态查询）+ AutostartToggle
+> （翻转：内存态 + settings.json 落盘（SaveSettings 原子写，与 CLI
+> settings set 同构——壳层偏好不经管理 API 写闸）+ applyAutostart 即时
+> 同步 Run 键）；勾选态强制对齐回调返回值（落盘失败回滚原态）。实现
+> 注意：select 的 case 表达式内做 `mAuto != nil && <-ch` 会**求值即消
+> 费**吞掉点击事件——改 nil-channel 惯用法（未装配时 mAutoCh=nil，case
+> 永不就绪）。serve -tray 与 app 两入口 TrayOptions 均装配（
+> serveSetup.autostartCallbacks 共享回调对）。控制台设置页开关与托盘
+> 双入口读写同一 settings.json（GET 读盘对齐）。genwinres
+> appVersion → 0.1.4。
+
 ## 一、目标与边界
 
 兑现 2026-10-30 桌面壳两步走决策第二步：Windows app 模式以 Wails v3

@@ -179,6 +179,25 @@ func (st *serveSetup) wireSettingsHook() {
 	}
 }
 
+// autostartCallbacks 托盘「开机自启动」checkbox 的回调对（2026-11-11）：
+// enabled=当前偏好；toggle=翻转（内存态+settings.json 落盘+注册表 Run
+// 键即时同步），落盘失败返回原态（菜单勾选态回滚）。
+func (st *serveSetup) autostartCallbacks() (enabled func() bool, toggle func() bool) {
+	enabled = func() bool { return st.settings.AutostartEnabled() }
+	toggle = func() bool {
+		nv := !st.settings.AutostartEnabled()
+		st.settings.Autostart = &nv
+		if err := store.SaveSettings(st.paths, st.settings); err != nil {
+			slog.Warn("托盘切换开机自启动失败（落盘）", "err", err)
+			return !nv
+		}
+		applyAutostart(nv)
+		slog.Info("托盘切换开机自启动", "enable", nv)
+		return nv
+	}
+	return enabled, toggle
+}
+
 // startHelpers 启动后台辅助（OTLP 导出、OAuth 刷新、余额轮询、用量落盘
 // 节流）；返回收尾函数（OTLP 关闭）。ctx 结束时各自退出。
 func (st *serveSetup) startHelpers(ctx context.Context) func() {
@@ -451,6 +470,7 @@ func runServe(args []string, stdout io.Writer, relay relayState) error {
 	if *tray {
 		n := newNotifier(st.settings.NotifyEnabled())
 		st.wireDesktopHooks(n)
+		autoEnabled, autoToggle := st.autostartCallbacks()
 		go runTrayIsolated(TrayOptions{
 			OnOpen: func() { _ = openBrowser("http://" + st.listen + "/") },
 			OnExit: func() {
@@ -458,9 +478,11 @@ func runServe(args []string, stdout io.Writer, relay relayState) error {
 				stop()
 				systray.Quit()
 			},
-			Status:          st.trayStatus,
-			Update:          st.trayUpdateQuery,
-			OnUpdateInstall: st.srv.OnUpdateInstall,
+			Status:           st.trayStatus,
+			Update:           st.trayUpdateQuery,
+			OnUpdateInstall:  st.srv.OnUpdateInstall,
+			AutostartEnabled: autoEnabled,
+			AutostartToggle:  autoToggle,
 		})
 		fmt.Fprintln(stdout, "  托盘: 已启用（系统托盘区图标）")
 	}
@@ -510,6 +532,7 @@ func runApp(args []string, stdout io.Writer, relay relayState) error {
 	if !*noTray {
 		n := newNotifier(st.settings.NotifyEnabled())
 		st.wireDesktopHooks(n)
+		autoEnabled, autoToggle := st.autostartCallbacks()
 		go runTrayIsolated(TrayOptions{
 			OnOpen: onOpen,
 			OnExit: func() {
@@ -517,9 +540,11 @@ func runApp(args []string, stdout io.Writer, relay relayState) error {
 				stop()
 				systray.Quit()
 			},
-			Status:          st.trayStatus,
-			Update:          st.trayUpdateQuery,
-			OnUpdateInstall: st.srv.OnUpdateInstall,
+			Status:           st.trayStatus,
+			Update:           st.trayUpdateQuery,
+			OnUpdateInstall:  st.srv.OnUpdateInstall,
+			AutostartEnabled: autoEnabled,
+			AutostartToggle:  autoToggle,
 		})
 		fmt.Fprintln(stdout, "  托盘: 已启用（系统托盘区图标；退出请走托盘菜单）")
 	}

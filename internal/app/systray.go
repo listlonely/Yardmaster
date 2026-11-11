@@ -61,6 +61,13 @@ type TrayOptions struct {
 	// nil=走自替换引擎（下载→换侧→接力重启），nil=回退打开 releases
 	// 页（无桌面壳装配的场景）。
 	OnUpdateInstall func() error
+	// AutostartEnabled 返回当前「开机自启动」偏好（2026-11-11，托盘
+	// checkbox 菜单项初态）。nil=隐藏该项（未装配壳层偏好的场景）。
+	AutostartEnabled func() bool
+	// AutostartToggle 点击菜单项：翻转偏好（settings.json 落盘 + 注册
+	// 表 Run 键即时同步），返回翻转后的真实状态（菜单勾选态强制对齐
+	// 此返回值——不依赖 systray 内部翻转语义）。nil=隐藏该项。
+	AutostartToggle func() bool
 }
 
 // runTrayIsolated 托盘崩溃隔离（M8-W5，语义同插件纪律）：托盘在独立
@@ -82,6 +89,11 @@ func runTray(opts TrayOptions) {
 		systray.SetTitle("Yardmaster")
 		systray.SetTooltip("Yardmaster 网关运行中")
 		mOpen := systray.AddMenuItem("打开窗口", "打开 Yardmaster 应用窗口/控制台")
+		var mAuto *systray.MenuItem
+		if opts.AutostartToggle != nil {
+			mAuto = systray.AddMenuItemCheckbox("开机自启动", "登录 Windows 时自动启动（静默常驻，界面走双击 exe/本菜单）",
+				opts.AutostartEnabled != nil && opts.AutostartEnabled())
+		}
 		systray.AddSeparator()
 		verLabel := "v" + Version
 		if Version == "dev" {
@@ -98,6 +110,13 @@ func runTray(opts TrayOptions) {
 		}
 		systray.AddSeparator()
 		mQuit := systray.AddMenuItem("退出", "停止网关并退出")
+		// nil-channel 惯用法：未装配自启动回调时 mAutoCh 为 nil，select
+		// 中该 case 永不就绪（不能在 case 表达式里做 mAuto != nil && 判
+		// 定——求值即消费，会吞掉菜单点击事件）。
+		var mAutoCh <-chan struct{}
+		if mAuto != nil {
+			mAutoCh = mAuto.ClickedCh
+		}
 
 		go func() {
 			for {
@@ -105,6 +124,12 @@ func runTray(opts TrayOptions) {
 				case <-mOpen.ClickedCh:
 					if opts.OnOpen != nil {
 						opts.OnOpen()
+					}
+				case <-mAutoCh:
+					// 勾选态强制对齐回调返回值（不依赖 systray 内部翻
+					// 转语义，跨版本一致）；切换失败时回调返回原态。
+					if opts.AutostartToggle != nil {
+						mAuto.SetChecked(opts.AutostartToggle())
 					}
 				case <-mUpdate.ClickedCh:
 					if opts.OnUpdateInstall == nil {
