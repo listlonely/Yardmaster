@@ -172,6 +172,10 @@ func (p *Plugin) supervise(ctx context.Context) {
 // runOnce 启动一次进程实例并服务至其退出（进程退出→fail 所有 pending）。
 func (p *Plugin) runOnce() error {
 	cmd := exec.Command(p.spec.Command[0], p.spec.Command[1:]...)
+	// CREATE_NO_WINDOW（2026-11-11）：插件为后台管道子进程，从 GUI 版
+	// 网关 spawn console 程序（node 等）时抑制 conhost 黑窗（用户实测
+	// 每次启动弹 node.exe 窗口）；非 Windows 返回 nil 属性零变化。
+	cmd.SysProcAttr = spawnSysProcAttr()
 	// 最小环境（设计稿 §五）：默认不透传父进程全量环境；plugins.json
 	// env 含 "INHERIT_ENV=1" 时才继承（用户显式选择）。YM_APP_DIR 为
 	// 唯一自动注入项：数据目录绝对路径，插件持久化状态用（context-guard

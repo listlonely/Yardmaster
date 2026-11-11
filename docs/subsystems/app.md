@@ -172,6 +172,16 @@
 > 偏好区胶囊开关，用户未刷新页面误认为缺失）。genwinres appVersion →
 > 0.1.2。
 
+> [2026-11-11-插件子进程黑窗抑制] 用户截图反馈「每次启动弹
+> C:\...\node.exe 黑窗」——context-guard 插件（node 长驻）为 console
+> 子程序，从 GUI 版网关（windowsgui 无控制台）spawn 时 Windows 机制性
+> 新建 conhost 黑窗（父有控制台时继承不弹，故 serve/CLI 场景从未显现）。
+> 方案：插件 spawn 统一加 **CREATE_NO_WINDOW**（procattr_windows.go 的
+> SysProcAttr.CreationFlags + runOnce 接线；!windows 返回 nil 零变化）
+> ——插件是 NDJSON 管道后台服务型子进程，本就无窗口语义；stdin/stdout
+> 管道与 stderr 转发不受影响。genwinres appVersion → 0.1.3。派发
+> Agent（用户主动派发、输出事件流可观测）不在本修复范围。
+
 ## 一、目标与边界
 
 兑现 2026-10-30 桌面壳两步走决策第二步：Windows app 模式以 Wails v3
