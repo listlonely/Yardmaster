@@ -208,7 +208,7 @@ func TestDispatchCatalogInstallCorruptConfig(t *testing.T) {
 		}))
 	}))
 	t.Cleanup(src.Close)
-	s, srv := newCatalogServer(t, "{broken")
+	_, srv := newCatalogServer(t, "{broken")
 	withCatalogURL(t, "gemini-cli", src.URL+"/gemini-cli.zip")
 	if code, _ := postCatalogInstall(t, srv, "gemini-cli"); code != http.StatusConflict {
 		t.Fatalf("损坏配置应 409，得到 %d", code)
