@@ -127,9 +127,10 @@ func TestDispatchCatalogInstallFullChain(t *testing.T) {
 		_, _ = w.Write(pkg)
 	}))
 	t.Cleanup(src.Close)
-	s, srv := newCatalogServer(t, "")
+	// seed 空清单：install 为非首写（BackupConfig 对缺失源 no-op，断言
+	// 「写前备份留底」需要已存在的源文件）
+	s, srv := newCatalogServer(t, `{"agents":[]}`)
 	withCatalogURL(t, "gemini-cli", src.URL+"/gemini-cli.zip")
-
 	code, body := postCatalogInstall(t, srv, "gemini-cli")
 	if code != http.StatusOK {
 		t.Fatalf("install status = %d, body = %s", code, body)
