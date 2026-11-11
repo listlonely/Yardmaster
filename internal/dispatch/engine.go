@@ -657,3 +657,7 @@ var agentCatalog = []CatalogEntry{
 func Catalog() []CatalogEntry {
 	return append([]CatalogEntry(nil), agentCatalog...)
 }
+
+// SetCatalogForTest 测试替换目录（production 永不调用——测试注入纪律
+// 同 Plugin.backoff/nowFn）。
+func SetCatalogForTest(entries []CatalogEntry) { agentCatalog = entries }

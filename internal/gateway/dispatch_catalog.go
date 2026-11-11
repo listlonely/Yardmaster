@@ -66,8 +66,9 @@ func (s *Server) handleDispatchCatalog(w http.ResponseWriter, _ *http.Request) {
 	for _, a := range f.Agents {
 		installed[a.ID] = true
 	}
-	views := make([]catalogView, 0, len(agentCatalog))
-	for _, e := range dispatch.Catalog() {
+	cat := dispatch.Catalog()
+	views := make([]catalogView, 0, len(cat))
+	for _, e := range cat {
 		v := catalogView{CatalogEntry: e, Installed: installed[e.Spec.ID]}
 		if p, err := exec.LookPath(e.Probe); err == nil {
 			v.Found = true
@@ -85,10 +86,11 @@ func (s *Server) handleDispatchCatalogInstall(w http.ResponseWriter, id string) 
 		dispatchDisabled(w)
 		return
 	}
+	cat := dispatch.Catalog()
 	var entry *dispatch.CatalogEntry
-	for i := range agentCatalog {
-		if agentCatalog[i].Spec.ID == id {
-			entry = &agentCatalog[i]
+	for i := range cat {
+		if cat[i].Spec.ID == id {
+			entry = &cat[i]
 			break
 		}
 	}

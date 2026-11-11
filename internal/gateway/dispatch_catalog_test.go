@@ -4,8 +4,6 @@
 package gateway
 
 import (
-	"archive/zip"
-	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -19,25 +17,7 @@ import (
 	"yardmaster/internal/dispatch"
 )
 
-// zipBytes 构造内存 zip 包（plugin_store_test.go 同款 helper）。
-func zipBytes(t *testing.T, files map[string]string) []byte {
-	t.Helper()
-	var buf bytes.Buffer
-	zw := zip.NewWriter(&buf)
-	for name, content := range files {
-		w, err := zw.Create(name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := w.Write([]byte(content)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := zw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return buf.Bytes()
-}
+// zipBytes 复用 plugin_store_test.go 的同款 helper（内存 zip 包）。
 
 // newCatalogServer 起带派发引擎的测试网关（可选预置 dispatch.json）。
 func newCatalogServer(t *testing.T, seed string) (*Server, *httptest.Server) {
@@ -60,18 +40,24 @@ func newCatalogServer(t *testing.T, seed string) (*Server, *httptest.Server) {
 	return s, srv
 }
 
-// withCatalogURL 临时替换目录条目的包源地址（测试结束恢复）。
+// withCatalogURL 临时替换目录条目的包源地址（SetCatalogForTest 注入，
+// 测试结束恢复原目录）。
 func withCatalogURL(t *testing.T, id, url string) {
 	t.Helper()
-	for i := range agentCatalog {
-		if agentCatalog[i].Spec.ID == id {
-			old := agentCatalog[i].DownloadURL
-			agentCatalog[i].DownloadURL = url
-			t.Cleanup(func() { agentCatalog[i].DownloadURL = old })
-			return
+	orig := dispatch.Catalog()
+	mutated := append([]dispatch.CatalogEntry(nil), orig...)
+	hit := false
+	for i := range mutated {
+		if mutated[i].Spec.ID == id {
+			mutated[i].DownloadURL = url
+			hit = true
 		}
 	}
-	t.Fatalf("目录缺少条目 %s", id)
+	if !hit {
+		t.Fatalf("目录缺少条目 %s", id)
+	}
+	dispatch.SetCatalogForTest(mutated)
+	t.Cleanup(func() { dispatch.SetCatalogForTest(orig) })
 }
 
 func postCatalogInstall(t *testing.T, srv *httptest.Server, id string) (int, []byte) {
