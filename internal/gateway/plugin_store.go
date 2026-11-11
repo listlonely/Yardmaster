@@ -70,27 +70,33 @@ var PluginStoreIndex = []storeEntry{
 	// param-override（2026-11-10，magpie-bridge 接线验证）：New API
 	// param_override 的 Magpie 社区中间件移植，经 provider.rewrite 钩子在
 	// 入站解析前改写请求。上游 @magpie-community/plugins（MIT，v0.1.0）；
-	// 仓库内验证载体在 plugins/magpie-bridge/（adapter.mjs + 上游中间件
-	// 原样），安装渠道的社区 zip 包未发布——download_url 留空如实报错，
-	// 当前接入方式 = plugins.json 手工注册（options 即 New API 同款 JSON）。
+	// 仓库内载体在 plugins/magpie-bridge/（adapter.mjs + 上游中间件
+	// 原样），安装包发布在仓库 examples/plugin-packs/（2026-11-11 起
+	// 真下载可用）。
 	{ID: "param-override", Ver: "0.1.0", Author: "@magpie-community", Cap: plugin.CapRewrite,
-		Desc: "New API 的 param_override：按条件设置/删除/改写请求字段，或拒绝请求（New API 同款 JSON 直用）"},
+		DownloadURL: "https://raw.githubusercontent.com/listlonely/Yardmaster/main/examples/plugin-packs/param-override.zip",
+		Desc:        "New API 的 param_override：按条件设置/删除/改写请求字段，或拒绝请求（New API 同款 JSON 直用）"},
 	// word-guard / system-prompt（2026-11-10 迁移，同 param-override 通道）：
 	// 上游 @magpie-community/plugins（MIT）；本地载体 plugins/magpie-bridge/，
-	// 社区 zip 未发布 download_url 留空，接入 = plugins.json 手工注册。
+	// 安装包发布在仓库 examples/plugin-packs/。
 	{ID: "word-guard", Ver: "0.1.0", Author: "@magpie-community", Cap: plugin.CapRewrite,
-		Desc: "New API 的敏感词过滤：请求拒发/掩码 + 回复掩码（流式逐帧），New API 同款 words/patterns"},
+		DownloadURL: "https://raw.githubusercontent.com/listlonely/Yardmaster/main/examples/plugin-packs/word-guard.zip",
+		Desc:        "New API 的敏感词过滤：请求拒发/掩码 + 回复掩码（流式逐帧），New API 同款 words/patterns"},
 	{ID: "system-prompt", Ver: "0.1.0", Author: "@magpie-community", Cap: plugin.CapRewrite,
-		Desc: "系统提示词注入：无则补、有则保（override 可并入），按协议写入各自位置；agents 可过滤"},
+		DownloadURL: "https://raw.githubusercontent.com/listlonely/Yardmaster/main/examples/plugin-packs/system-prompt.zip",
+		Desc:        "系统提示词注入：无则补、有则保（override 可并入），按协议写入各自位置；agents 可过滤"},
 	// output-strategy / history-trim / codex-history（2026-11-10 第二批迁移，
 	// 同通道换文件即用；上游 @magpie-community/plugins MIT，本地载体
-	// plugins/magpie-bridge/，社区 zip 未发布 download_url 留空）。
+	// plugins/magpie-bridge/，安装包发布在仓库 examples/plugin-packs/）。
 	{ID: "output-strategy", Ver: "0.2.1", Author: "@magpie-community", Cap: plugin.CapRewrite,
-		Desc: "输出风格注入（terse-prose/ponytail/i-have-adhd 等 7 种可组合），按协议写入系统位置且防重复注入"},
+		DownloadURL: "https://raw.githubusercontent.com/listlonely/Yardmaster/main/examples/plugin-packs/output-strategy.zip",
+		Desc:        "输出风格注入（terse-prose/ponytail/i-have-adhd 等 7 种可组合），按协议写入系统位置且防重复注入"},
 	{ID: "history-trim", Ver: "0.1.1", Author: "@magpie-community", Cap: plugin.CapRewrite,
-		Desc: "历史瘦身：空行折叠 / 重复系统提示去重 / 超长工具结果词边界截断 / 相邻重复消息去重（当前回合不动）"},
+		DownloadURL: "https://raw.githubusercontent.com/listlonely/Yardmaster/main/examples/plugin-packs/history-trim.zip",
+		Desc:        "历史瘦身：空行折叠 / 重复系统提示去重 / 超长工具结果词边界截断 / 相邻重复消息去重（当前回合不动）"},
 	{ID: "codex-history", Ver: "0.1.2", Author: "@magpie-community", Cap: plugin.CapRewrite,
-		Desc: "Codex 会话历史跨账号迁移：滤除 reasoning 与加密内容、剥服务端 item id；按 provider 显式开启"},
+		DownloadURL: "https://raw.githubusercontent.com/listlonely/Yardmaster/main/examples/plugin-packs/codex-history.zip",
+		Desc:        "Codex 会话历史跨账号迁移：滤除 reasoning 与加密内容、剥服务端 item id；按 provider 显式开启"},
 }
 
 // 安装包硬上限（zip 原始大小 / 累计解压大小）。
@@ -173,16 +179,23 @@ func (s *Server) handleStoreInstall(w http.ResponseWriter, id string) {
 		writeAPIErr(w, badRequest(errors.New("manifest.command 不能为空")))
 		return
 	}
-	// command[0] 相对路径物化为插件目录内绝对路径（子进程按网关 cwd 解析，
-	// 相对路径不可靠）；参数不物化（插件自身语义）。
-	argv0 := manifest.Command[0]
-	if !filepath.IsAbs(argv0) {
-		argv0 = filepath.Join(dir, filepath.FromSlash(argv0))
-	}
-	if _, err := os.Stat(argv0); err != nil {
-		_ = os.RemoveAll(dir)
-		writeAPIErr(w, badRequest(fmt.Errorf("安装包入口不存在: %s", argv0)))
-		return
+	// command 元素的 `./` 前缀物化为插件目录内绝对路径（子进程按网关 cwd
+	// 解析，相对路径不可靠）——magpie 系包 command 含多个包内相对元素
+	//（adapter.mjs 与 middleware.js），全部物化并校验存在；非 `./` 元素
+	//（如 node、参数）原样保留。
+	argv := make([]string, len(manifest.Command))
+	for i, arg := range manifest.Command {
+		if strings.HasPrefix(arg, "./") {
+			p := filepath.Join(dir, filepath.FromSlash(strings.TrimPrefix(arg, "./")))
+			if _, err := os.Stat(p); err != nil {
+				_ = os.RemoveAll(dir)
+				writeAPIErr(w, badRequest(fmt.Errorf("安装包入口不存在: %s", p)))
+				return
+			}
+			argv[i] = p
+			continue
+		}
+		argv[i] = arg
 	}
 	intents := manifest.Intents
 	if intents == nil {
@@ -190,7 +203,7 @@ func (s *Server) handleStoreInstall(w http.ResponseWriter, id string) {
 	}
 	spec := plugin.Spec{
 		ID:           id,
-		Command:      append([]string{argv0}, manifest.Command[1:]...),
+		Command:      argv,
 		Enabled:      true,
 		Capabilities: manifest.Capabilities,
 		Desc:         firstNonEmpty(manifest.Desc, entry.Desc),

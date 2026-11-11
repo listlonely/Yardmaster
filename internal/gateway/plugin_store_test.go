@@ -62,6 +62,58 @@ func postStoreInstall(t *testing.T, srv *httptest.Server, id string) (int, []byt
 	return resp.StatusCode, b
 }
 
+// TestStoreInstallMagpieShape：magpie 系包（command 含多个 `./` 相对元素
+// ——adapter.mjs 与 middleware.js）安装后**全部元素**物化为包目录绝对
+// 路径（2026-11-11：物化从 command[0] 扩展到全部 `./` 元素，支撑六插件
+// 真下载安装）。
+func TestStoreInstallMagpieShape(t *testing.T) {
+	src := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		pkg := zipBytes(t, map[string]string{
+			"manifest.json":                `{"id":"param-override","command":["node","./adapter.mjs","param-override","./param-override.middleware.js"],"capabilities":["provider.rewrite"]}`,
+			"adapter.mjs":                  "// adapter",
+			"param-override.middleware.js": "// mw",
+		})
+		_, _ = w.Write(pkg)
+	}))
+	t.Cleanup(src.Close)
+
+	appDir := t.TempDir()
+	s := &Server{Planner: NewPlanner(nil, nil), Version: "test", AppDir: appDir,
+		ProvidersPath: filepath.Join(appDir, "providers.json")}
+	srv := httptest.NewServer(s.Handler())
+	t.Cleanup(srv.Close)
+
+	withStoreURL(t, "param-override", src.URL+"/param-override.zip")
+	code, body := postStoreInstall(t, srv, "param-override")
+	if code != 200 {
+		t.Fatalf("install status = %d, body = %s", code, body)
+	}
+	raw, err := os.ReadFile(s.pluginsPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f plugin.File
+	if err := json.Unmarshal(raw, &f); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Plugins) != 1 || f.Plugins[0].ID != "param-override" {
+		t.Fatalf("注册条目不符: %+v", f.Plugins)
+	}
+	cmd := f.Plugins[0].Command
+	if len(cmd) != 4 || cmd[0] != "node" || cmd[2] != "param-override" {
+		t.Fatalf("command 形状不符: %v", cmd)
+	}
+	dir := s.pluginsInstallDir("param-override")
+	for _, i := range []int{1, 3} {
+		if !filepath.IsAbs(cmd[i]) || !strings.HasPrefix(cmd[i], dir) {
+			t.Fatalf("command[%d] 应物化为包内绝对路径: %v", i, cmd)
+		}
+		if _, err := os.Stat(cmd[i]); err != nil {
+			t.Fatalf("物化路径指向的文件缺失: %v", err)
+		}
+	}
+}
+
 func TestStoreInstallFullChain(t *testing.T) {
 	// 假源：合法包（manifest + 入口文件）
 	src := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

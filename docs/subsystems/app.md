@@ -237,6 +237,18 @@
 > dispatch_catalog_test.go（视图/install 全链/404/坏包/损坏配置）+
 > web。genwinres appVersion → 0.1.7。
 
+> [2026-11-11-插件商店真下载补齐] Agent 目录先例延伸：magpie 系六插件
+> （param-override/word-guard/system-prompt/output-strategy/history-trim/
+> codex-history）安装包 zip（manifest + adapter.mjs + middleware.js）
+> 托管仓库 examples/plugin-packs/，PluginStoreIndex 六条填
+> download_url（raw 直链）——商店安装按钮全部真下载可用（此前 12 条
+> 全部"包未发布"如实报错）。Go 侧配套：安装物化从 command[0] 扩展到
+> **全部 `./` 前缀元素**（magpie 包 command 含多个包内相对元素——
+> adapter 与 middleware 都要物化，逐元素 os.Stat 校验）。占位条目
+>（OAuth 三家 / incident-intents / cost-alert / otel-exporter /
+> qwen-vendor）无独立实现可打包，download_url 维持留空如实报错。
+> genwinres appVersion → 0.1.8。
+
 ## 一、目标与边界
 
 兑现 2026-10-30 桌面壳两步走决策第二步：Windows app 模式以 Wails v3
