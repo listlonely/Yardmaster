@@ -247,7 +247,12 @@
 > adapter 与 middleware 都要物化，逐元素 os.Stat 校验）。占位条目
 >（OAuth 三家 / incident-intents / cost-alert / otel-exporter /
 > qwen-vendor）无独立实现可打包，download_url 维持留空如实报错。
-> genwinres appVersion → 0.1.8。
+> **真机实测与两个已知边界**（安装 word-guard 实证）：① 包内**必须含
+> package.json（type:module）**——安装目录无 type 标记时 node 把 .js
+> 中间件按 CommonJS 解析报 export 语法错（adapter exit 2 反复退避；
+> 已补包重装 running）；② raw.githubusercontent CDN 缓存约 5 分钟——
+> 包更新提交后短窗口内安装可能拿到旧包，重试即可（cache-bust 留下次
+> 发版捎带）。genwinres appVersion → 0.1.8。
 
 ## 一、目标与边界
 
