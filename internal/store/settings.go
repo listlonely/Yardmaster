@@ -54,6 +54,13 @@ type Settings struct {
 	//（缺省，W1 决策现状）；exit=关窗直接退出程序（含托盘）。桌面壳在
 	// 关窗事件时实时读盘（保存后下次关窗即生效，无需重启）。
 	CloseAction string `json:"close_action,omitempty"`
+
+	// 开机自启动（2026-11-11）：true=登录时自动拉起桌面版（壳层写
+	// HKCU 注册表 Run 键，指向当前 exe）；nil/false=不自启动。指针
+	// 语义同 Notify：管理 API PUT nil=未提供保留现值。缺省关（自启动
+	// 属用户显式选择；迁移自启动文件夹快捷方式的场景由交付方显式置
+	// true）。非 Windows 平台为 no-op（壳层 build tag 隔离）。
+	Autostart *bool `json:"autostart,omitempty"`
 }
 
 // TokenEntry 是一枚命名访问令牌（多令牌，按客户端隔离）：生成时返回
@@ -127,6 +134,12 @@ func ValidUpdateMode(v string) bool {
 // NotifyEnabled 返回桌面气泡通知是否开启（nil=缺省开启）。
 func (s Settings) NotifyEnabled() bool {
 	return s.Notify == nil || *s.Notify
+}
+
+// AutostartEnabled 返回开机自启动是否开启（nil=缺省关闭——自启动属
+// 用户显式选择，缺省不悄悄注册开机项）。
+func (s Settings) AutostartEnabled() bool {
+	return s.Autostart != nil && *s.Autostart
 }
 
 // 窗口关闭行为取值。

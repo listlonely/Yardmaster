@@ -251,6 +251,35 @@ func TestConfigPutSettingsCloseAction(t *testing.T) {
 	}
 }
 
+// 开机自启动（2026-11-11）：指针语义——空体（未提供字段）保留现值；
+// 显式 false 落盘（与 Notify 同规；bool 无枚举校验路径）。
+func TestConfigPutSettingsAutostart(t *testing.T) {
+	s, srv := newConfigServer(t, nil)
+	settingsPath := filepath.Join(s.AppDir, "settings.json")
+	if err := os.WriteFile(settingsPath, []byte(`{"autostart":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if st, body := doPut(t, srv.URL, "/api/config/settings", `{}`); st != http.StatusOK {
+		t.Fatalf("空体（未提供字段）应保留现值: HTTP %d: %s", st, body)
+	}
+	var cur store.Settings
+	if err := store.LoadJSON(settingsPath, &cur); err != nil {
+		t.Fatal(err)
+	}
+	if cur.Autostart == nil || !*cur.Autostart {
+		t.Fatalf("空体应保留 autostart=true: %+v", cur)
+	}
+	if st, body := doPut(t, srv.URL, "/api/config/settings", `{"autostart":false}`); st != http.StatusOK {
+		t.Fatalf("显式 false 应落盘: HTTP %d: %s", st, body)
+	}
+	if err := store.LoadJSON(settingsPath, &cur); err != nil {
+		t.Fatal(err)
+	}
+	if cur.Autostart == nil || *cur.Autostart {
+		t.Fatalf("false 未落盘: %+v", cur)
+	}
+}
+
 func TestConfigPutRulesInvalidRegexRejected(t *testing.T) {
 	s, srv := newConfigServer(t, nil)
 	st, body := doPut(t, srv.URL, "/api/config/rules",

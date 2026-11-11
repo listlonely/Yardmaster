@@ -146,6 +146,24 @@
 > 启动零 conhost + app.log + healthz 200 + exe 属性/图标齐全（S1~S5）。
 > 单实例/数据目录/配置语义两入口完全一致。
 
+> [2026-11-11-开机自启动设置 autostart] 用户需求「应用内设置是否自
+> 启动」——此前自启动靠启动文件夹快捷方式（外部手段，不可控不可见）。
+> 设计：settings 新键 `autostart`（*bool 指针，语义同 Notify：PUT nil=
+> 保留现值；`AutostartEnabled()` nil=缺省关——自启动属用户显式选择）；
+> 壳层落地 = **HKCU 注册表 Run 键**（`...\CurrentVersion\Run` 值名
+> Yardmaster = 引号包裹的当前 exe 路径；HKCU 无需管理员；registry 依赖
+> 已在 window_wails.go 使用）。生效链路：PUT /api/config/settings 落盘
+> → **Server.OnSettingsChange 新弱钩子**（同 OnAccountRest 模式，nil
+> 安全）→ `applyAutostart`（autostart_windows.go；!windows no-op 同
+> console_* 先例）——即时生效无需重启；runApp 启动时按偏好幂等同步
+> （自愈：手动删键/exe 换路径后自动恢复）。CLI `settings set autostart
+> on|off` 落盘后即时同步。失败语义：注册表写失败 slog.Warn 降级留痕
+> 不阻断。设置页「通用偏好」加胶囊开关（同 notify 形态）。文件：
+> settings.go / gateway.go（钩子）/ api.go（调用）/ autostart_windows.go
+> + autostart_other.go / app.go（wireSettingsHook + 启动自愈）/
+> settings_cmd.go / web UI / webapi_test.go（指针语义测试）。
+> genwinres appVersion → 0.1.1（发版随 tag）。
+
 ## 一、目标与边界
 
 兑现 2026-10-30 桌面壳两步走决策第二步：Windows app 模式以 Wails v3

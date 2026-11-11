@@ -31,6 +31,7 @@ import (
 	"yardmaster/internal/netproxy"
 	"yardmaster/internal/plugin"
 	"yardmaster/internal/provider"
+	"yardmaster/internal/store"
 )
 
 // webFS 是控制台静态资源（M2-W1 框架页：总览/Provider/路由/观测），
@@ -102,6 +103,11 @@ type Server struct {
 	// 的执行体。nil=未装配更新引擎（纯 CLI 场景管理 API 返回 503）；
 	// 网关核心不感知 exe 替换细节（依赖方向：app→gateway 单向）。
 	OnUpdateInstall func() error
+	// OnSettingsChange 设置落盘钩子（2026-11-11）：PUT /api/config/settings
+	// 写盘成功后回调（载荷为新 Settings 全文档）。nil=无订阅者；壳层
+	// 用于即时落地需进程外生效的偏好（开机自启动注册表 Run 键），网关
+	// 核心不感知注册表实现。
+	OnSettingsChange func(store.Settings)
 	oauth           oauthRuntime // OAuth 运行态（token 缓存/single-flight）
 	started         time.Time
 }

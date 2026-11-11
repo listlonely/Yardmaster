@@ -146,6 +146,10 @@
           <label class="switch-line"><button type="button" class="lib-switch on" id="set-notify" role="switch" aria-checked="true" aria-label="桌面气泡通知"><i></i></button></label>
         </div>
         <div class="row pref">
+          <div class="who"><div class="name">开机自启动</div><div class="sub">登录 Windows 时自动启动桌面版网关（写当前用户注册表 Run 键，指向当前程序；关闭即删除该条目）</div></div>
+          <label class="switch-line"><button type="button" class="lib-switch" id="set-autostart" role="switch" aria-checked="false" aria-label="开机自启动"><i></i></button></label>
+        </div>
+        <div class="row pref">
           <div class="who"><div class="name">自动更新</div><div class="sub">off=完全静默；check=只提示（默认）；auto=发现新版自动下载安装并重启</div></div>
           <select id="set-update" class="sel">
             <option value="check">check · 只提示</option>

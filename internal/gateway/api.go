@@ -245,6 +245,11 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, name st
 		}
 		// 命名令牌热替换：tokens 变更即时生效（listen 仍为装配期字段）。
 		s.SetTokenHashes(TokenHashesOf(f.Tokens))
+		// 设置落盘钩子（2026-11-11）：壳层即时落地进程外偏好（开机自
+		// 启动注册表 Run 键）；失败在钩子内降级留痕，不影响写响应。
+		if s.OnSettingsChange != nil {
+			s.OnSettingsChange(f)
+		}
 		// 写响应包：Token 脱敏（f 为本请求局部值，Settings 不入运行态）。
 		view := f
 		view.Token = maskAPIKey(f.Token)

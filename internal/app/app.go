@@ -171,6 +171,14 @@ func setupGateway() (*serveSetup, error) {
 	return &serveSetup{srv: srv, planner: planner, paths: paths, settings: settings, listen: listen, disp: dispEngine}, nil
 }
 
+// wireSettingsHook 设置落盘钩子（2026-11-11）：壳层把需要进程外生效的
+// 偏好（开机自启动注册表 Run 键）即时落地；serve/app 两入口共用装配。
+func (st *serveSetup) wireSettingsHook() {
+	st.srv.OnSettingsChange = func(s store.Settings) {
+		applyAutostart(s.AutostartEnabled())
+	}
+}
+
 // startHelpers 启动后台辅助（OTLP 导出、OAuth 刷新、余额轮询、用量落盘
 // 节流）；返回收尾函数（OTLP 关闭）。ctx 结束时各自退出。
 func (st *serveSetup) startHelpers(ctx context.Context) func() {
@@ -435,6 +443,7 @@ func runServe(args []string, stdout io.Writer, relay relayState) error {
 	if err != nil {
 		return serveRelayWrap(relay, err)
 	}
+	st.wireSettingsHook()
 	defer st.srv.Traces.Close()
 	defer st.startHelpers(ctx)()
 	st.banner(stdout)
@@ -485,6 +494,10 @@ func runApp(args []string, stdout io.Writer, relay relayState) error {
 	if err != nil {
 		return serveRelayWrap(relay, err)
 	}
+	st.wireSettingsHook()
+	// 启动自愈（2026-11-11）：注册表 Run 键与偏好对齐——用户手动删键/
+	// exe 换路径后，下次启动自动恢复（幂等写）。
+	applyAutostart(st.settings.AutostartEnabled())
 	defer st.srv.Traces.Close()
 	defer st.startHelpers(ctx)()
 	st.banner(stdout)
