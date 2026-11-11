@@ -196,6 +196,21 @@
 > 双入口读写同一 settings.json（GET 读盘对齐）。genwinres
 > appVersion → 0.1.4。
 
+> [2026-11-11-派发页 Agent 管理区] 用户需求「界面内管理 Agent」——
+> 此前 dispatch.json agents[] 只能 CLI（dispatch agents/init）或手改
+> 文件。方案：派发页「提交任务」区之后新增管理区（清单卡片 + 新建/
+> 编辑/删除，**纯前端**——写闸 ValidateDispatch→writeConfig 备份审计→
+> Dispatch.Reload 热替换全部现成）。模态字段覆盖 AgentSpec 全量：
+> id（编辑态 readonly 防破坏模板引用）、command/env（每行一个 argv /
+> K=V——规避引号歧义；argv 含换行的极端配置不支持，模态 hint 注明）、
+> work_dir/timeout/max_concurrent/output/parser/default/match 三可选；
+> 本地预校验（regex try/catch + default 唯一 + env K=V）→ fresh GET →
+> 整文档 PUT（templates 原样保留）。env 不脱敏取舍：dispatch.json 本机
+> 明文信任态，GET 本就明文。会话运行不受 Reload 影响（engine.go 语义）。
+> 文件：index.html（管理区三件套）+ app.js（renderAgentList/agentModal/
+> deleteAgent，loadDispatchAgents 扩展渲染）。genwinres
+> appVersion → 0.1.5。
+
 ## 一、目标与边界
 
 兑现 2026-10-30 桌面壳两步走决策第二步：Windows app 模式以 Wails v3

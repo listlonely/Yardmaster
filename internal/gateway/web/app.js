@@ -2090,14 +2090,160 @@ async function loadDispatchAgents() {
   const cur = sel.value;
   try {
     const r = await api('/api/dispatch/agents');
+    const agents = r.agents || [];
     sel.innerHTML = '<option value="">自动（按匹配规则）</option>' +
-      (r.agents || []).map((a) => `<option value="${esc(a.id)}">${esc(a.id)}</option>`).join('');
+      agents.map((a) => `<option value="${esc(a.id)}">${esc(a.id)}</option>`).join('');
     if (cur) sel.value = cur;
+    renderAgentList(agents);
   } catch (e) {
     sel.innerHTML = '<option value="">派发不可用</option>';
+    $('list-agents').innerHTML = errBox('Agent 清单加载失败: ' + e.message, 'dispatch');
     status('派发配置加载失败: ' + e.message, 'err');
   }
 }
+
+// ---------- Agent 管理区（2026-11-11：dispatch.json agents[] 的增删改） ----------
+// 写路径同走管理 API 写闸（fresh GET → 构造全文档 → PUT /api/config/dispatch：
+// 严格校验 + 写前备份 + 审计 + 热重载）。env 原样编辑不脱敏——dispatch.json
+// 为本机明文信任态，GET 本就明文返回。templates 字段每次全文档往返原样保留。
+
+const linesOf = (s) => (s || '').split('\n').map((l) => l.trim()).filter((l) => l !== '');
+
+function renderAgentList(agents) {
+  const el = $('list-agents');
+  if (!el) return;
+  el.innerHTML = agents.map((a) => {
+    const cmd = a.command.join(' ');
+    const badges = [
+      a.default ? '兜底' : '',
+      a.output === 'jsonl' ? 'jsonl' : '',
+      a.parser ? `parser:${a.parser}` : '',
+      a.match && a.match.intent ? `intent=${a.match.intent}` : '',
+      a.match && a.match.prompt_regex ? 'prompt~' : '',
+      a.match && a.match.model_regex ? 'model~' : '',
+    ].filter(Boolean).join(' · ');
+    const meta = [
+      cmd.length > 90 ? cmd.slice(0, 90) + '…' : cmd,
+      a.timeout ? `超时 ${a.timeout}` : '',
+      a.max_concurrent > 1 ? `并发 ${a.max_concurrent}` : '',
+      badges,
+    ].filter(Boolean).join(' · ');
+    return `<div class="row">
+      <div class="who">
+        <div class="name"><code>${esc(a.id)}</code></div>
+        <div class="sub">${esc(meta)}</div>
+      </div>
+      <div class="row-acts">
+        <button type="button" class="text edit" data-agent="${esc(a.id)}">编辑</button>
+        <button type="button" class="text del" data-agent="${esc(a.id)}">删除</button>
+      </div>
+    </div>`;
+  }).join('') || listEmpty('暂无 Agent——派发将不可用；点「＋ 新建 Agent」添加');
+}
+
+function agentModal(existing) {
+  const isEdit = !!existing;
+  const a = existing || {};
+  formModal(isEdit ? `编辑 Agent ${a.id}` : '新建 Agent',
+    frow('ID', `<input class="field mono" name="id" value="${esc(a.id || '')}" ${isEdit ? 'readonly' : 'required'} spellcheck="false" placeholder="唯一标识，如 claude-code">`) +
+    frow('命令', `<textarea class="field mono" name="command" rows="3" required spellcheck="false" placeholder="每行一个参数，如：&#10;claude&#10;-p&#10;--output-format stream-json">${esc((a.command || []).join('\n'))}</textarea>`, '每行一个 argv 参数（空格/引号原样保留）；argv 自身含换行的极端配置不支持') +
+    frow('工作目录', `<input class="field mono" name="work_dir" value="${esc(a.work_dir || '')}" spellcheck="false" placeholder="可选；默认网关进程工作目录">`) +
+    frow('环境变量', `<textarea class="field mono" name="env" rows="2" spellcheck="false" placeholder="每行一个 KEY=VALUE">${esc((a.env || []).join('\n'))}</textarea>`, '每行一个环境变量（原样显示，本机明文配置）') +
+    frow('超时', `<input class="field mono" name="timeout" value="${esc(a.timeout || '')}" placeholder="如 10m / 30s / 1h；空 = 缺省">`) +
+    frow('最大并发', `<input class="field" name="max_concurrent" type="number" min="0" step="1" value="${a.max_concurrent || ''}" placeholder="默认 1">`) +
+    frow('输出格式', `<select class="sel" name="output"><option value="">自动（text）</option><option value="text"${a.output === 'text' ? ' selected' : ''}>text · 纯文本</option><option value="jsonl"${a.output === 'jsonl' ? ' selected' : ''}>jsonl · stream-json 事件流</option></select>`) +
+    frow('解析插件', `<input class="field mono" name="parser" value="${esc(a.parser || '')}" spellcheck="false" placeholder="可选；输出解析插件 id，不可用=该行 raw 回退">`) +
+    frow('兜底', `<label class="switch-line"><input type="checkbox" name="default"${a.default ? ' checked' : ''}><span>无匹配规则时使用（至多一个）</span></label>`) +
+    frow('match · intent', `<input class="field mono" name="m_intent" value="${esc((a.match && a.match.intent) || '')}" spellcheck="false" placeholder="意图精确等于；可选">`) +
+    frow('match · model_regex', `<input class="field mono" name="m_model" value="${esc((a.match && a.match.model_regex) || '')}" spellcheck="false" placeholder="请求模型正则；可选">`) +
+    frow('match · prompt_regex', `<input class="field mono" name="m_prompt" value="${esc((a.match && a.match.prompt_regex) || '')}" spellcheck="false" placeholder="任务文本正则；可选">`,
+      '全部留空且不勾兜底 = 仅显式指定时可用'),
+  async (form) => {
+    const v = formVals(form);
+    const id = (v.id || '').trim();
+    if (!id) throw new Error('ID 不能为空');
+    const command = linesOf(v.command);
+    if (command.length === 0) throw new Error('命令不能为空（每行一个参数）');
+    const timeout = (v.timeout || '').trim();
+    if (timeout && !/^\d+(\.\d+)?(ms|s|m|h)$/.test(timeout)) {
+      throw new Error('超时须为如 10m / 30s / 1h 的时长');
+    }
+    const mModel = (v.m_model || '').trim(), mPrompt = (v.m_prompt || '').trim();
+    for (const [name, re] of [['model_regex', mModel], ['prompt_regex', mPrompt]]) {
+      if (re) { try { new RegExp(re); } catch { throw new Error(`match.${name} 正则非法: ${re}`); } }
+    }
+    const rawEnv = linesOf(v.env);
+    const env = rawEnv.filter((l) => l.includes('='));
+    if (rawEnv.length !== env.length) throw new Error('环境变量每行须为 KEY=VALUE');
+    const isDefault = v.default === 'on';
+    const spec = {
+      id,
+      command,
+      ...(v.work_dir.trim() ? { work_dir: v.work_dir.trim() } : {}),
+      ...(env.length ? { env } : {}),
+      ...(timeout ? { timeout } : {}),
+      ...(parseInt(v.max_concurrent, 10) > 0 ? { max_concurrent: parseInt(v.max_concurrent, 10) } : {}),
+      ...(v.output ? { output: v.output } : {}),
+      ...(v.parser.trim() ? { parser: v.parser.trim() } : {}),
+      ...(isDefault ? { default: true } : {}),
+      ...((v.m_intent || '').trim() || mModel || mPrompt ? { match: {
+        ...((v.m_intent || '').trim() ? { intent: v.m_intent.trim() } : {}),
+        ...(mModel ? { model_regex: mModel } : {}),
+        ...(mPrompt ? { prompt_regex: mPrompt } : {}),
+      } } : {}),
+    };
+    // fresh GET 构造全文档（templates 原样保留）
+    const cur = await api('/api/config/dispatch');
+    const agents = cur.agents || [];
+    const idx = agents.findIndex((x) => x.id === id);
+    if (isEdit && idx < 0) throw new Error(`Agent ${id} 已不存在（配置可能被并行修改），请刷新后重试`);
+    if (!isEdit && idx >= 0) throw new Error(`Agent ${id} 已存在`);
+    if (isDefault && agents.some((x) => x.default && x.id !== id)) {
+      throw new Error(`已有兜底 Agent（default 至多一个）：${agents.filter((x) => x.default).map((x) => x.id).join('、')}`);
+    }
+    if (idx >= 0) agents[idx] = spec; else agents.push(spec);
+    await api('/api/config/dispatch', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agents, templates: cur.templates || [] }),
+    });
+    status(`Agent ${id} 已保存（写前备份已留底，热生效）`, 'ok');
+    loadDispatchAgents();
+  });
+}
+
+async function deleteAgent(id) {
+  const ok = await confirmModal(`删除 Agent ${id}`, '该定义将从 dispatch.json 移除（写前备份留底；引用它的任务模板会被服务端拒绝）。');
+  if (!ok) return;
+  const cur = await api('/api/config/dispatch');
+  const before = (cur.agents || []).length;
+  const agents = (cur.agents || []).filter((x) => x.id !== id);
+  if (agents.length === before) {
+    status(`Agent ${id} 已不存在`, 'err');
+    loadDispatchAgents();
+    return;
+  }
+  await api('/api/config/dispatch', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ agents, templates: cur.templates || [] }),
+  });
+  status(`Agent ${id} 已删除（热生效）`, 'ok');
+  loadDispatchAgents();
+}
+
+$('list-agents').addEventListener('click', async (e) => {
+  const id = e.target.dataset.agent;
+  if (!id) return;
+  const r = await api('/api/dispatch/agents');
+  const entry = (r.agents || []).find((x) => x.id === id);
+  if (!entry) {
+    status(`Agent ${id} 已不存在`, 'err');
+    loadDispatchAgents();
+    return;
+  }
+  if (e.target.classList.contains('edit')) agentModal(entry);
+  if (e.target.classList.contains('del')) deleteAgent(id);
+});
+$('btn-agent-add').addEventListener('click', () => agentModal(null));
 
 async function loadDispatchTemplates() {
   try {
