@@ -2096,12 +2096,60 @@ async function loadDispatchAgents() {
       agents.map((a) => `<option value="${esc(a.id)}">${esc(a.id)}</option>`).join('');
     if (cur) sel.value = cur;
     renderAgentList(agents);
+    loadDispatchCatalog(); // 目录区搭车刷新（已装条目过滤依赖最新 agents）
   } catch (e) {
     sel.innerHTML = '<option value="">派发不可用</option>';
     $('list-agents').innerHTML = errBox('Agent 清单加载失败: ' + e.message, 'dispatch');
     status('派发配置加载失败: ' + e.message, 'err');
   }
 }
+
+// ---------- Agent 目录（2026-11-11：真下载安装——包 zip 解压物化注册） ----------
+
+async function loadDispatchCatalog() {
+  const el = $('list-agent-catalog');
+  if (!el) return;
+  try {
+    const r = await api('/api/dispatch/catalog');
+    const entries = (r.catalog || []).filter((e) => !e.installed); // 已安装条目不显示（商店同构）
+    el.innerHTML = entries.map((e) => {
+      const cli = e.found
+        ? `✓ 已检测到 ${esc(e.probe)} CLI`
+        : `✗ 未检测到 ${esc(e.probe)} CLI（可先安装，装好 CLI 后即用）`;
+      return `<div class="row">
+        <div class="who">
+          <div class="name"><code>${esc(e.spec.id)}</code></div>
+          <div class="sub">${esc(e.desc)}<br>${cli}${e.docs ? ` · <a href="${esc(e.docs)}" target="_blank" rel="noopener">文档</a>` : ''}</div>
+        </div>
+        <div class="row-acts">
+          <button type="button" class="text add" data-catalog="${esc(e.spec.id)}">安装</button>
+        </div>
+      </div>`;
+    }).join('') || listEmpty('目录条目均已安装——用上方「＋ 新建 Agent」自定义即可');
+  } catch (e) {
+    el.innerHTML = errBox('Agent 目录加载失败: ' + e.message, 'agents');
+  }
+}
+
+async function installCatalog(id) {
+  const btn = document.querySelector(`[data-catalog="${CSS.escape(id)}"]`);
+  if (btn) { btn.disabled = true; btn.textContent = '安装中…'; }
+  try {
+    const r = await api(`/api/dispatch/catalog/${encodeURIComponent(id)}/install`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    });
+    status(`Agent ${id} 已安装（下载→解压→备份留底→热生效）· ${r.note || ''}`, 'ok', 9000);
+    loadDispatchAgents(); // 列表 + 目录区（已装过滤）+ 派发下拉同步
+  } catch (e) {
+    status(`安装失败: ${e.message}`, 'err', 8000);
+    if (btn) { btn.disabled = false; btn.textContent = '安装'; }
+  }
+}
+
+$('list-agent-catalog').addEventListener('click', (e) => {
+  const id = e.target.dataset.catalog;
+  if (id) installCatalog(id);
+});
 
 // ---------- Agent 管理区（2026-11-11：dispatch.json agents[] 的增删改） ----------
 // 写路径同走管理 API 写闸（fresh GET → 构造全文档 → PUT /api/config/dispatch：

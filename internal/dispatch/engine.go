@@ -595,11 +595,65 @@ func ExtractResult(output, mode string) string {
 
 // Suggestions 返回三家 Agent 的建议条目（claude-code 形状经 M6-W1 真实
 // 冒烟核实；codex/gemini 未经实测仅作文档口径模板，不自动注册——设计稿
-// §五）。
+// §五）。现为 Agent 目录（Catalog）的 spec 投影——单一条目形状与此处
+// 历史形状逐字一致。
 func Suggestions() []AgentSpec {
-	return []AgentSpec{
-		{ID: "claude-code", Command: []string{"claude", "-p", "--output-format", "stream-json", "--verbose"}, Output: "jsonl", Match: &Match{Intent: "coding"}},
-		{ID: "codex", Command: []string{"codex", "exec", "--json"}, Output: "jsonl", Match: &Match{Intent: "coding"}},
-		{ID: "gemini-cli", Command: []string{"gemini", "-p"}, Output: "text"},
+	out := make([]AgentSpec, 0, len(agentCatalog))
+	for _, e := range agentCatalog {
+		s := e.Spec
+		if s.Match != nil { // 浅拷贝：防消费方经共享指针污染目录
+			m := *s.Match
+			s.Match = &m
+		}
+		out = append(out, s)
 	}
+	return out
+}
+
+// CatalogEntry 是 Agent 目录的一个条目（2026-11-11 目录化安装）：Spec 为
+// 安装后的 AgentSpec 形状；DownloadURL 指向 Agent 包（zip：manifest.json
+// + 包装脚本，托管仓库 examples/agent-packs/ 随代码版本化，raw 直链下载
+// 安装）；Probe 为前置 CLI 名（安装面 LookPath 探测）；Desc/Prereq 为
+// 目录展示文案——Prereq 注明 ToS 纪律：CLI 本体用户自装并登录，网关
+// 不代装不代登录（包装脚本仅转发调用）。
+type CatalogEntry struct {
+	Spec        AgentSpec `json:"spec"`
+	DownloadURL string    `json:"download_url"`
+	Probe       string    `json:"probe"`
+	Desc        string    `json:"desc"`
+	Prereq      string    `json:"prereq"`
+	Docs        string    `json:"docs,omitempty"`
+}
+
+// agentCatalog 是内置 Agent 目录（var 形态便于测试替换；UI 展示与
+// 安装管线共用）。当前包为 Windows 形态（run.cmd 调用本机 CLI）。
+var agentCatalog = []CatalogEntry{
+	{
+		Spec:        AgentSpec{ID: "claude-code", Command: []string{"./run.cmd"}, Output: "jsonl", Match: &Match{Intent: "coding"}},
+		DownloadURL: "https://raw.githubusercontent.com/listlonely/Yardmaster/main/examples/agent-packs/claude-code.zip",
+		Probe:       "claude",
+		Desc:        "Claude Code headless（Anthropic 官方 CLI）：stream-json 事件流，形状经 M6-W1 真实冒烟核实",
+		Prereq:      "需本机已安装 claude 并登录（claude /login）；网关不代装不代登录",
+		Docs:        "https://docs.anthropic.com/en/docs/claude-code",
+	},
+	{
+		Spec:        AgentSpec{ID: "codex", Command: []string{"./run.cmd"}, Output: "jsonl", Match: &Match{Intent: "coding"}},
+		DownloadURL: "https://raw.githubusercontent.com/listlonely/Yardmaster/main/examples/agent-packs/codex.zip",
+		Probe:       "codex",
+		Desc:        "Codex CLI（OpenAI）：exec --json 事件流（文档口径，未经真实凭证实测）",
+		Prereq:      "需本机已安装 codex 并登录；网关不代装不代登录",
+	},
+	{
+		Spec:        AgentSpec{ID: "gemini-cli", Command: []string{"./run.cmd"}, Output: "text"},
+		DownloadURL: "https://raw.githubusercontent.com/listlonely/Yardmaster/main/examples/agent-packs/gemini-cli.zip",
+		Probe:       "gemini",
+		Desc:        "Gemini CLI（Google）：-p 单轮 text 输出（文档口径）",
+		Prereq:      "需本机已安装 gemini 并登录；网关不代装不代登录",
+	},
+}
+
+// Catalog 返回内置 Agent 目录（UI 展示与安装管线共用；副本拷贝防调用
+// 方污染）。
+func Catalog() []CatalogEntry {
+	return append([]CatalogEntry(nil), agentCatalog...)
 }

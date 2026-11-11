@@ -116,6 +116,26 @@ stdout，结果与耗时留痕。与 `internal/agent` 接线子系统协同成�
 | Codex CLI | `codex exec --json` | jsonl | 事件流形状待实测（本机无 OpenAI 订阅，降级留档） |
 | Gemini CLI | `gemini -p` | text | 形状待实测（本机无 Google 登录，降级留档） |
 
+## 五·甲、Agent 目录化安装（2026-11-11，真下载）
+
+- 控制台「Agent」页目录区：内置三预设（形状 = 上表）**一键真下载
+  安装**——Agent 包 zip（manifest.json + 包装脚本 run.cmd）托管仓库
+  `examples/agent-packs/`（raw.githubusercontent 直链，随代码版本化）。
+- 安装管线（`POST /api/dispatch/catalog/{id}/install`）：下载（经全局
+  代理、20MB 上限）→ 解压到 `<AppDir>/dispatch-agents/<id>/`（zip slip
+  防护同插件商店）→ manifest 校验（id 一致性、`./` 前缀物化包目录
+  绝对路径、ValidateDispatch）→ 写 dispatch.json（备份+审计）→
+  Dispatch.Reload 热生效。目录视图（`GET /api/dispatch/catalog`）标注
+  installed / found（`exec.LookPath` 探测前置 CLI；found=false 不拦截
+  ——可先装预设后补 CLI）。
+- 包内包装脚本（run.cmd）调用的是**用户自装并登录**的本机 CLI——
+  网关真下载的是包装产物，ToS 纪律「不代装、不代登录」保留。当前包为
+  Windows 形态（run.cmd）；Linux 用户可按上表形状手配 dispatch.json。
+- 动态校验替代静态 sha256：包随代码提交（无发布死锁），HTTPS 直链 +
+  zip 结构 + manifest 一致性白名单足够；包内容变更 = 代码提交可追溯。
+
+## 六、事件视图（M6-W3）[2026-11-02-事件级实时]
+
 - Claude Code 实测事件词表（stream-json，W3 事件解析词表依据）：
   `{"type":"system","subtype":"init",…}` → `{"type":"assistant","message":{content:[{type:"text",…}]}}`
   →（工具轮次 `{"type":"user",…}`）→ `{"type":"result","subtype":"success","result":"…","usage":{…}}`。

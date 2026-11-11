@@ -168,6 +168,10 @@ func (s *Server) routes() http.Handler {
 	// 派发管理面（M5-W5）：提交/清单/详情/取消；配置读写走 /api/config/dispatch
 	mux.HandleFunc("POST /api/dispatch/run", s.handleDispatchRun)
 	mux.HandleFunc("GET /api/dispatch/agents", s.handleDispatchAgents)
+	mux.HandleFunc("GET /api/dispatch/catalog", s.handleDispatchCatalog) // Agent 目录（2026-11-11）
+	mux.HandleFunc("POST /api/dispatch/catalog/{id}/install", func(w http.ResponseWriter, r *http.Request) {
+		s.handleDispatchCatalogInstall(w, r.PathValue("id"))
+	})
 	mux.HandleFunc("GET /api/dispatch/templates", s.handleDispatchTemplates) // M6-W4
 	mux.HandleFunc("GET /api/dispatch/sessions", s.handleDispatchSessions)
 	mux.HandleFunc("DELETE /api/dispatch/sessions", s.handleDispatchSessionsClear) // 派发页「清除历史」

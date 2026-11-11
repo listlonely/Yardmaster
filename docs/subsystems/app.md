@@ -219,6 +219,24 @@
 > （list-agents 与派发下拉双目标同步刷新）。机器人形 nav 图标。
 > genwinres appVersion → 0.1.6。
 
+> [2026-11-11-Agent 目录化安装（真下载）] 用户需求「Agent 添加改为下载
+> 安装插件形式」——Agent 页新增**目录区**：内置三预设（claude-code/
+> codex/gemini-cli，Suggestions 形状改 Catalog 投影零破坏）一键**真下载
+> 安装**。形态：Agent 包 zip（manifest.json + 包装脚本 run.cmd）托管
+> 仓库 examples/agent-packs/（raw 直链随代码版本化，无静态 sha 死锁——
+> 动态校验 manifest/结构替代）；包装脚本调用**用户自装并登录**的本机
+> CLI——网关真下载的是包装产物，ToS「不代装不代登录」保留。安装管线
+> （dispatch_catalog.go）：下载（经全局代理 20MB 上限）→ 解压（zip slip
+> 防护同插件商店）→ manifest id 一致性 + `./` 前缀物化包目录绝对路径 →
+> append → ValidateDispatch → writeConfig 备份审计 → Dispatch.Reload；
+> installed/found（LookPath probe CLI）标注 GET /api/dispatch/catalog；
+> found=false 不拦截（先装预设后补 CLI）。前端目录卡片（已装过滤、
+> 安装 busy 态、CLI 探测 ✓✗）。注意：select case 内 `nil && <-ch` 会
+> 求值即消费（吞事件）——nil-channel 惯用法。文件：engine.go
+> （CatalogEntry/Catalog）+ dispatch_catalog.go + gateway.go 路由 +
+> dispatch_catalog_test.go（视图/install 全链/404/坏包/损坏配置）+
+> web。genwinres appVersion → 0.1.7。
+
 ## 一、目标与边界
 
 兑现 2026-10-30 桌面壳两步走决策第二步：Windows app 模式以 Wails v3
