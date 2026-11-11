@@ -129,7 +129,11 @@ func runTray(opts TrayOptions) {
 					// 勾选态强制对齐回调返回值（不依赖 systray 内部翻
 					// 转语义，跨版本一致）；切换失败时回调返回原态。
 					if opts.AutostartToggle != nil {
-						mAuto.SetChecked(opts.AutostartToggle())
+						if nv := opts.AutostartToggle(); nv {
+							mAuto.Check()
+						} else {
+							mAuto.Uncheck()
+						}
 					}
 				case <-mUpdate.ClickedCh:
 					if opts.OnUpdateInstall == nil {
