@@ -211,6 +211,14 @@
 > deleteAgent，loadDispatchAgents 扩展渲染）。genwinres
 > appVersion → 0.1.5。
 
+> [2026-11-11-Agent 独立侧栏页] 用户需求「把 Agent 独立出来放左侧」
+> （截图红框指派发页内管理区+左侧导航）——管理区从派发页拆为独立
+> **侧栏页**：自动化分组序 = Agent → 派发 → 插件；section
+> id=page-agents（三件套+foot-note），派发页移除管理区（保留 disp-agent
+> 下拉）；视图切换 agents/dispatch 两页均拉 loadDispatchAgents+Templates
+> （list-agents 与派发下拉双目标同步刷新）。机器人形 nav 图标。
+> genwinres appVersion → 0.1.6。
+
 ## 一、目标与边界
 
 兑现 2026-10-30 桌面壳两步走决策第二步：Windows app 模式以 Wails v3

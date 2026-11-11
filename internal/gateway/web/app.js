@@ -296,7 +296,8 @@ function show(name) {
   if (name === 'providers') ensureProviders();
   if (name === 'routing') loadRouting();
   if (name === 'observe') { loadTraces(); loadCost(); loadPricing(); }
-  if (name === 'dispatch') { loadDispatchAgents(); loadDispatchTemplates(); loadDispatchSessions(); }
+  if (name === 'agents' || name === 'dispatch') { loadDispatchAgents(); loadDispatchTemplates(); }
+  if (name === 'dispatch') loadDispatchSessions();
   if (name === 'plugins') loadPlugins();
   if (name === 'settings') loadSettings();
 }
