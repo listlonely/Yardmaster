@@ -87,12 +87,21 @@ func TestContextGuardE2ETrim(t *testing.T) {
 	if !strings.Contains(placeholder, "[context summary]") {
 		t.Fatalf("占位应含 marker: %q", placeholder)
 	}
-	if body.Messages[1].ToolCallID != "t2" || body.Messages[2].ToolCallID != "t2" {
-		t.Fatalf("第二轮 tool_calls/tool 配对应保留: %+v %+v", body.Messages[1], body.Messages[2])
+	// 保留部分：user("next step") → assistant(tool_calls t2) → tool(t2，
+	// 内容截断) → assistant → user("final")。tool_use 的 id 在 assistant
+	// 的 tool_calls[0].id 里，tool 消息的 tool_call_id 与之配对。
+	if body.Messages[1].Role != "user" {
+		t.Fatalf("Messages[1] 应为保留轮起点的 user: %+v", body.Messages[1])
+	}
+	if len(body.Messages[2].ToolCalls) == 0 || !strings.Contains(string(body.Messages[2].ToolCalls), `"t2"`) {
+		t.Fatalf("Messages[2] assistant 的 tool_calls 应含 t2: %s", body.Messages[2].ToolCalls)
+	}
+	if body.Messages[3].ToolCallID != "t2" {
+		t.Fatalf("Messages[3] tool 消息应与 t2 配对: %+v", body.Messages[3])
 	}
 	var toolContent string
-	if err := json.Unmarshal(body.Messages[2].Content, &toolContent); err != nil {
-		t.Fatalf("tool content 非 string: %s", body.Messages[2].Content)
+	if err := json.Unmarshal(body.Messages[3].Content, &toolContent); err != nil {
+		t.Fatalf("tool content 非 string: %s", body.Messages[3].Content)
 	}
 	if len(toolContent) >= 8000 || !strings.HasSuffix(toolContent, "...[truncated]") {
 		t.Fatalf("保留轮的超长 tool 内容应被截断: len=%d", len(toolContent))
