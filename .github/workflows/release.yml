@@ -22,6 +22,11 @@ jobs:
         shell: bash
         run: |
           ver="${GITHUB_REF_NAME#v}"
+          # syso 资源（图标/版本属性/DPI manifest）构建时重新生成——
+          # tools/genwinres 的 appVersion 常量随发版更新，仓库内预生成
+          # 的 syso 会滞后一版（本机无 Go 时无法再生成），CI 现生成保证
+          # release 产物的 exe 属性版本与 tag 一致（2026-11-11）。
+          go generate ./cmd/yardmaster
           for t in linux/amd64: linux/arm64: windows/amd64:.exe; do
             os=${t%%/*}; rest=${t#*/}; arch=${rest%%:*}; ext=${rest#*:}
             CGO_ENABLED=0 GOOS=$os GOARCH=$arch \
