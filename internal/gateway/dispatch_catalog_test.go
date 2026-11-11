@@ -209,8 +209,13 @@ func TestDispatchCatalogInstallCorruptConfig(t *testing.T) {
 		}))
 	}))
 	t.Cleanup(src.Close)
-	_, srv := newCatalogServer(t, "{broken")
+	// seed 须合法（LoadEngine 对损坏文件直接 fail-closed 报错）——先合法
+	// 起引擎，再把文件覆盖写坏，测 loadCurrentForWrite 的 409 路径。
+	s, srv := newCatalogServer(t, `{"agents":[]}`)
 	withCatalogURL(t, "gemini-cli", src.URL+"/gemini-cli.zip")
+	if err := os.WriteFile(s.dispatchPath(), []byte("{broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if code, _ := postCatalogInstall(t, srv, "gemini-cli"); code != http.StatusConflict {
 		t.Fatalf("损坏配置应 409，得到 %d", code)
 	}
