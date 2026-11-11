@@ -205,6 +205,11 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, name st
 		if f.Notify == nil {
 			f.Notify = cur.Notify
 		}
+		// 开机自启动（2026-11-11）：指针 nil=控制台表单未提供，保留现值
+		//（显式 true/false 才采纳，同 Notify 语义）。
+		if f.Autostart == nil {
+			f.Autostart = cur.Autostart
+		}
 		// 自动更新三态（M11-W2）：空值保留现值（表单未提供）；显式值
 		// 必须合法（off/check/auto），读不懂=拒绝落盘。
 		if f.Update == "" {
