@@ -158,7 +158,11 @@ func (s *Server) handleDispatchCatalogInstall(w http.ResponseWriter, id string) 
 		writeAPIErr(w, err)
 		return
 	}
-	s.Dispatch.Reload(f) // 热生效（运行中会话不受影响）
+	if rerr := s.Dispatch.Reload(f); rerr != nil {
+		// 落盘已成功——重载失败仅运行态滞后（重启后生效），降级留痕
+		// 不回滚（与 api.go cfgDispatch PUT 的 Reload 语义对齐）。
+		slog.Warn("Agent 安装后热重载失败（重启后生效）", "id", id, "err", rerr)
+	}
 	slog.Info("Agent 已从目录安装", "id", id, "dir", dir)
 	s.writeResultExtra(w, map[string]any{
 		"installed": id,
