@@ -38,7 +38,10 @@ func applyAutostart(enable bool) {
 	}
 	defer key.Close()
 	if enable {
-		if err := key.SetStringValue(autostartValueName, fmt.Sprintf(`"%s"`, exe)); err != nil {
+		// --no-window：登录自启动为**静默常驻**（托盘承载入口，不弹
+		// 控制台窗口——用户主动双击 exe 或托盘菜单「打开窗口」时才见
+		// 界面）。runApp 的既有 flag（app.go）。
+		if err := key.SetStringValue(autostartValueName, fmt.Sprintf(`"%s" --no-window`, exe)); err != nil {
 			slog.Warn("开机自启动同步失败（写入 Run 键）", "err", err)
 			return
 		}
