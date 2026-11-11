@@ -35,13 +35,13 @@ jobs:
         run: |
           go test -race -coverprofile=coverage.out ./... 2>&1 | tee /tmp/test.log
           exit ${PIPESTATUS[0]}
-      # 失败诊断（2026-11-11）：把 --- FAIL 行转 ::error 注解（check-run
-      # annotations 公开可读，免日志权限即可定位失败测试名）。
+      # 失败诊断（2026-11-11）：把 --- FAIL 行及其消息转 ::error 注解（
+      # check-run annotations 公开可读，免日志权限即可定位失败测试名）。
       - if: failure()
         shell: bash
         run: |
-          grep -E "^--- FAIL" /tmp/test.log | head -30 | while IFS= read -r line; do
-            echo "::error title=${line#--- FAIL }::${line}"
+          grep -E "^--- FAIL" -A 3 /tmp/test.log | head -60 | while IFS= read -r line; do
+            echo "::error::${line}"
           done
           grep -cE "^--- FAIL" /tmp/test.log | xargs -I{} echo "::error::共 {} 个测试失败（详情见上方注解与完整日志）"
       - uses: actions/upload-artifact@v4
