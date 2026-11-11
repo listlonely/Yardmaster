@@ -146,7 +146,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 
 // 端到端：握手（granted=配置∩声明）→ 事件订阅到达 → 解析钩子往返。
 func TestPluginLifecycleEndToEnd(t *testing.T) {
-	reg := NewRegistry()
+	reg := NewRegistry("")
 	reg.backoff = 10 * time.Millisecond
 	spec := helperSpec(t, "ok", CapEvents, CapDispatch)
 	reg.Start(File{Plugins: []Spec{spec}})
@@ -194,7 +194,7 @@ func TestPluginLifecycleEndToEnd(t *testing.T) {
 // 崩溃退避重启：握手后自杀 → backoff 10ms → 重建实例回 running；
 // Crash1H 累计。
 func TestPluginCrashRestart(t *testing.T) {
-	reg := NewRegistry()
+	reg := NewRegistry("")
 	reg.backoff = 10 * time.Millisecond
 	reg.Start(File{Plugins: []Spec{helperSpec(t, "crash", CapEvents)}})
 	defer reg.Stop()
@@ -216,7 +216,7 @@ func TestPluginCrashRestart(t *testing.T) {
 
 // 握手失败降级：不握手的插件永不 running，能力请求 ErrNoPlugin。
 func TestPluginHandshakeFailDegraded(t *testing.T) {
-	reg := NewRegistry()
+	reg := NewRegistry("")
 	reg.backoff = 10 * time.Millisecond
 	reg.Start(File{Plugins: []Spec{helperSpec(t, "nohandshake", CapEvents)}})
 	defer reg.Stop()
@@ -234,7 +234,7 @@ func TestPluginHandshakeFailDegraded(t *testing.T) {
 
 // 能力熔断：响应挂起的插件连续 3 次超时 → ErrCooldown。
 func TestRegistryCooldown(t *testing.T) {
-	reg := NewRegistry()
+	reg := NewRegistry("")
 	reg.backoff = 10 * time.Millisecond
 	reg.Start(File{Plugins: []Spec{helperSpec(t, "slow", CapDispatch)}})
 	defer reg.Stop()
@@ -259,7 +259,7 @@ func TestRegistryCooldown(t *testing.T) {
 
 // Reload：禁用翻转 → 实例重建停止；恢复启用 → 重新运行。
 func TestRegistryReloadToggle(t *testing.T) {
-	reg := NewRegistry()
+	reg := NewRegistry("")
 	reg.backoff = 10 * time.Millisecond
 	spec := helperSpec(t, "ok", CapEvents)
 	reg.Start(File{Plugins: []Spec{spec}})

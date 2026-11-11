@@ -1,5 +1,24 @@
 # plugins 子系统——插件体系（M7-W2 设计稿）
 
+> [2026-11-11-context-guard 上下文超限保护] 新中间件
+> plugins/magpie-bridge/context-guard.middleware.js（设计/评审记录见
+> .trae/documents/上下文超限保护插件.md）：仅当请求估算 token 达
+> trigger_tokens 才介入（超限保护定位，平时零改动放行）；触发时旧历史
+> 替换为 LLM 摘要（按会话缓存 + 前缀指纹锚定命中），缓存未命中则本地
+> 裁剪兜底（切点=纯文本 user 轮起点，tool_use/tool_result 配对不可拆）
+> + 后台异步摘要直连上游（不经网关=零递归，异步链强制 .catch 收尾防
+> node 20 unhandled rejection 杀进程）。配套宿主侧两处小改：协议行长
+> 上限 1MB→4MB（压缩后回复仍可能 >1MB 的保险）；插件进程自动注入
+> `YM_APP_DIR=<数据目录>`（插件持久化状态的标准出口，用户零配置）。
+> 测试：internal/plugin/context_guard_test.go + internal/gateway/
+> context_guard_e2e_test.go（触发/裁剪/配对/截断/缓存命中/1MB 800ms
+> 预算；node 缺失 skip）。
+
+> [2026-11-10-provider.rewrite 钩子族 + magpie-bridge] 请求/响应改写
+> 三钩子落地（onRequest/onResponse/onEvent，Magpie 网关中间件语义），
+> magpie-bridge 适配层迁移社区中间件（param-override/word-guard/
+> system-prompt/output-strategy/history-trim/codex-history）。
+
 > [2026-11-02-插件设计定稿] M7-W2 出稿（开发文档 §9.8 主线可行性复核
 > 点，M5-W3 同款纪律：首日出稿评审，不可行切备选）。状态：**设计可行，
 > 主线采纳——载体选型终局：子进程插件协议（长驻进程），yaegi 降为
@@ -51,7 +70,7 @@
 预算 800ms，长驻进程管道往返 P99 <10ms，余量充足；事件订阅为
 fire-and-forget 不占请求路径。**无不可行项，主线采纳。**
 
-## 三、协议形状（NDJSON，行长上限 1MB）
+## 三、协议形状（NDJSON，行长上限 4MB）
 
 - **握手**：父 spawn 插件 → 插件 stdout 首行
   `{"plugin":"<id>","proto":1,"capabilities":["events.trace",…]}`（5s
@@ -111,14 +130,57 @@ fire-and-forget 不占请求路径。**无不可行项，主线采纳。**
 - **凭证零接触**：请求头/密钥/账号 env 一律不进 payload；响应体节选
   ≤8KB（截断留痕）。
 
+### 四·五、provider.rewrite 族（请求/响应改写，2026-11-10~11）
+
+- 三钩子：`provider.rewrite`（onRequest，入站原始请求改写，协议转换
+  之前一次改写全候选生效）/ `provider.rewrite.response`（onResponse，
+  非流式完整响应）/ `provider.rewrite.event`（onEvent，SSE 帧级）。
+  网关侧预算固定 800ms（rewriteHookTimeout，不受插件 timeout_ms 影响），
+  失败/超时/未改动=原样放行——改写失败绝不阻断推理。
+- **同能力单插件语义**：RequestByCap 按清单序取**第一个** granted 含
+  该能力的运行中插件——同声明多个 rewrite 插件时二选一（如
+  history-trim 与 context-guard 互斥，按 plugins.json 声明顺序）。
+- **magpie-bridge 适配层**（plugins/magpie-bridge/，node ≥18 或 bun）：
+  通用协议桥 `node adapter.mjs <id> <middleware.js>`；中间件单文件零
+  npm 依赖，导出 `onRequest(body, ctx)`，ctx={options,model,path,
+  protocol,agent,stream,reject}。现有中间件：param-override /
+  word-guard / system-prompt / output-strategy / history-trim /
+  codex-history / **context-guard**（各有 *.options.sample.json）。
+- **context-guard（上下文超限保护，2026-11-11）**：仅当估算 token
+  （ASCII/4 + CJK×1.0，含 messages+system+tools）达 trigger_tokens 才
+  介入；触发时旧历史替换为 LLM 摘要（会话缓存命中=毫秒级改写）或本地
+  裁剪兜底（切点=纯文本 user 轮起点，tool_use/tool_result 配对不可拆；
+  保留轮超长 tool_result 按 tail_tool_max_chars 截断），异步摘要直连
+  上游不经网关（零递归）。配置示例：
+
+  ```json
+  {"id":"context-guard",
+   "command":["node","<仓库>/plugins/magpie-bridge/adapter.mjs",
+              "context-guard","<仓库>/plugins/magpie-bridge/context-guard.middleware.js"],
+   "enabled":true,"capabilities":["provider.rewrite"],
+   "options":{"trigger_tokens":160000,"target_tokens":80000,
+              "keep_recent_turns":4,"tail_tool_max_chars":4000,
+              "cache_path":"",
+              "summary":{"endpoint":"https://api.siliconflow.cn/v1/chat/completions",
+                         "api_key":"sk-…","model":"Qwen/Qwen3-8-27B",
+                         "protocol":"openai","max_tokens":4000}}}
+  ```
+
+  缓存缺省落 `$YM_APP_DIR/context-guard-cache.json`（宿主注入数据目录，
+  见 §五）；summary 未配=纯本地裁剪模式；trigger_tokens 应 ≤ 上游窗口
+  − max_tokens。
+
 ## 五、fail-closed 权限模型
 
 - plugins.json 形态：
-  `{"plugins":[{"id","command[]","enabled","capabilities[]","timeout_ms","env[]"}]}`
+  `{"plugins":[{"id","command[]","enabled","capabilities[]","timeout_ms","env[]","options"}]}`
   ——校验：id 非空唯一、command 非空、capability ∈ 枚举
-  （events.trace / dispatch.parse / classify.intent / vendor.verdict）、
+  （events.trace / dispatch.parse / classify.intent / vendor.verdict /
+  provider.rewrite / provider.rewrite.response / provider.rewrite.event）、
   timeout ∈ [100ms, 30s]；**解析失败=全部插件禁用**+报错指引（绝不
   当作空配置静默跑）；写路径走管理 API 同一闸门（校验+备份+审计）。
+  options 为中间件静态配置（握手 settings.options 透传；改 options
+  需重建实例=进程重启后生效）。
 - 数据暴露最小化（每 capability 一张清单，白名单之外零暴露）：
 
 | capability | 暴露数据 | 明确不暴露 |
@@ -130,7 +192,9 @@ fire-and-forget 不占请求路径。**无不可行项，主线采纳。**
 
 - 插件进程环境：默认**最小 env**（不透传父进程全量环境）；需要变量
   经 plugins.json `env[]` 显式声明——含凭证语义的 env 不进持久化与
-  管理面回显（同 dispatch env 纪律）。
+  管理面回显（同 dispatch env 纪律）。唯一自动注入项：
+  `YM_APP_DIR=<网关数据目录>`（2026-11-11 起）——插件持久化状态的
+  标准出口（context-guard 缓存等），用户零配置且跨设备正确。
 - 信任边界直白陈述：插件与网关同用户身份运行，能做的用户手工也能做
   ——插件体系的价值在**可观测、可开关、可隔离崩溃**，不在沙箱逃逸
   防御（明示，不过度承诺）。

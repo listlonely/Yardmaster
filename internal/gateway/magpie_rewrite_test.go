@@ -54,7 +54,7 @@ func newBridgeGatewayProv(t *testing.T, mw string, options map[string]any,
 	mwPath := filepath.Join(filepath.Dir(adapter), mw)
 
 	fu := newFakeUpstream(t, respond)
-	reg := plugin.NewRegistry()
+	reg := plugin.NewRegistry(t.TempDir()) // 注入 YM_APP_DIR（context-guard 缓存用）
 	spec := plugin.Spec{
 		ID:           "param-override-test",
 		Command:      []string{node, adapter, "param-override-test", mwPath},

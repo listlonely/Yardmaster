@@ -88,7 +88,7 @@ func startTestPlugins(t *testing.T, specs ...plugin.Spec) (*plugin.Registry, con
 	if err := plugin.Save(filepath.Join(dir, "plugins.json"), f); err != nil {
 		t.Fatal(err)
 	}
-	reg := plugin.NewRegistry()
+	reg := plugin.NewRegistry("")
 	reg.Start(f)
 	return reg, reg.Stop
 }
@@ -374,7 +374,7 @@ func TestClassifyIntentBridge(t *testing.T) {
 // 挂载生效**（effect=immediate 属实），无需重启。
 func TestPluginsHotMountAfterEmptyStart(t *testing.T) {
 	dir := t.TempDir()
-	reg := plugin.NewRegistry()
+	reg := plugin.NewRegistry("")
 	reg.Start(plugin.File{}) // 空清单 Start：仅置 ctx，无实例
 	t.Cleanup(reg.Stop)
 

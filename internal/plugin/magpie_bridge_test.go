@@ -36,7 +36,7 @@ func magpieBridgeCmd(t *testing.T, mw string) []string {
 // startBridge 经 Registry 起一个 magpie-bridge 插件并等待运行。
 func startBridge(t *testing.T, mw string, timeoutMS int) *Registry {
 	t.Helper()
-	r := NewRegistry()
+	r := NewRegistry("")
 	r.backoff = 100 * time.Millisecond
 	spec := Spec{
 		ID:           "param-override-test",
@@ -187,7 +187,7 @@ func TestMagpieBridgeHandshakeFail(t *testing.T) {
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node 不在 PATH，跳过 magpie-bridge 集成测试")
 	}
-	r := NewRegistry()
+	r := NewRegistry("")
 	r.backoff = 100 * time.Millisecond
 	spec := Spec{
 		ID:           "bridge-bad-mw",

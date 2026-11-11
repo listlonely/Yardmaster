@@ -196,7 +196,7 @@ func (st *serveSetup) startHelpers(ctx context.Context) func() {
 		slog.Warn("plugins.json 不可用，插件全部禁用（读不懂=未知）", "err", perr)
 		pf = plugin.File{}
 	}
-	reg := plugin.NewRegistry()
+	reg := plugin.NewRegistry(st.paths.AppDir) // 插件进程注入 YM_APP_DIR（数据目录持久化）
 	reg.Start(pf)
 	stops = append(stops, reg.Stop)
 	st.srv.AttachPlugins(reg) // OnTrace 链式扇出 + 派发解析钩子桥

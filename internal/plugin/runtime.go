@@ -33,7 +33,7 @@ const (
 )
 
 const (
-	lineLimit       = 1 << 20 // 协议行长上限 1MB
+	lineLimit       = 4 << 20 // 协议行长上限 4MB（context-guard 等改写大 body 的插件：压缩后回复仍可能 >1MB）
 	queueCap        = 1024    // 事件队列（每插件）
 	maxRestartsHour = 10      // 1 小时内崩溃重启上限，超出标 failed
 	heartbeatEvery  = 30 * time.Second
@@ -47,6 +47,7 @@ const (
 type Plugin struct {
 	spec    Spec // 不可变（Reload 变更=重建实例）
 	granted []string
+	appDir  string // 数据目录（runOnce 注入 YM_APP_DIR 环境变量，插件持久化用）
 
 	mu       sync.Mutex
 	status   Status
@@ -71,13 +72,13 @@ type Plugin struct {
 	nowFn     func() time.Time
 }
 
-func newPlugin(spec Spec) *Plugin {
+func newPlugin(spec Spec, appDir string) *Plugin {
 	st := StatusStarting
 	if !spec.Enabled {
 		st = StatusStopped // 禁用条目不启动（Reload 重建的禁用实例）
 	}
 	return &Plugin{
-		spec: spec, pending: map[string]chan json.RawMessage{},
+		spec: spec, appDir: appDir, pending: map[string]chan json.RawMessage{},
 		status: st, queue: make(chan []byte, queueCap),
 		backoff: time.Second, heartbeat: heartbeatEvery, nowFn: time.Now,
 	}
@@ -172,9 +173,14 @@ func (p *Plugin) supervise(ctx context.Context) {
 func (p *Plugin) runOnce() error {
 	cmd := exec.Command(p.spec.Command[0], p.spec.Command[1:]...)
 	// 最小环境（设计稿 §五）：默认不透传父进程全量环境；plugins.json
-	// env 含 "INHERIT_ENV=1" 时才继承（用户显式选择）。
+	// env 含 "INHERIT_ENV=1" 时才继承（用户显式选择）。YM_APP_DIR 为
+	// 唯一自动注入项：数据目录绝对路径，插件持久化状态用（context-guard
+	// 缓存等），用户配置零成本且跨设备正确。
 	env := []string{}
 	inherit := false
+	if p.appDir != "" {
+		env = append(env, "YM_APP_DIR="+p.appDir)
+	}
 	for _, e := range p.spec.Env {
 		if e == "INHERIT_ENV=1" {
 			inherit = true
@@ -505,6 +511,7 @@ type Registry struct {
 	mu      sync.Mutex
 	order   []string
 	plugins map[string]*Plugin
+	appDir  string // 数据目录（启动插件时注入 YM_APP_DIR）
 	ctx     context.Context
 	cancel  context.CancelFunc
 	backoff time.Duration // 测试注入
@@ -544,10 +551,12 @@ func (r *Registry) DeclaredIntents() []IntentRef {
 	return out
 }
 
-// NewRegistry 构造空注册表（Start/Reload 装载）。
-func NewRegistry() *Registry {
+// NewRegistry 构造空注册表（Start/Reload 装载）。appDir 为网关数据目录
+// （插件进程 YM_APP_DIR 注入源；测试可传临时目录或 ""）。
+func NewRegistry(appDir string) *Registry {
 	return &Registry{
 		plugins: map[string]*Plugin{},
+		appDir:  appDir,
 		cool:    map[string]*cooldown{},
 		backoff: time.Second,
 	}
@@ -563,7 +572,7 @@ func (r *Registry) Start(f File) {
 	r.order = r.order[:0]
 	var startList []*Plugin
 	for _, spec := range f.Plugins {
-		p := newPlugin(spec)
+		p := newPlugin(spec, r.appDir)
 		p.backoff = r.backoff
 		r.plugins[spec.ID] = p
 		r.order = append(r.order, spec.ID)
@@ -609,7 +618,7 @@ func (r *Registry) Reload(f File) {
 			}
 			continue
 		}
-		p := newPlugin(s)
+		p := newPlugin(s, r.appDir)
 		p.backoff = r.backoff
 		r.plugins[s.ID] = p
 		if s.Enabled {

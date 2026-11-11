@@ -1,0 +1,15 @@
+{
+  "_comment": "context-guard 中间件 options 示例。仅当请求估算 token 达 trigger_tokens 才介入（超限保护）；触发时旧历史替换为 LLM 摘要（按会话缓存，缓存缺省落 $YM_APP_DIR/context-guard-cache.json，网关自动注入 YM_APP_DIR），缓存未命中则本地裁剪兜底并后台异步生成摘要供下次命中。summary 未配置=纯本地裁剪模式（只出占位提示）。摘要直连上游不经网关（零递归）；summary.endpoint 勿指回网关自身。trigger_tokens 应 ≤ 上游窗口 − max_tokens。",
+  "trigger_tokens": 160000,
+  "target_tokens": 80000,
+  "keep_recent_turns": 4,
+  "tail_tool_max_chars": 4000,
+  "cache_path": "",
+  "summary": {
+    "endpoint": "https://api.siliconflow.cn/v1/chat/completions",
+    "api_key": "sk-xxx",
+    "model": "Qwen/Qwen3-8-27B",
+    "protocol": "openai",
+    "max_tokens": 4000
+  }
+}
