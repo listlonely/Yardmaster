@@ -57,7 +57,7 @@ func TestDispatchModelsSyncGroup(t *testing.T) {
 	if code, body := put(`{"agents":[{"id":"cc","command":["x"],"models":["prov/m1","prov/m2"]}]}`); code != http.StatusOK {
 		t.Fatalf("建链 PUT: HTTP %d: %s", code, body)
 	}
-	assertGroupMembers(t, s, "agent-cc", []string{"prov/m1", "prov/m2"})
+	assertGroupMembers(t, s, []string{"prov/m1", "prov/m2"})
 	// Planner 热生效：Plan("group/agent-cc") 可解析出候选
 	cands, err := s.Planner.Plan("group/agent-cc", "sticky-x")
 	if err != nil || len(cands) == 0 {
@@ -67,12 +67,12 @@ func TestDispatchModelsSyncGroup(t *testing.T) {
 	if code, _ := put(`{"agents":[{"id":"cc","command":["x"],"models":["prov/m2"]}]}`); code != http.StatusOK {
 		t.Fatalf("改链 PUT: HTTP %d", code)
 	}
-	assertGroupMembers(t, s, "agent-cc", []string{"prov/m2"})
+	assertGroupMembers(t, s, []string{"prov/m2"})
 	// 删：清链 → 组消失
 	if code, _ := put(`{"agents":[{"id":"cc","command":["x"]}]}`); code != http.StatusOK {
 		t.Fatalf("清链 PUT: HTTP %d", code)
 	}
-	assertGroupMembers(t, s, "agent-cc", nil)
+	assertGroupMembers(t, s, nil)
 }
 
 // TestDispatchModelsUnknownMember：成员不存在 → 400 且 providers.json 组未变。
@@ -82,7 +82,7 @@ func TestDispatchModelsUnknownMember(t *testing.T) {
 		`{"agents":[{"id":"cc","command":["x"],"models":["prov/m1","prov/nope"]}]}`); code != http.StatusBadRequest {
 		t.Fatalf("未知成员应 400: HTTP %d: %s", code, body)
 	}
-	assertGroupMembers(t, s, "agent-cc", nil) // 未产生组
+	assertGroupMembers(t, s, nil) // 未产生组
 }
 
 // TestDispatchModelsIntentsMatch：Match.Intents 多意图任一命中；单值 Intent 并存兼容。
@@ -112,9 +112,11 @@ func TestDispatchModelsIntentsMatch(t *testing.T) {
 	}
 }
 
-// assertGroupMembers 断言 providers.json 里 agent-<id> 组的成员（nil=组应不存在）。
-func assertGroupMembers(t *testing.T, s *Server, groupID string, want []string) {
+// assertGroupMembers 断言 providers.json 里 agent-cc 组的成员（nil=组应不存在）。
+// 组 id 恒为 agent-cc（本文件所有用例只有该 Agent 配链），不设参数（unparam）。
+func assertGroupMembers(t *testing.T, s *Server, want []string) {
 	t.Helper()
+	const groupID = "agent-cc"
 	var pf store.ProvidersFile
 	if err := store.LoadJSON(s.ProvidersPath, &pf); err != nil {
 		t.Fatal(err)
