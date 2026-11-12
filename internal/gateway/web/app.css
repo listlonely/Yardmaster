@@ -496,7 +496,8 @@ html.theming, html.theming body, html.theming body * { transition: background-co
 /* 失败重试入口 */
 .retry-line { margin-top: 10px; }
 
-/* ---------- 派发页 / 终端面（两主题共用的深底，magpie rt-log 心智） ---------- */
+/* ---------- 终端面（两主题共用的深底，magpie rt-log 心智；派发事件
+   视图已移除，插件日志复用 .disp-output） ---------- */
 .list.term { overflow: hidden; }
 .list.term > .row.head { min-height: 40px; }
 .disp-output {
@@ -507,18 +508,6 @@ html.theming, html.theming body, html.theming body * { transition: background-co
   font: 11.5px/1.7 var(--code);
   white-space: pre-wrap; word-break: break-word;
 }
-.disp-output.ev { word-break: break-word; }
-.ev { padding: 2px 0; border-bottom: 1px dashed rgba(148, 163, 184, .16); }
-.ev:last-child { border-bottom: 0; }
-.ev-init { color: #8b8b94; }
-.ev-text { color: #d6dbe6; }
-.ev-tool summary { color: #f2b544; cursor: pointer; }
-.ev-tool .ev-sum { color: #8b8b94; margin-left: 10px; }
-.ev-tool pre { margin: 3px 0 4px; color: #cbd5e1; white-space: pre-wrap; word-break: break-all; }
-.ev-toolres { color: #8b8b94; }
-.ev-result { color: #6fd99b; font-weight: 600; }
-.ev-raw { color: #9ca3af; }
-#list-dispatch .row.sel { background: var(--sel); }
 
 /* ---------- 模态（magpie .dialog 构造：大柔影 + 入场动画） ---------- */
 .modal-back {

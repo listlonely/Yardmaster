@@ -32,13 +32,7 @@
         <button type="button" class="nav-it" data-tab="observe" data-title="观测">
           <svg class="nav-ic" viewBox="0 0 20 20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 11h3l2-6 3.5 10 2.5-7 1.5 3h3"/></g></svg>
           <span>观测</span></button>
-        <span class="nav-gl">自动化</span>
-        <button type="button" class="nav-it" data-tab="agents" data-title="Agent">
-          <svg class="nav-ic" viewBox="0 0 20 20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="6" width="12" height="10" rx="2"/><path d="M10 6V3M8 3h4M7.5 10.5h.01M12.5 10.5h.01M7.5 13.5h5"/></g></svg>
-          <span>Agent</span></button>
-        <button type="button" class="nav-it" data-tab="dispatch" data-title="派发">
-          <svg class="nav-ic" viewBox="0 0 20 20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3L9.5 10.5M17 3l-5 14-2.5-6.5L3 8l14-5z"/></g></svg>
-          <span>派发</span></button>
+        <span class="nav-gl">扩展</span>
         <button type="button" class="nav-it" data-tab="plugins" data-title="插件">
           <svg class="nav-ic" viewBox="0 0 20 20" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3.5h4V6a1.5 1.5 0 0 0 3 0V3.5h1.5v13H4v-4h2.5a1.5 1.5 0 0 0 0-3H4v-6h4z"/></g></svg>
           <span>插件</span></button>
@@ -92,7 +86,7 @@
             <span class="pill" id="ov-pill">连接中…</span>
             <span class="gw-url">
               <code id="gw-url">—</code>
-              <button type="button" class="icon" id="btn-copy-url" title="复制网关地址（给 Agent 配置用）" aria-label="复制网关地址">
+              <button type="button" class="icon" id="btn-copy-url" title="复制网关地址（给客户端配置用）" aria-label="复制网关地址">
                 <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="5.5" y="5.5" width="8" height="8" rx="1.6"/><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/></g></svg>
               </button>
             </span>
@@ -101,9 +95,9 @@
           <div class="hero-api" id="ov-api-links"></div>
         </div>
         <div class="hero-actions">
-          <button type="button" class="qa primary" id="qa-dispatch">
-            <svg class="nav-ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M17 3L9.5 10.5M17 3l-5 14-2.5-6.5L3 8l14-5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            派发任务</button>
+          <button type="button" class="qa primary" id="qa-routing">
+            <svg class="nav-ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 10h5l4-5h5M8 10l4 5h5M14.5 3l2.5 2-2.5 2M14.5 13l2.5 2-2.5 2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            意图分配</button>
           <button type="button" class="qa" id="qa-pv-add">
             <svg class="nav-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
             添加服务商</button>
@@ -129,7 +123,7 @@
 
     <!-- 设置（独立页，2026-11 批2 从总览拆出） -->
     <section id="page-settings" class="view" hidden>
-      <div class="label">网关装配 <span class="label-note">Agent 与浏览器经由该地址访问网关</span></div>
+      <div class="label">网关装配 <span class="label-note">CLI 客户端与浏览器经由该地址访问网关</span></div>
       <div class="list prefs">
         <div class="row pref">
           <div class="who"><div class="name">监听地址</div><div class="sub">默认 127.0.0.1:8317；局域网共享填 0.0.0.0:8317（强制令牌）</div></div>
@@ -145,7 +139,7 @@
       <div class="label">通用偏好 <span class="label-note">通知 / 更新 / 成本展示（保存后写入 settings.json）</span></div>
       <div class="list prefs">
         <div class="row pref">
-          <div class="who"><div class="name">桌面气泡通知</div><div class="sub">派发终态 / 上游账号休眠时弹系统通知（app 常驻态生效）</div></div>
+          <div class="who"><div class="name">桌面气泡通知</div><div class="sub">上游账号休眠时弹系统通知（app 常驻态生效）</div></div>
           <label class="switch-line"><button type="button" class="lib-switch on" id="set-notify" role="switch" aria-checked="true" aria-label="桌面气泡通知"><i></i></button></label>
         </div>
         <div class="row pref">
@@ -257,72 +251,6 @@
       </div>
     </section>
 
-    <!-- Agent（2026-11 独立页：派发目标定义管理，从派发页拆出；
-         2026-11-12 收敛：目录安装为唯一添加途径，已装 Agent 仅暴露基础设置） -->
-    <section id="page-agents" class="view" hidden>
-      <div class="label">Agent 插件 <span class="label-note">添加 Agent 的唯一途径：开发端发布，一键下载安装（包内包装脚本调用本机 CLI）；需本机已装对应 CLI 并登录——网关不代装不代登录</span></div>
-      <div class="list" id="list-agent-catalog"></div>
-
-      <div class="label">已安装 <span class="label-note">基础设置（超时/并发/意图侧重）经管理 API 校验+备份+审计，热生效</span></div>
-      <div class="list" id="list-agents"></div>
-      <p class="foot-note">Agent 定义经管理 API（PUT /api/config/dispatch：严格校验、写前备份、审计）保存后热重载，运行中会话不受影响；「派发」页的 Agent 下拉与会话过滤即时同步。</p>
-    </section>
-
-    <!-- 派发 -->
-    <section id="page-dispatch" class="view" hidden>
-      <div class="label">提交任务</div>
-      <div class="list">
-        <div class="row pref top">
-          <div class="who"><div class="name">任务</div><div class="sub">经 stdin 交给本机已安装的 Agent（headless）；意图→Agent 匹配，无匹配走 default 兜底。不代装、不代登录。</div></div>
-        </div>
-        <div class="pad"><textarea id="disp-task" rows="3" placeholder="例：把 src 下的 TODO 注释整理成清单" spellcheck="false"></textarea></div>
-        <div class="row pref" id="disp-tmplrow" hidden>
-          <div class="who"><div class="name">模板</div></div>
-          <select id="disp-template" class="sel grow-sel"><option value="">自由任务（直接填写上方文本）</option></select>
-        </div>
-        <div class="row pref" id="disp-params" hidden></div>
-        <div class="row pref">
-          <div class="who"><div class="name">Agent</div></div>
-          <select id="disp-agent" class="sel"><option value="">自动（按匹配规则）</option></select>
-        </div>
-        <div class="row pref">
-          <div class="who"><div class="name">模型占位</div><div class="sub">{model} 替换值，可选</div></div>
-          <input id="disp-model" class="set-field" spellcheck="false">
-        </div>
-      </div>
-      <div class="after-list"><button type="button" class="btn-primary" id="btn-dispatch-run">派发</button></div>
-
-      <div class="view-head">
-        <div class="label inline">会话</div>
-        <select id="disp-f-agent" class="sel" aria-label="按 Agent 过滤"><option value="">全部 Agent</option></select>
-        <select id="disp-f-status" class="sel" aria-label="按状态过滤">
-          <option value="">全部状态</option><option>running</option><option>done</option>
-          <option>failed</option><option>cancelled</option>
-        </select>
-        <select id="disp-f-time" class="sel" aria-label="按时间过滤">
-          <option value="">全部时间</option><option value="1h">近 1 小时</option>
-          <option value="24h">近 24 小时</option><option value="7d">近 7 天</option>
-        </select>
-        <label class="switch-line"><button type="button" class="lib-switch on" id="disp-auto" role="switch" aria-checked="true" aria-label="自动刷新"><i></i></button><span>自动刷新 5s</span></label>
-        <span class="grow"></span>
-        <button type="button" class="text add" id="btn-disp-clear">清除历史</button>
-        <button type="button" class="icon" id="btn-disp-refresh" title="刷新会话" aria-label="刷新">
-          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2v3h-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </button>
-      </div>
-      <div class="list" id="list-dispatch"></div>
-      <div class="list term" id="card-disp-output" hidden>
-        <div class="row head">
-          <div class="who"><div class="name" id="disp-viewhint">事件视图</div><div class="sub" id="disp-viewid"></div></div>
-          <button type="button" class="text" id="disp-copy">复制</button>
-          <button type="button" class="text" id="disp-export">导出</button>
-          <button type="button" class="text" id="disp-evtoggle">切换原文</button>
-        </div>
-        <pre id="disp-output" class="disp-output"></pre>
-      </div>
-      <p class="foot-note">派发配置经管理 API（PUT /api/config/dispatch：严格校验、写前备份、审计）；会话终态写入观测页 trace（RoutePath=dispatch）。</p>
-    </section>
-
     <!-- 插件（2026-11 定稿：订阅适配走社区插件 + 插件商店 + 信息分层） -->
     <section id="page-plugins" class="view" hidden>
       <div class="label">订阅适配 <span class="label-note">社区插件承接订阅厂商适配；先启用，再到「服务商」页添加账号</span></div>
@@ -349,7 +277,7 @@
         </div>
         <pre id="plugin-log" class="disp-output"></pre>
       </div>
-      <p class="foot-note">能力词表：events.trace / dispatch.parse / classify.intent / vendor.verdict / provider.oauth。示例见仓库 examples/；插件与网关同用户身份运行，网关不代登录订阅。</p>
+      <p class="foot-note">能力词表：events.trace / classify.intent / vendor.verdict / provider.oauth。示例见仓库 examples/；插件与网关同用户身份运行，网关不代登录订阅。</p>
     </section>
   </main>
 

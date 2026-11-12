@@ -3,7 +3,7 @@
 //    应用壳（body 不滚、各视图独立滚动）；单一滑动高亮 .nav-hl；
 // —— 交互：status() 状态行反馈（不再用 toast）；Magpie 式模态（含确认框）；
 //    骨架屏加载态；服务商客户端查找；胶囊开关；document.hidden 轮询守卫。
-// 数据源不变：/api/state、/api/config/*、/api/trace、/api/cost、/api/dispatch/*、
+// 数据源不变：/api/state、/api/config/*、/api/trace、/api/cost、
 // /api/plugins/*、/api/pricing/sync、/api/reload。写路径五铁律不受影响：
 // 每次提交前 fresh GET 构造全文档，经 PUT /api/config/*（服务端严格校验 +
 // 写前备份 + 审计）；providers 的 api_key 以脱敏形回传，服务端保留现存密钥。
@@ -155,7 +155,6 @@ const RETRY_MAP = {
   traces: () => loadTraces(),
   cost: () => loadCost(),
   pricing: () => loadPricing(),
-  dispatch: () => loadDispatchSessions(),
   plugins: () => loadPlugins(),
 };
 const errBox = (msg, retry) =>
@@ -296,8 +295,6 @@ function show(name) {
   if (name === 'providers') ensureProviders();
   if (name === 'routing') loadRouting();
   if (name === 'observe') { loadTraces(); loadCost(); loadPricing(); }
-  if (name === 'agents' || name === 'dispatch') { loadDispatchAgents(); loadDispatchTemplates(); }
-  if (name === 'dispatch') loadDispatchSessions();
   if (name === 'plugins') loadPlugins();
   if (name === 'settings') loadSettings();
 }
@@ -858,8 +855,8 @@ function renderGuide() {
     'ANTHROPIC_AUTH_TOKEN=<网关令牌；未设令牌可留空>\n\n' +
     '# Trae（设置 → 模型 → 添加模型 · OpenAI 兼容）\n' +
     'API 地址 ' + url + '/v1 · API Key <网关令牌，未设可任意> · 模型选链上的模型\n\n' +
-    '# 或用 CLI 一键接线（自动改写配置，可回滚）：\n' +
-    'yardmaster agents wire claude-code -model yardmaster-main';
+    '# 其他 CLI（codex/gemini 等）\n' +
+    '在各自配置文件里把 base_url 指向网关地址即可';
   g.innerHTML =
     '<div class="guide-head"><b>三步完成接线</b>' +
     '<button type="button" class="icon" id="guide-dismiss" title="隐藏引导（可在命令面板重新打开）" aria-label="隐藏引导">' +
@@ -868,23 +865,21 @@ function renderGuide() {
     '<div class="gsteps">' +
     gstep(1, '添加第一个服务商', 'Key 类：粘贴 Key 检测模型即可；订阅类：先在插件页启用适配，再按指引 CLI 授权导入账号。', done1,
       done1 ? '' : '<button type="button" class="text add" id="guide-add-pv">添加服务商</button>') +
-    gstep(2, '把 Agent 指向网关', '复制网关地址写进 Agent 配置；或用 CLI 一键接线。', done2,
+    gstep(2, '把 CLI 客户端指向网关', '复制网关地址写进客户端配置（Claude Code / Trae / codex / gemini 等）。', done2,
       done2 ? '' : '<button type="button" class="text add" id="guide-copy-url">复制网关地址</button>' +
         '<details class="snip-d"><summary>接线示例</summary><pre class="snip">' + esc(snip) + '</pre></details>') +
-    gstep(3, '发出第一个请求', '在任意 Agent 里发一句话；观测页会出现完整路由决策。', done3,
-      done3 ? '' : '<button type="button" class="text add" id="guide-go-observe">打开观测</button>' +
-        '<button type="button" class="text add" id="guide-go-dispatch">派发一个任务试试</button>') +
+    gstep(3, '发出第一个请求', '在任意客户端里发一句话；观测页会出现完整路由决策。', done3,
+      done3 ? '' : '<button type="button" class="text add" id="guide-go-observe">打开观测</button>') +
     '</div>';
   $('guide-dismiss').addEventListener('click', () => { guide.dismissed = true; renderGuide(); });
   $('guide-add-pv')?.addEventListener('click', () => addProviderModal());
   $('guide-copy-url')?.addEventListener('click', async () => {
-    if (await copyText(gwURL(), '已复制网关地址：' + gwURL() + '（粘到 Agent 配置里）')) {
+    if (await copyText(gwURL(), '已复制网关地址：' + gwURL() + '（粘到客户端配置里）')) {
       guide.wired = true;
       renderGuide();
     }
   });
   $('guide-go-observe')?.addEventListener('click', () => show('observe'));
-  $('guide-go-dispatch')?.addEventListener('click', () => { show('dispatch'); setTimeout(() => $('disp-task').focus(), 260); });
 }
 
 // reloadConfig：重读 providers.json 并热替换路由快照（顶栏按钮与命令面板共用）。
@@ -913,7 +908,7 @@ $('ov-api-links').addEventListener('click', (e) => {
   const b = e.target.closest('[data-apicopy]');
   if (b) copyText(b.dataset.apicopy, '已复制');
 });
-$('qa-dispatch').addEventListener('click', () => { show('dispatch'); setTimeout(() => $('disp-task').focus(), 260); });
+$('qa-routing').addEventListener('click', () => { show('routing'); });
 $('qa-pv-add').addEventListener('click', () => { show('providers'); addProviderModal(); });
 $('qa-probe').addEventListener('click', () => probeQuotas());
 $('qa-reload').addEventListener('click', async () => {
@@ -934,7 +929,7 @@ $('btn-reload').addEventListener('click', async () => {
 
 // ---------- 服务商（行卡片构造 + 客户端查找） ----------
 
-// 胶囊开关通用行为（trace/dispatch 自动刷新、插件启停共用）
+// 胶囊开关通用行为（trace 自动刷新、插件启停共用）
 function bindSwitch(el, onChange) {
   el.addEventListener('click', () => {
     const on = !el.classList.contains('on');
@@ -2079,484 +2074,6 @@ $('btn-price-sync').addEventListener('click', async () => {
   }
 });
 
-// ---------- 派发（M5-W5：任务→Agent headless） ----------
-
-let dispSelected = null; // 当前查看输出的会话 ID
-let dispEvView = true;   // 事件视图优先（M6-W3；解析失败/raw 退原文）
-let dispLast = null;     // 最近一次详情缓存（视图切换复用）
-let dispTemplates = [];  // 任务模板清单（M6-W4）
-
-async function loadDispatchAgents() {
-  const sel = $('disp-agent');
-  const cur = sel.value;
-  try {
-    const r = await api('/api/dispatch/agents');
-    const agents = r.agents || [];
-    sel.innerHTML = '<option value="">自动（按匹配规则）</option>' +
-      agents.map((a) => `<option value="${esc(a.id)}">${esc(a.id)}</option>`).join('');
-    if (cur) sel.value = cur;
-    renderAgentList(agents);
-    loadDispatchCatalog(); // 目录区搭车刷新（已装条目过滤依赖最新 agents）
-  } catch (e) {
-    sel.innerHTML = '<option value="">派发不可用</option>';
-    $('list-agents').innerHTML = errBox('Agent 清单加载失败: ' + e.message, 'dispatch');
-    status('派发配置加载失败: ' + e.message, 'err');
-  }
-}
-
-// ---------- Agent 目录（2026-11-11：真下载安装——包 zip 解压物化注册） ----------
-
-async function loadDispatchCatalog() {
-  const el = $('list-agent-catalog');
-  if (!el) return;
-  try {
-    const r = await api('/api/dispatch/catalog');
-    // 已装且无更新的条目不显示；有更新 = 「更新到 vX」按钮（商店同构）
-    const entries = (r.catalog || []).filter((e) => !e.installed || e.updated);
-    el.innerHTML = entries.map((e) => {
-      const cli = e.found
-        ? `✓ 已检测到 ${esc(e.probe)} CLI`
-        : `✗ 未检测到 ${esc(e.probe)} CLI（可先安装，装好 CLI 后即用）`;
-      const ver = e.version ? ` · v${esc(e.version)}` : '';
-      const btn = e.updated
-        ? `更新到 v${esc(e.version)}`
-        : '安装';
-      return `<div class="row">
-        <div class="who">
-          <div class="name"><code>${esc(e.spec.id)}</code></div>
-          <div class="sub">${esc(e.desc)}${ver}<br>${cli}${e.docs ? ` · <a href="${esc(e.docs)}" target="_blank" rel="noopener">文档</a>` : ''}</div>
-        </div>
-        <div class="row-acts">
-          <button type="button" class="text add" data-catalog="${esc(e.spec.id)}" data-btn-label="${esc(btn)}">${esc(btn)}</button>
-        </div>
-      </div>`;
-    }).join('') || listEmpty('全部 Agent 插件均为最新');
-  } catch (e) {
-    el.innerHTML = errBox('Agent 插件目录加载失败: ' + e.message, 'agents');
-  }
-}
-
-async function installCatalog(id) {
-  const btn = document.querySelector(`[data-catalog="${CSS.escape(id)}"]`);
-  if (btn) { btn.dataset.label = btn.textContent; btn.disabled = true; btn.textContent = '安装中…'; }
-  try {
-    const r = await api(`/api/dispatch/catalog/${encodeURIComponent(id)}/install`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
-    });
-    status(`Agent ${id} 已安装（下载→解压→备份留底→热生效）· ${r.note || ''}`, 'ok', 9000);
-    loadDispatchAgents(); // 列表 + 目录区（已装过滤）+ 派发下拉同步
-  } catch (e) {
-    status(`安装失败: ${e.message}`, 'err', 8000);
-    if (btn) { btn.disabled = false; btn.textContent = btn.dataset.label || '安装'; }
-  }
-}
-
-$('list-agent-catalog').addEventListener('click', (e) => {
-  const id = e.target.dataset.catalog;
-  if (id) installCatalog(id);
-});
-
-// ---------- Agent 管理区（2026-11-11：dispatch.json agents[] 的增删改） ----------
-// 写路径同走管理 API 写闸（fresh GET → 构造全文档 → PUT /api/config/dispatch：
-// 严格校验 + 写前备份 + 审计 + 热重载）。env 原样编辑不脱敏——dispatch.json
-// 为本机明文信任态，GET 本就明文返回。templates 字段每次全文档往返原样保留。
-
-const linesOf = (s) => (s || '').split('\n').map((l) => l.trim()).filter((l) => l !== '');
-
-function renderAgentList(agents) {
-  const el = $('list-agents');
-  if (!el) return;
-  el.innerHTML = agents.map((a) => {
-    const cmd = a.command.join(' ');
-    const badges = [
-      a.default ? '兜底' : '',
-      a.output === 'jsonl' ? 'jsonl' : '',
-      a.parser ? `parser:${a.parser}` : '',
-      a.match && a.match.intents && a.match.intents.length ? `intents=${a.match.intents.join('|')}` : '',
-      a.match && a.match.intent ? `intent=${a.match.intent}` : '',
-      a.match && a.match.prompt_regex ? 'prompt~' : '',
-      a.match && a.match.model_regex ? 'model~' : '',
-      a.models && a.models.length ? `专属链×${a.models.length}` : '',
-    ].filter(Boolean).join(' · ');
-    const meta = [
-      cmd.length > 90 ? cmd.slice(0, 90) + '…' : cmd,
-      a.timeout ? `超时 ${a.timeout}` : '',
-      a.max_concurrent > 1 ? `并发 ${a.max_concurrent}` : '',
-      badges,
-    ].filter(Boolean).join(' · ');
-    return `<div class="row">
-      <div class="who">
-        <div class="name"><code>${esc(a.id)}</code></div>
-        <div class="sub">${esc(meta)}</div>
-      </div>
-      <div class="row-acts">
-        <button type="button" class="text edit" data-agent="${esc(a.id)}">设置</button>
-        <button type="button" class="text del" data-agent="${esc(a.id)}">删除</button>
-      </div>
-    </div>`;
-  }).join('') || listEmpty('暂无 Agent——从上方目录一键安装（claude-code / codex / gemini-cli）');
-}
-
-// settingsAgentModal：已安装 Agent 的基础设置（2026-11-12 收敛——目录安装
-// 为唯一添加途径；仅暴露超时/并发/意图侧重三项（chips 点选），command/
-// env 等随安装包预置不暴露。保存=仅覆盖基础三项，其余字段原样保留）。
-async function settingsAgentModal(existing) {
-  const a = existing;
-  // 旧单值 intent 迁移进多意图（保存后统一写 match.intents）
-  const presetIntents = [...((a.match && a.match.intents) || []),
-    ...((a.match && a.match.intent) ? [a.match.intent] : [])];
-  const intentChips = ['coding', 'writing', 'vision', 'qa', 'long-context']
-    .map((it) => `<button type="button" class="chip" data-intent-chip="${it}"${presetIntents.includes(it) ? ' data-selected="1" style="opacity:0.45"' : ''}>${it}</button>`).join(' ');
-  formModal(`设置 Agent ${a.id}`,
-    frow('定义', `<span class="mono">${esc(a.command.join(' '))}</span>`, '安装包预置的启动定义与运行参数（只读；CLI 连接网关经 Agent 接线维护，全量自定义走 CLI / dispatch.json 全文档契约）') +
-    frow('超时', `<input class="field mono" name="timeout" value="${esc(a.timeout || '')}" placeholder="如 10m / 30s / 1h；空 = 缺省">`) +
-    frow('最大并发', `<input class="field" name="max_concurrent" type="number" min="0" step="1" value="${a.max_concurrent || ''}" placeholder="默认 1">`) +
-    frow('意图侧重', `<div style="display:flex;gap:6px;flex-wrap:wrap">${intentChips}</div>`, '点击标签增删侧重意图（任一命中即用本 Agent；安装包默认侧重可在此调整）；全部不选 = 仅显式指定时可用'),
-  async (form) => {
-    const v = formVals(form);
-    const timeout = (v.timeout || '').trim();
-    if (timeout && !/^\d+(\.\d+)?(ms|s|m|h)$/.test(timeout)) {
-      throw new Error('超时须为如 10m / 30s / 1h 的时长');
-    }
-    const intents = [...form.querySelectorAll('[data-intent-chip][data-selected]')]
-      .map((el) => el.dataset.intentChip);
-    const mc = parseInt(v.max_concurrent, 10);
-    // fresh GET 构造全文档：仅覆盖基础三项（空值=删字段），command/env/
-    // work_dir/output/parser/default/models/match.regex 原样保留。
-    const cur = await api('/api/config/dispatch');
-    const agents = cur.agents || [];
-    const idx = agents.findIndex((x) => x.id === a.id);
-    if (idx < 0) throw new Error(`Agent ${a.id} 已不存在（配置可能被并行修改），请刷新后重试`);
-    const spec = JSON.parse(JSON.stringify(agents[idx])); // 深拷贝（断开 match 指针）
-    if (timeout) spec.timeout = timeout; else delete spec.timeout;
-    if (mc > 0) spec.max_concurrent = mc; else delete spec.max_concurrent;
-    if (intents.length) {
-      if (spec.match) spec.match.intents = intents;
-      else spec.match = { intents };
-    } else if (spec.match) {
-      delete spec.match.intents;
-    }
-    if (spec.match) delete spec.match.intent; // 单值已迁移
-    if (spec.match && Object.keys(spec.match).length === 0) delete spec.match;
-    agents[idx] = spec;
-    await api('/api/config/dispatch', {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agents, templates: cur.templates || [] }),
-    });
-    status(`Agent ${a.id} 已保存（写前备份已留底，热生效）`, 'ok');
-    loadDispatchAgents();
-  });
-}
-
-async function deleteAgent(id) {
-  const ok = await confirmModal(`删除 Agent ${id}`, '该定义将从 dispatch.json 移除（写前备份留底；引用它的任务模板会被服务端拒绝）。');
-  if (!ok) return;
-  const cur = await api('/api/config/dispatch');
-  const before = (cur.agents || []).length;
-  const agents = (cur.agents || []).filter((x) => x.id !== id);
-  if (agents.length === before) {
-    status(`Agent ${id} 已不存在`, 'err');
-    loadDispatchAgents();
-    return;
-  }
-  await api('/api/config/dispatch', {
-    method: 'PUT', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ agents, templates: cur.templates || [] }),
-  });
-  status(`Agent ${id} 已删除（热生效）`, 'ok');
-  loadDispatchAgents();
-}
-
-$('list-agents').addEventListener('click', async (e) => {
-  const id = e.target.dataset.agent;
-  if (!id) return;
-  const r = await api('/api/dispatch/agents');
-  const entry = (r.agents || []).find((x) => x.id === id);
-  if (!entry) {
-    status(`Agent ${id} 已不存在`, 'err');
-    loadDispatchAgents();
-    return;
-  }
-  if (e.target.classList.contains('edit')) settingsAgentModal(entry);
-  if (e.target.classList.contains('del')) deleteAgent(id);
-});
-
-// Agent 设置模态的意图 chips（document 级委托——模态动态注入；选中态
-// 记在 data-selected，提交时从 DOM 收集）
-document.addEventListener('click', (e) => {
-  const chip = e.target.dataset && e.target.dataset.intentChip;
-  if (!chip) return;
-  if (e.target.dataset.selected) {
-    delete e.target.dataset.selected;
-    e.target.style.opacity = '';
-  } else {
-    e.target.dataset.selected = '1';
-    e.target.style.opacity = '0.45';
-  }
-});
-
-async function loadDispatchTemplates() {
-  try {
-    const r = await api('/api/dispatch/templates');
-    dispTemplates = r.templates || [];
-    const row = $('disp-tmplrow'), sel = $('disp-template');
-    row.hidden = dispTemplates.length === 0;
-    sel.innerHTML = '<option value="">自由任务（直接填写上方文本）</option>' +
-      dispTemplates.map((t) => `<option value="${esc(t.name)}">${esc(t.name)}</option>`).join('');
-  } catch (e) { /* 模板不可用不阻塞派发页（fail-open 观测增强） */ }
-}
-
-// dispRenderParams 选中模板后按占位名生成参数输入；切回自由任务还原。
-function dispRenderParams() {
-  const name = $('disp-template').value;
-  const row = $('disp-params'), ta = $('disp-task');
-  const t = dispTemplates.find((x) => x.name === name);
-  if (!t) {
-    row.hidden = true;
-    row.innerHTML = '';
-    ta.disabled = false;
-    return;
-  }
-  ta.disabled = true;
-  ta.value = `（模板 ${t.name}）${t.task}`;
-  const names = t.params || [];
-  row.hidden = false;
-  row.innerHTML = `<div class="who"><div class="name">参数</div></div>
-    <div class="chips">${names.map((n) =>
-      `<input class="field disp-param" data-name="${esc(n)}" placeholder="{${esc(n)}}" style="width:11rem">`).join('')}</div>`;
-}
-
-const DISP_BADGE = { done: 'ok', failed: 'prefail', running: 'running', cancelled: 'cancelled' };
-
-async function loadDispatchSessions() {
-  try {
-    const r = await api('/api/dispatch/sessions');
-    const all = r.sessions || [];
-    dispSyncAgentFilter(all);
-    const rows = dispFilterSessions(all).map((s) => {
-      const dur = s.result ? `${s.result.duration_ms} ms` : '…';
-      const acts = [];
-      if (s.status === 'running') acts.push(`<button type="button" class="text disp-cancel" data-id="${esc(s.id)}">取消</button>`);
-      if (s.status === 'failed') acts.push(`<button type="button" class="text disp-redispatch" data-id="${esc(s.id)}" title="以留存任务摘要与相同 agent/model 提交全新会话">重派</button>`);
-      return `<div class="row hoverable disp-session ${dispSelected === s.id ? 'sel' : ''}" data-id="${esc(s.id)}">
-        <div class="who">
-          <div class="name">${esc((s.task || '').slice(0, 60)) || '（无任务文本）'}</div>
-          <div class="sub"><code>${esc(s.id)}</code> · ${esc(s.agent)} · ${esc(fmtTime(s.started_at))} · ${esc(dur)}${s.result && s.result.outcome ? ` · ${esc(s.result.outcome)}` : ''}</div>
-        </div>
-        <span class="pill ${DISP_BADGE[s.status] || ''}">${esc(s.status)}</span>
-        ${acts.length ? `<div class="row-acts">${acts.join('')}</div>` : ''}
-      </div>`;
-    }).join('');
-    $('list-dispatch').innerHTML = rows || listEmpty('暂无会话（提交第一个任务后这里会出现会话与事件流）');
-    if (dispSelected) await showDispatchOutput(dispSelected);
-    else hideDispatchOutput();
-  } catch (e) {
-    status('会话加载失败: ' + e.message, 'err');
-    if (!$('list-dispatch').innerHTML) $('list-dispatch').innerHTML = errBox('会话加载失败: ' + e.message, 'dispatch');
-  }
-}
-
-function hideDispatchOutput() {
-  $('card-disp-output').hidden = true;
-}
-
-// dispSyncAgentFilter 按历史会话的 agent 集合刷新筛选项（保留当前选择）。
-function dispSyncAgentFilter(all) {
-  const sel = $('disp-f-agent');
-  const cur = sel.value;
-  const ids = [...new Set(all.map((s) => s.agent))].sort();
-  sel.innerHTML = '<option value="">全部 Agent</option>' +
-    ids.map((a) => `<option value="${esc(a)}">${esc(a)}</option>`).join('');
-  sel.value = ids.includes(cur) ? cur : '';
-}
-
-// dispFilterSessions 客户端筛选（环形 ≤256+恢复条目）：agent / 状态 / 时间窗。
-function dispFilterSessions(all) {
-  const agent = $('disp-f-agent').value;
-  const status_ = $('disp-f-status').value;
-  const win = $('disp-f-time').value;
-  let list = all;
-  if (agent) list = list.filter((s) => s.agent === agent);
-  if (status_) list = list.filter((s) => s.status === status_);
-  if (win) {
-    const cut = Date.now() - ({ '1h': 3600e3, '24h': 86400e3, '7d': 7 * 86400e3 }[win] || 0);
-    list = list.filter((s) => new Date(s.started_at).getTime() >= cut);
-  }
-  return list;
-}
-
-async function showDispatchOutput(id) {
-  dispSelected = id;
-  try {
-    const d = await api('/api/dispatch/sessions/' + encodeURIComponent(id));
-    dispLast = d;
-    dispRenderOutput(d);
-  } catch (e) {
-    hideDispatchOutput();
-    dispSelected = null;
-    dispLast = null;
-  }
-}
-
-// dispRenderOutput：jsonl 会话默认事件视图；raw 与非 jsonl 回退原文。
-function dispRenderOutput(d) {
-  const pre = $('disp-output');
-  const evs = d.events || [];
-  const hasEv = evs.length > 0 && dispEvView;
-  $('card-disp-output').hidden = false;
-  $('disp-viewhint').textContent = hasEv ? '事件视图' : '原文视图';
-  $('disp-viewid').textContent = dispSelected || '';
-  $('disp-evtoggle').textContent = hasEv ? '切换原文' : '切换事件';
-  pre.classList.toggle('ev', hasEv);
-  if (hasEv) {
-    pre.innerHTML = evs.map(dispEventHTML).join('');
-  } else {
-    pre.textContent = d.output || '（暂无输出）';
-  }
-  pre.scrollTop = pre.scrollHeight;
-}
-
-// dispEventHTML 单事件渲染：init 灰、text 正文、tool 折叠、result 终态。
-function dispEventHTML(ev) {
-  const t = esc(ev.text || '');
-  switch (ev.kind) {
-    case 'init':
-      return `<div class="ev ev-init">init${ev.subtype ? ' · ' + esc(ev.subtype) : ''}</div>`;
-    case 'text':
-      return `<div class="ev ev-text">${t}</div>`;
-    case 'tool':
-      return `<details class="ev ev-tool"><summary>tool · ${esc(ev.tool || '?')}<span class="ev-sum">${t}</span></summary><pre>${t}</pre></details>`;
-    case 'toolresult':
-      return `<div class="ev ev-toolres">tool-result · ${t}</div>`;
-    case 'result':
-      return `<div class="ev ev-result">result${ev.subtype ? ' · ' + esc(ev.subtype) : ''} — ${t}</div>`;
-    default:
-      return `<div class="ev ev-raw">${t}</div>`;
-  }
-}
-
-$('list-dispatch').addEventListener('click', async (e) => {
-  const cancel = e.target.closest('.disp-cancel');
-  const redis = e.target.closest('.disp-redispatch');
-  const row = e.target.closest('.disp-session');
-  if (cancel) {
-    e.stopPropagation();
-    try {
-      await api('/api/dispatch/sessions/' + encodeURIComponent(cancel.dataset.id) + '/cancel', { method: 'POST' });
-      status('已请求取消 ' + cancel.dataset.id, 'ok');
-      loadDispatchSessions();
-    } catch (ex) {
-      status('取消失败: ' + ex.message, 'err');
-    }
-    return;
-  }
-  if (redis) {
-    e.stopPropagation();
-    try {
-      const r = await api('/api/dispatch/sessions/' + encodeURIComponent(redis.dataset.id) + '/redispatch', { method: 'POST' });
-      status(`已重派 → ${r.session.id}（原会话 ${r.redispatched_from} 留档不变）`, 'ok');
-      dispSelected = r.session.id;
-      loadDispatchSessions();
-    } catch (ex) {
-      status('重派失败: ' + ex.message, 'err');
-    }
-    return;
-  }
-  if (row) showDispatchOutput(row.dataset.id);
-});
-
-['disp-f-agent', 'disp-f-status', 'disp-f-time'].forEach((id) => $(id).addEventListener('change', loadDispatchSessions));
-
-$('btn-dispatch-run').addEventListener('click', async () => {
-  const b = $('btn-dispatch-run');
-  const tmplName = $('disp-template').value;
-  const body = { agent: $('disp-agent').value, model: $('disp-model').value.trim() };
-  if (tmplName) {
-    // 模板形态：{template, params}（缺参客户端先拦，服务端仍 fail-closed）。
-    const params = {};
-    let missing = [];
-    document.querySelectorAll('#disp-params .disp-param').forEach((inp) => {
-      const v = inp.value.trim();
-      if (v) params[inp.dataset.name] = v;
-      else missing.push(inp.dataset.name);
-    });
-    if (missing.length) { status('缺少参数: ' + missing.join(', '), 'err'); return; }
-    body.template = tmplName;
-    body.params = params;
-  } else {
-    body.task = $('disp-task').value.trim();
-    if (!body.task) { status('任务文本不能为空', 'err'); return; }
-  }
-  busy(b, true, '派发中…');
-  try {
-    const r = await api('/api/dispatch/run', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    status(`已派发 → ${r.session.agent}（${r.session.id}${r.intent ? '，意图 ' + r.intent : ''}）`, 'ok');
-    if (!tmplName) $('disp-task').value = '';
-    dispSelected = r.session.id;
-    loadDispatchSessions();
-  } catch (e) {
-    status('派发失败: ' + e.message, 'err');
-  } finally {
-    busy(b, false);
-  }
-});
-
-$('disp-template').addEventListener('change', dispRenderParams);
-$('btn-disp-refresh').addEventListener('click', loadDispatchSessions);
-// 清除会话历史：终态会话内存+落盘清除；运行中会话不受影响
-$('btn-disp-clear').addEventListener('click', async () => {
-  const ok = await confirmModal('清除派发会话历史？',
-    '终态会话将从列表与落盘中删除，无法恢复；运行中的会话不受影响，结束后照常出现在列表。',
-    { yes: '清除', danger: true });
-  if (!ok) return;
-  try {
-    await api('/api/dispatch/sessions', { method: 'DELETE' });
-    status('会话历史已清除', 'ok');
-    loadDispatchSessions();
-  } catch (e) { status('清除失败: ' + e.message, 'err'); }
-});
-$('disp-evtoggle').addEventListener('click', () => {
-  dispEvView = !dispEvView;
-  if (dispLast) dispRenderOutput(dispLast);
-});
-// 复制/导出（M6-W5）：原文尾部（text/jsonl 原样）。
-$('disp-copy').addEventListener('click', async () => {
-  if (!dispLast) return;
-  try {
-    await navigator.clipboard.writeText(dispLast.output || '');
-    status('已复制输出尾部', 'ok');
-  } catch (e) {
-    status('复制失败: ' + e.message, 'err');
-  }
-});
-// 导出走 fetch→blob→对象 URL（blob 下载无导航副作用）。
-$('disp-export').addEventListener('click', async () => {
-  if (!dispSelected) return;
-  try {
-    const r = await fetch('/api/dispatch/sessions/' + encodeURIComponent(dispSelected) + '/export');
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(await r.blob());
-    a.download = 'dispatch-' + dispSelected + ((dispLast && dispLast.output_mode === 'jsonl') ? '.jsonl' : '.txt');
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(a.href);
-    status('已导出输出尾部', 'ok');
-  } catch (e) {
-    status('导出失败: ' + e.message, 'err');
-  }
-});
-setInterval(() => {
-  if (activeAndVisible('dispatch') && $('disp-auto').classList.contains('on')) {
-    loadDispatchSessions();
-  }
-}, 5000);
-
 // ---------- 插件（2026-11 定稿：订阅适配走社区插件 + 商店索引 + 信息分层） ----------
 
 function pluginBadge(st) {
@@ -2570,7 +2087,6 @@ const PLUGIN_CATS = {
   'provider.rewrite': '请求改写',
   'classify.intent': '意图分类',
   'events.trace': '观测订阅',
-  'dispatch.parse': '派发解析',
   'vendor.verdict': '厂商判定',
 };
 
