@@ -135,13 +135,14 @@ stdout，结果与耗时留痕。与 `internal/agent` 接线子系统协同成�
   zip 结构 + manifest 一致性白名单足够；包内容变更 = 代码提交可追溯。
 - **UI 收敛（2026-11-12）：目录安装为添加 Agent 的唯一途径**——自建
   表单（「＋ 新建 Agent」）自 UI 移除；目录条目置顶展示，已装条目
-  自动过滤。已安装 Agent 的「设置」模态仅暴露**基础设置四项**：环境
-  变量（回环令牌提示）/ 超时 / 最大并发 / 意图侧重（安装包默认侧重
-  可调）；command 等底层字段只读展示、保存时仅覆盖基础四项（其余
-  原样保留）。gemini-cli 目录条目预置 `match.intent=qa`（三家安装即
-  默认可用：claude-code/codex=coding、gemini=qa）。CLI 与
-  `PUT /api/config/dispatch` 全文档契约保留（含 models 专属链——UI
-  收敛，契约不收）。
+  自动过滤。已安装 Agent 的「设置」模态仅暴露**基础设置三项**：超时 /
+  最大并发 / 意图侧重（chips 点选、无文本输入；安装包默认侧重可调）；
+  command/env 等随安装包预置（env 不暴露——CLI 连接网关经 Agent 接
+  线维护），保存时仅覆盖基础三项（其余原样保留）。gemini-cli 目录条
+  目预置 `match.intent=qa`（三家安装即默认可用：claude-code/codex=
+  coding、gemini=qa）。CLI 与
+  `PUT /api/config/dispatch` 全文档契约保留（含 models 专属链与 env
+  ——UI 收敛，契约不收）。
 
 ## 五·乙、Agent 侧重与专属模型链（2026-11-12）
 

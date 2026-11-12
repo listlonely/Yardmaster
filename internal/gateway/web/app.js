@@ -2193,40 +2193,36 @@ function renderAgentList(agents) {
 }
 
 // settingsAgentModal：已安装 Agent 的基础设置（2026-11-12 收敛——目录安装
-// 为唯一添加途径；仅暴露环境变量/超时/并发/意图侧重四项，command 等
-// 底层字段只读展示。保存=仅覆盖基础四项，其余字段原样保留）。
+// 为唯一添加途径；仅暴露超时/并发/意图侧重三项（chips 点选），command/
+// env 等随安装包预置不暴露。保存=仅覆盖基础三项，其余字段原样保留）。
 async function settingsAgentModal(existing) {
   const a = existing;
-  // 旧单值 intent 迁移进多意图输入（保存后统一写 match.intents）
+  // 旧单值 intent 迁移进多意图（保存后统一写 match.intents）
   const presetIntents = [...((a.match && a.match.intents) || []),
     ...((a.match && a.match.intent) ? [a.match.intent] : [])];
   const intentChips = ['coding', 'writing', 'vision', 'qa', 'long-context']
-    .map((it) => `<button type="button" class="chip" data-intent-chip="${it}"${presetIntents.includes(it) ? ' style="opacity:0.45"' : ''}>${it}</button>`).join(' ');
+    .map((it) => `<button type="button" class="chip" data-intent-chip="${it}"${presetIntents.includes(it) ? ' data-selected="1" style="opacity:0.45"' : ''}>${it}</button>`).join(' ');
   formModal(`设置 Agent ${a.id}`,
-    frow('定义', `<span class="mono">${esc(a.command.join(' '))}</span>`, '安装包预置的启动定义（只读；全量自定义走 CLI / dispatch.json 全文档契约）') +
-    frow('环境变量', `<textarea class="field mono" name="env" rows="3" spellcheck="false" placeholder="每行一个 KEY=VALUE">${esc((a.env || []).join('\n'))}</textarea>`, '回环调 LLM 须配网关命名令牌（设置页生成后填 ANTHROPIC_AUTH_TOKEN=<令牌>，另加 ANTHROPIC_BASE_URL=http://127.0.0.1:8317），否则 Agent 请求会 401；值支持 {model} 占位') +
+    frow('定义', `<span class="mono">${esc(a.command.join(' '))}</span>`, '安装包预置的启动定义与运行参数（只读；CLI 连接网关经 Agent 接线维护，全量自定义走 CLI / dispatch.json 全文档契约）') +
     frow('超时', `<input class="field mono" name="timeout" value="${esc(a.timeout || '')}" placeholder="如 10m / 30s / 1h；空 = 缺省">`) +
     frow('最大并发', `<input class="field" name="max_concurrent" type="number" min="0" step="1" value="${a.max_concurrent || ''}" placeholder="默认 1">`) +
-    frow('意图侧重', `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">${intentChips}</div><input class="field mono" name="m_intents" value="${esc(presetIntents.join(','))}" spellcheck="false" placeholder="逗号分隔，任一命中即用本 Agent">`, '多意图任一命中（安装包默认侧重可在此调整）；全部留空 = 仅显式指定时可用'),
+    frow('意图侧重', `<div style="display:flex;gap:6px;flex-wrap:wrap">${intentChips}</div>`, '点击标签增删侧重意图（任一命中即用本 Agent；安装包默认侧重可在此调整）；全部不选 = 仅显式指定时可用'),
   async (form) => {
     const v = formVals(form);
     const timeout = (v.timeout || '').trim();
     if (timeout && !/^\d+(\.\d+)?(ms|s|m|h)$/.test(timeout)) {
       throw new Error('超时须为如 10m / 30s / 1h 的时长');
     }
-    const intents = (v.m_intents || '').split(/[\s,，、]+/).map((s) => s.trim()).filter(Boolean);
-    const rawEnv = linesOf(v.env);
-    const env = rawEnv.filter((l) => l.includes('='));
-    if (rawEnv.length !== env.length) throw new Error('环境变量每行须为 KEY=VALUE');
+    const intents = [...form.querySelectorAll('[data-intent-chip][data-selected]')]
+      .map((el) => el.dataset.intentChip);
     const mc = parseInt(v.max_concurrent, 10);
-    // fresh GET 构造全文档：仅覆盖基础四项（空值=删字段），command/
+    // fresh GET 构造全文档：仅覆盖基础三项（空值=删字段），command/env/
     // work_dir/output/parser/default/models/match.regex 原样保留。
     const cur = await api('/api/config/dispatch');
     const agents = cur.agents || [];
     const idx = agents.findIndex((x) => x.id === a.id);
     if (idx < 0) throw new Error(`Agent ${a.id} 已不存在（配置可能被并行修改），请刷新后重试`);
     const spec = JSON.parse(JSON.stringify(agents[idx])); // 深拷贝（断开 match 指针）
-    if (env.length) spec.env = env; else delete spec.env;
     if (timeout) spec.timeout = timeout; else delete spec.timeout;
     if (mc > 0) spec.max_concurrent = mc; else delete spec.max_concurrent;
     if (intents.length) {
@@ -2280,17 +2276,18 @@ $('list-agents').addEventListener('click', async (e) => {
   if (e.target.classList.contains('del')) deleteAgent(id);
 });
 
-// Agent 设置模态的意图 chips（document 级委托——模态动态注入）
+// Agent 设置模态的意图 chips（document 级委托——模态动态注入；选中态
+// 记在 data-selected，提交时从 DOM 收集）
 document.addEventListener('click', (e) => {
   const chip = e.target.dataset && e.target.dataset.intentChip;
   if (!chip) return;
-  const form = e.target.closest('form');
-  const inp = form && form.querySelector('[name="m_intents"]');
-  if (!inp) return;
-  const set = new Set(inp.value.split(/[\s,，、]+/).map((s) => s.trim()).filter(Boolean));
-  if (set.has(chip)) { set.delete(chip); e.target.style.opacity = ''; }
-  else { set.add(chip); e.target.style.opacity = '0.45'; }
-  inp.value = [...set].join(',');
+  if (e.target.dataset.selected) {
+    delete e.target.dataset.selected;
+    e.target.style.opacity = '';
+  } else {
+    e.target.dataset.selected = '1';
+    e.target.style.opacity = '0.45';
+  }
 });
 
 async function loadDispatchTemplates() {
