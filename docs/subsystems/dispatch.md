@@ -114,7 +114,7 @@ stdout，结果与耗时留痕。与 `internal/agent` 接线子系统协同成�
 | :-- | :-- | :-- | :-- |
 | Claude Code | `claude -p --output-format stream-json --verbose` | jsonl | **已实测**（[2026-10-30-claude真实冒烟]）：`-p` 非交互、stdin 收任务；stream-json 须配 `--verbose` |
 | Codex CLI | `codex exec --json` | jsonl | 事件流形状待实测（本机无 OpenAI 订阅，降级留档） |
-| Gemini CLI | `gemini -p` | text | **实测修正中（v0.1.10 冒烟发现）**：本机 gemini 0.66.0 的 `-p` 是 [string] 参数**必须带值**（「Appended to input on stdin」），而派发架构任务文本恒走 stdin 不进 argv——`gemini -p`（无值）报 help 退出 1。修正方向：包装脚本经 PowerShell 中转读 stdin 转为 `-p <值>`（注意编码），待实测后以包 v1.1.0 发布 |
+| Gemini CLI | `gemini -p " "` | text | **已实测修正（包 v1.1.0，2026-11-12）**：gemini 0.66.0 的 `-p` 是 [string] 参数必须带值（「Appended to input on stdin」）——run.cmd 以空格占位 `-p " "`，任务文本经 stdin 读入（实测：参数解析通过进入 headless，未登录时报认证错误 41 而非 yargs help；真机登录用户即出结果）。v1.0.0 包的 `gemini -p`（无值）与「任务文本恒走 stdin」架构冲突报 help，已由升级管线修复 |
 
 ## 五·甲、Agent 目录化安装（2026-11-11，真下载）
 

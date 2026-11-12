@@ -141,7 +141,7 @@ func TestDispatchCatalogView(t *testing.T) {
 func TestDispatchCatalogInstallFullChain(t *testing.T) {
 	src := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		pkg := zipBytes(t, map[string]string{
-			"manifest.json": `{"id":"gemini-cli","version":"1.0.0","spec":{"id":"gemini-cli","command":["./run.cmd"],"output":"text","match":{"intent":"qa"}}}`,
+			"manifest.json": `{"id":"gemini-cli","version":"1.1.0","spec":{"id":"gemini-cli","command":["./run.cmd"],"output":"text","match":{"intent":"qa"}}}`,
 			"run.cmd":       "@gemini -p %*",
 		})
 		_, _ = w.Write(pkg)

@@ -695,10 +695,10 @@ var agentCatalog = []CatalogEntry{
 	},
 	{
 		Spec:        AgentSpec{ID: "gemini-cli", Command: []string{"./run.cmd"}, Output: "text", Match: &Match{Intent: "qa"}},
-		Version:     "1.0.0",
+		Version:     "1.1.0",
 		DownloadURL: "https://raw.githubusercontent.com/listlonely/Yardmaster/main/examples/agent-packs/gemini-cli.zip",
 		Probe:       "gemini",
-		Desc:        "Gemini CLI（Google）：-p 单轮 text 输出（文档口径）",
+		Desc:        "Gemini CLI（Google）：单轮 text 输出（形状经本机 0.66.0 实测修正）",
 		Prereq:      "需本机已安装 gemini 并登录；网关不代装不代登录",
 	},
 }
