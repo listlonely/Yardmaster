@@ -27,7 +27,6 @@ import (
 	"time"
 
 	"yardmaster/internal/credential"
-	"yardmaster/internal/dispatch"
 	"yardmaster/internal/netproxy"
 	"yardmaster/internal/plugin"
 	"yardmaster/internal/provider"
@@ -92,7 +91,6 @@ type Server struct {
 	Token         string            // 访问令牌（M2-W5）：非空时 /v1 与 /api 要求匹配；空=本机信任态
 	tokenHashes   atomic.Value      // 命名令牌 hash 集（[]string，2026-11 批2；atomic 零值可用）
 	Creds         *credential.Store // OAuth 凭证库（M3-W3）；nil=无 OAuth 能力
-	Dispatch      *dispatch.Engine  // 任务→Agent 派发引擎（M5-W4）；nil=未挂载
 	Plugins       *plugin.Registry  // 插件注册表（M7-W3）；nil=未挂载
 	// OnAccountRest 上游账号休眠事件钩子（M9-W4）：429/402/余额耗尽时
 	// 回调（网络失败不回调——频繁且自动恢复）。nil=无订阅者；壳层用于
@@ -164,28 +162,6 @@ func (s *Server) routes() http.Handler {
 	})
 	mux.HandleFunc("POST /api/plugins/{id}/disable", func(w http.ResponseWriter, r *http.Request) {
 		s.handlePluginToggle(w, r.PathValue("id"), "disable")
-	})
-	// 派发管理面（M5-W5）：提交/清单/详情/取消；配置读写走 /api/config/dispatch
-	mux.HandleFunc("POST /api/dispatch/run", s.handleDispatchRun)
-	mux.HandleFunc("GET /api/dispatch/agents", s.handleDispatchAgents)
-	mux.HandleFunc("GET /api/dispatch/catalog", s.handleDispatchCatalog) // Agent 目录（2026-11-11）
-	mux.HandleFunc("POST /api/dispatch/catalog/{id}/install", func(w http.ResponseWriter, r *http.Request) {
-		s.handleDispatchCatalogInstall(w, r.PathValue("id"))
-	})
-	mux.HandleFunc("GET /api/dispatch/templates", s.handleDispatchTemplates) // M6-W4
-	mux.HandleFunc("GET /api/dispatch/sessions", s.handleDispatchSessions)
-	mux.HandleFunc("DELETE /api/dispatch/sessions", s.handleDispatchSessionsClear) // 派发页「清除历史」
-	mux.HandleFunc("GET /api/dispatch/sessions/{id}", func(w http.ResponseWriter, r *http.Request) {
-		s.handleDispatchSession(w, r.PathValue("id"))
-	})
-	mux.HandleFunc("GET /api/dispatch/sessions/{id}/export", func(w http.ResponseWriter, r *http.Request) {
-		s.handleDispatchSessionExport(w, r.PathValue("id"))
-	})
-	mux.HandleFunc("POST /api/dispatch/sessions/{id}/redispatch", func(w http.ResponseWriter, r *http.Request) {
-		s.handleDispatchRedispatch(w, r.PathValue("id"))
-	})
-	mux.HandleFunc("POST /api/dispatch/sessions/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
-		s.handleDispatchCancel(w, r.PathValue("id"))
 	})
 	mux.Handle("GET /web/", http.StripPrefix("/web/", http.FileServerFS(webSub())))
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {

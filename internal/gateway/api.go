@@ -31,7 +31,6 @@ import (
 	"time"
 
 	"yardmaster/internal/classify"
-	"yardmaster/internal/dispatch"
 	"yardmaster/internal/netproxy"
 	"yardmaster/internal/plugin"
 	"yardmaster/internal/provider"
@@ -46,7 +45,6 @@ const (
 	cfgKeys      = "keys"
 	cfgIntents   = "intents"
 	cfgPricing   = "pricing"  // M2-W4：模型单价表
-	cfgDispatch  = "dispatch" // M5-W5：任务→Agent 派发配置
 	cfgPlugins   = "plugins"  // M7-W3：插件清单
 )
 
@@ -100,13 +98,6 @@ func (s *Server) handleConfigGet(w http.ResponseWriter, name string) {
 	case cfgPricing:
 		var f PricingFile
 		if err := s.loadCurrent(s.pricingPath(), &f); err != nil {
-			writeAPIErr(w, err)
-			return
-		}
-		writeJSON(w, f)
-	case cfgDispatch:
-		var f dispatch.DispatchFile
-		if err := s.loadCurrent(s.dispatchPath(), &f); err != nil {
 			writeAPIErr(w, err)
 			return
 		}
@@ -320,36 +311,6 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, name st
 			return
 		}
 		s.writeResult(w, effectImmediate, f)
-	case cfgDispatch:
-		var f dispatch.DispatchFile
-		if err := strictDecode(dec, &f); err != nil {
-			writeAPIErr(w, badRequest(err))
-			return
-		}
-		if err := dispatch.ValidateDispatch(f); err != nil {
-			writeAPIErr(w, badRequest(err))
-			return
-		}
-		// Agent 专属模型链联动（2026-11-12）：链落地为保留前缀组
-		// agent-<id>（members=链、order）——成员存在性 fail-closed 校验 +
-		// 组自动建/改/删，providers.json 经同一 writeConfig（各自备份留底）
-		// + Planner 热替换。失败拒绝整个 dispatch 保存（原子性）。
-		if err := s.syncAgentGroups(f); err != nil {
-			writeAPIErr(w, badRequest(err))
-			return
-		}
-		if err := s.writeConfig(s.dispatchPath(), cfgDispatch, f); err != nil {
-			writeAPIErr(w, err)
-			return
-		}
-		// 热生效：引擎 agent 表热替换（运行中会话不受影响）。
-		if s.Dispatch != nil {
-			if err := s.Dispatch.Reload(f); err != nil {
-				writeAPIErr(w, badRequest(err))
-				return
-			}
-		}
-		s.writeResult(w, effectImmediate, f)
 	case cfgPlugins:
 		var f plugin.File
 		if err := strictDecode(dec, &f); err != nil {
@@ -513,7 +474,6 @@ func (s *Server) rulesPath() string    { return filepath.Join(s.AppDir, "rules.j
 func (s *Server) keysPath() string     { return filepath.Join(s.AppDir, "keys.json") }
 func (s *Server) intentsPath() string  { return filepath.Join(s.AppDir, "intents.json") }
 func (s *Server) pricingPath() string  { return filepath.Join(s.AppDir, "pricing.json") }
-func (s *Server) dispatchPath() string { return filepath.Join(s.AppDir, "dispatch.json") }
 
 func (s *Server) pluginsPath() string { return filepath.Join(s.AppDir, "plugins.json") }
 
@@ -827,8 +787,13 @@ func (e *apiError) Error() string { return e.Msg }
 
 type errUnknownConfig struct{ name string }
 
+// errNotFound 是通用 404 错误（资源不存在；原派发线 helper 迁入）。
+func errNotFound(what string) error {
+	return &apiError{status: http.StatusNotFound, Msg: what + " 不存在"}
+}
+
 func (e errUnknownConfig) Error() string {
-	return "未知配置名 " + e.name + "（可用: providers | settings | rules | keys | intents | pricing | dispatch | plugins）"
+	return "未知配置名 " + e.name + "（可用: providers | settings | rules | keys | intents | pricing | plugins）"
 }
 
 func (e errUnknownConfig) status() int { return http.StatusNotFound }
@@ -876,61 +841,5 @@ func strictDecode(dec *json.Decoder, v any) error {
 	if dec.More() {
 		return errors.New("请求体含尾随内容（应为单个 JSON 文档）")
 	}
-	return nil
-}
-
-// syncAgentGroups 把 dispatch Agents 的专属模型链同步为 providers.json
-// 保留前缀组（agent-<id>，order，2026-11-12）：有链的 Agent 建/改组，
-// 链被清空/Agent 被删的清组；成员 <provider>/<model> 必须存在于 Planner
-// 快照（fail-closed 拒绝整个 dispatch 保存）。providers.json 经同一
-// writeConfig 落盘（备份审计）+ Planner 热替换。已知边界：组删除后
-// rules.json 若仍引用 group/agent-<id> 会悬空（Plan 404 软失败）——
-// agent- 组本就只为该 Agent 服务，删除即意味着链策略被放弃。
-func (s *Server) syncAgentGroups(f dispatch.DispatchFile) error {
-	var pf store.ProvidersFile
-	if err := s.loadCurrentForWrite(s.ProvidersPath, &pf); err != nil {
-		return err
-	}
-	modelOK := map[string]bool{}
-	for _, p := range s.Planner.Providers() {
-		for _, m := range p.Models {
-			modelOK[p.ID+"/"+m.ID] = true
-		}
-	}
-	want := map[string]bool{}
-	for _, a := range f.Agents {
-		if len(a.Models) == 0 {
-			continue
-		}
-		for _, m := range a.Models {
-			if !modelOK[m] {
-				return fmt.Errorf("agent %s 的专属链成员不存在（providers.json 无此 provider/model）: %s", a.ID, m)
-			}
-		}
-		want[a.AgentGroupID()] = true
-	}
-	groups := make([]provider.Group, 0, len(pf.Groups)+len(want))
-	for _, g := range pf.Groups {
-		// 非 agent- 前缀组原样保留；agent- 组按 want 重建（清链即删组）
-		if !strings.HasPrefix(g.ID, dispatch.AgentGroupPrefix) || want[g.ID] {
-			groups = append(groups, g)
-		}
-	}
-	for _, a := range f.Agents {
-		if len(a.Models) == 0 {
-			continue
-		}
-		groups = append(groups, provider.Group{
-			ID:       a.AgentGroupID(),
-			Strategy: provider.StrategyOrder,
-			Members:  append([]string(nil), a.Models...),
-		})
-	}
-	pf.Groups = groups
-	if err := s.writeConfig(s.ProvidersPath, cfgProviders, pf); err != nil {
-		return err
-	}
-	s.Planner.Reload(pf.Providers, pf.Groups)
-	slog.Info("Agent 专属模型链已同步为路由组", "groups", len(want))
 	return nil
 }

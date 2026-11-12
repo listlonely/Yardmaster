@@ -19,10 +19,9 @@ import (
 	"yardmaster/internal/store"
 )
 
-// 五类扩展点 capability（枚举外值拒绝装载）。
+// 扩展点 capability（枚举外值拒绝装载）。
 const (
-	CapEvents   = "events.trace"   // 事件订阅（fire-and-forget）
-	CapDispatch = "dispatch.parse" // 派发输出解析（请求/响应）
+	CapEvents   = "events.trace" // 事件订阅（fire-and-forget）
 	CapClassify = "classify.intent"
 	CapVendor   = "vendor.verdict"
 	CapOAuth    = "provider.oauth" // 订阅厂商适配（适配本体在插件，主程序无厂商代码）
@@ -38,7 +37,7 @@ const (
 )
 
 var capabilitySet = map[string]bool{
-	CapEvents: true, CapDispatch: true, CapClassify: true, CapVendor: true, CapOAuth: true,
+	CapEvents: true, CapClassify: true, CapVendor: true, CapOAuth: true,
 	CapRewrite: true, CapRewriteResp: true, CapRewriteEvent: true,
 }
 
@@ -90,7 +89,7 @@ func Validate(f File) error {
 		}
 		for _, c := range p.Capabilities {
 			if !capabilitySet[c] {
-				return fmt.Errorf("插件 %s 的未知能力 %q（支持: events.trace/dispatch.parse/classify.intent/vendor.verdict/provider.oauth/provider.rewrite[.response|.event]）", p.ID, c)
+				return fmt.Errorf("插件 %s 的未知能力 %q（支持: events.trace/classify.intent/vendor.verdict/provider.oauth/provider.rewrite[.response|.event]）", p.ID, c)
 			}
 		}
 		if len(p.Intents) > 0 {

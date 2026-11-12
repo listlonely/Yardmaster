@@ -20,7 +20,6 @@ import (
 	"fyne.io/systray"
 
 	"yardmaster/internal/credential"
-	"yardmaster/internal/dispatch"
 	"yardmaster/internal/gateway"
 	"yardmaster/internal/netproxy"
 	"yardmaster/internal/otlp"
@@ -80,18 +79,12 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		return runSettings(args[1:], stdout, stderr)
 	case "plugin": // M7-W5：插件清单管理（list/enable/disable）
 		return runPlugin(args[1:], stdout, stderr)
-	case "agents":
-		return runAgents(args[1:], stdout, stderr)
 	case "update":
 		return updateCheck(args[1:], stdout, stderr)
 	case "tui":
 		return runTUI(args[1:], stdout, stderr)
-	case "run": // M5-W3：headless Agent 启动原语（stdin 任务 → stdout 透传）
-		return runRun(args[1:], os.Stdin, stdout, stderr)
-	case "dispatch": // M5-W5：任务→Agent 派发（agents/init/run）
-		return runDispatch(args[1:], stdout, stderr)
 	default:
-		fmt.Fprintf(stderr, "未知子命令 %q；可用：app（缺省，桌面应用）、serve、console、version、provider、group、rules、keys、intents、trace、settings、plugin、agents、price、cost、update、tui、run、dispatch\n", args[0])
+		fmt.Fprintf(stderr, "未知子命令 %q；可用：app（缺省，桌面应用）、serve、console、version、provider、group、rules、keys、intents、trace、settings、plugin、price、cost、update、tui\n", args[0])
 		return ErrUsage
 	}
 }
@@ -103,10 +96,9 @@ type serveSetup struct {
 	paths    store.Paths
 	settings store.Settings
 	listen   string
-	disp     *dispatch.Engine // 派发引擎（dispatch.json 不可用时 nil）
 }
 
-// setupGateway 完成网关装配（配置读取、安全基线、Server 构造、派发挂载）。
+// setupGateway 完成网关装配（配置读取、安全基线、Server 构造）。
 func setupGateway() (*serveSetup, error) {
 	paths, err := store.DefaultPaths()
 	if err != nil {
@@ -147,28 +139,7 @@ func setupGateway() (*serveSetup, error) {
 	// 管理 API 后即时热替换，不依赖重启）。
 	srv.SetTokenHashes(gateway.TokenHashesOf(settings.Tokens))
 
-	// 派发引擎（M5-W4）：dispatch.json 损坏 → fail-closed 禁用派发并
-	// 指引修复（网关其余功能不受影响）；不存在 → 无 agent 空引擎。
-	dispEngine, derr := dispatch.LoadEngine(paths.DispatchPath())
-	switch {
-	case derr != nil:
-		slog.Error("dispatch.json 不可用，派发功能已禁用", "err", derr)
-	case len(dispEngine.Agents()) > 0:
-		slog.Info("已加载派发配置", "agents", len(dispEngine.Agents()))
-	}
-	if derr == nil {
-		// 会话持久化（M6-W2）：终态追加落盘 + 启动恢复最近环形进内存
-		// ——控制台「派发」页历史跨重启可见。恢复的 running 会话标失败
-		// （进程重启即被杀，不猜结果）。
-		sstore := dispatch.NewSessionStore(paths.DispatchSessionsPath())
-		dispEngine.AttachStore(sstore)
-		dispEngine.RestoreSessions(sstore.Recent(dispatch.SessionRingCap))
-		if n := len(dispEngine.Sessions()); n > 0 {
-			slog.Info("已恢复派发会话历史", "count", n)
-		}
-		srv.AttachDispatch(dispEngine)
-	}
-	return &serveSetup{srv: srv, planner: planner, paths: paths, settings: settings, listen: listen, disp: dispEngine}, nil
+	return &serveSetup{srv: srv, planner: planner, paths: paths, settings: settings, listen: listen}, nil
 }
 
 // wireSettingsHook 设置落盘钩子（2026-11-11）：壳层把需要进程外生效的
@@ -226,7 +197,7 @@ func (st *serveSetup) startHelpers(ctx context.Context) func() {
 	reg := plugin.NewRegistry(st.paths.AppDir) // 插件进程注入 YM_APP_DIR（数据目录持久化）
 	reg.Start(pf)
 	stops = append(stops, reg.Stop)
-	st.srv.AttachPlugins(reg) // OnTrace 链式扇出 + 派发解析钩子桥
+	st.srv.AttachPlugins(reg) // OnTrace 链式扇出 + 意图声明并入
 	if len(pf.Plugins) > 0 {
 		slog.Info("插件已装配", "count", len(pf.Plugins))
 	}
@@ -273,58 +244,35 @@ func (st *serveSetup) banner(stdout io.Writer) {
 		fmt.Fprintf(stdout, "  全局代理: %s\n", netproxy.Redact(st.settings.GlobalProxy))
 	}
 	fmt.Fprintf(stdout, "  端点: /v1/chat/completions · /v1/messages · /healthz · /api/state · /api/trace\n")
-	fmt.Fprintf(stdout, "  控制台: %s（总览/Provider/路由/观测/派发；管理 API /api/config/* · /api/reload）\n", consoleURL)
+	fmt.Fprintf(stdout, "  控制台: %s（总览/Provider/路由/观测；管理 API /api/config/* · /api/reload）\n", consoleURL)
 	if st.settings.L1Classifier != "" {
 		fmt.Fprintf(stdout, "  L1 分类: %s（超时 %s）\n", st.settings.L1Classifier, l1TimeoutOrDefault(st.settings))
 	}
 }
 
-// wireDesktopHooks 装配桌面壳事件（M9-W4）：派发终态气泡（链式接在
-// 派发 trace 观察者之后，观察者语义不破坏）+ 上游账号休眠气泡。n 为
+// wireDesktopHooks 装配桌面壳事件（M9-W4）：上游账号休眠气泡。n 为
 // 通知器（settings.notify 关闭时为禁用态 notifier，send 空操作）。
 func (st *serveSetup) wireDesktopHooks(n *notifier) {
-	if st.disp != nil {
-		prev := st.disp.OnFinish
-		st.disp.OnFinish = func(s *dispatch.Session) {
-			if prev != nil {
-				prev(s)
-			}
-			title := "派发完成"
-			if s.Status != "done" {
-				title = "派发" + s.Status
-			}
-			n.send("dispatch/"+s.ID, title, s.Agent+" · "+firstRunes(s.Task, 48))
-		}
-	}
 	st.srv.OnAccountRest = func(key, reason string) {
 		n.send("rest/"+key, "上游账号休眠", key+" · "+reason)
 	}
 }
 
-// firstRunes 截取前 n 个 rune（通知正文摘要；超长加省略号）。
-func firstRunes(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
+// orDefaultStr 空串回退默认值（CLI 参数缺省展示）。
+func orDefaultStr(v, def string) string {
+	if strings.TrimSpace(v) == "" {
+		return def
 	}
-	return string(r[:n]) + "…"
+	return v
 }
 
-// trayStatus 托盘状态摘要行（30s 刷新）：休眠账号数 + 派发进行中。
+// trayStatus 托盘状态摘要行（30s 刷新）：休眠账号数。
 func (st *serveSetup) trayStatus() string {
 	resting := len(st.srv.Planner.Resting())
-	running := 0
-	if st.disp != nil {
-		for _, s := range st.disp.Sessions() {
-			if s.Status == "running" {
-				running++
-			}
-		}
-	}
-	if resting == 0 && running == 0 {
+	if resting == 0 {
 		return "网关正常 · 无休眠账号"
 	}
-	return fmt.Sprintf("休眠 %d · 派发 %d 进行中", resting, running)
+	return fmt.Sprintf("休眠 %d", resting)
 }
 
 // trayUpdateLabel 托盘升级菜单项文本（M9-W4）：有新版本返回「升级到

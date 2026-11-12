@@ -1,14 +1,12 @@
-// 插件子系统与网关的接缝（M7-W3/W4/W5）：Server 持有 plugin.Registry，
+// 插件子系统与网关的接缝（M7-W3/W5）：Server 持有 plugin.Registry，
 // 管理面（状态/启停）、配置写路径（PUT /api/config/plugins 校验闸+热
-// 替换）与三类钩子桥（派发解析/意图兜底/厂商特判）。
+// 替换）与 trace 事件扇出、意图声明并入。
 package gateway
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 
-	"yardmaster/internal/dispatch"
 	"yardmaster/internal/plugin"
 )
 
@@ -20,8 +18,8 @@ func (s *Server) AttachPlugins(r *plugin.Registry) {
 		return
 	}
 	s.Plugins = r
-	// 插件声明意图并入词表（声明即同步）：路由页分配表、插件分类兜底
-	// 校验（classifyIntentWithPlugin）与 GET /api/plugins 视图同一口径。
+	// 插件声明意图并入词表（声明即同步）：路由页分配表与 GET /api/plugins
+	// 视图同一口径。
 	if s.Intents != nil {
 		s.Intents.WithPluginIntents(r.DeclaredIntents)
 	}
@@ -32,31 +30,6 @@ func (s *Server) AttachPlugins(r *plugin.Registry) {
 				prev(tr)
 			}
 			r.TraceEvent(tr)
-		}
-	}
-	// 派发输出解析钩子（M7-W4）：agent 条目 parser 指向插件 id；
-	// 插件不可用/响应非法 → false（该行 raw 回退，M6-W3 纪律不变）。
-	if s.Dispatch != nil {
-		s.Dispatch.ParseHook = func(pluginID, line string) ([]dispatch.Event, bool) {
-			raw, err := r.ParseLine(pluginID, line)
-			if err != nil {
-				return nil, false
-			}
-			var out struct {
-				Events []dispatch.Event `json:"events"`
-			}
-			if json.Unmarshal(raw, &out) != nil || len(out.Events) == 0 {
-				return nil, false
-			}
-			for _, ev := range out.Events { // 词表外 kind 拒收（读不懂=未知）
-				switch ev.Kind {
-				case dispatch.EventInit, dispatch.EventText, dispatch.EventTool,
-					dispatch.EventToolRes, dispatch.EventResult, dispatch.EventRaw:
-				default:
-					return nil, false
-				}
-			}
-			return out.Events, true
 		}
 	}
 }
@@ -106,23 +79,4 @@ func (s *Server) handlePluginToggle(w http.ResponseWriter, id, action string) {
 	}
 	s.Plugins.Reload(f)
 	writeJSON(w, map[string]any{"ok": true, "effect": effectImmediate, "id": id, "enabled": action == "enable"})
-}
-
-// classifyIntentWithPlugin 意图分类兜底（M7-W4）：内置链未命中时问插件
-// （300ms+熔断在 Registry 内）；词表外 intent 不采纳；无插件/失败=空
-// intent（回落默认组）。
-func (s *Server) classifyIntentWithPlugin(task string) string {
-	if s.Plugins == nil {
-		return ""
-	}
-	intent, ok := s.Plugins.ClassifyIntent(task)
-	if !ok {
-		return ""
-	}
-	for _, v := range s.Intents.Vocabulary() {
-		if v == intent {
-			return intent
-		}
-	}
-	return ""
 }

@@ -52,21 +52,6 @@ func TestNotifierDisabled(t *testing.T) {
 	nilN.send("k", "t", "m") // nil 安全：不 panic 不发送
 }
 
-func TestFirstRunes(t *testing.T) {
-	if got := firstRunes("短任务", 48); got != "短任务" {
-		t.Fatalf("短文本应原样: %q", got)
-	}
-	long := make([]rune, 60)
-	for i := range long {
-		long[i] = 'a'
-	}
-	got := firstRunes(string(long), 48)
-	gr := []rune(got)
-	if len(gr) != 49 || gr[48] != '…' {
-		t.Fatalf("超长应截断加省略号: len=%d", len(gr))
-	}
-}
-
 // settings.notify 指针语义：nil=缺省开启，false=显式关闭。
 func TestSettingsNotifyEnabled(t *testing.T) {
 	var s store.Settings

@@ -66,7 +66,7 @@ func TestPluginHelperProcess(t *testing.T) {
 	in.Buffer(make([]byte, 0, 64<<10), 1<<20)
 	switch behavior {
 	case "ok":
-		out(map[string]any{"plugin": "ok", "proto": 1, "capabilities": []string{CapEvents, CapDispatch}})
+		out(map[string]any{"plugin": "ok", "proto": 1, "capabilities": []string{CapEvents}})
 		in.Scan() // 父回执
 		for in.Scan() {
 			var env struct {
@@ -80,9 +80,6 @@ func TestPluginHelperProcess(t *testing.T) {
 			switch env.Type {
 			case "event":
 				fmt.Fprintln(os.Stderr, "got-event")
-			case "parse":
-				out(map[string]any{"v": 1, "type": "resp", "id": env.ID,
-					"payload": map[string]any{"events": []map[string]any{{"kind": "text", "text": "插件解析的文本"}}}})
 			case "ping":
 				out(map[string]any{"v": 1, "type": "pong"})
 			}
@@ -94,7 +91,7 @@ func TestPluginHelperProcess(t *testing.T) {
 	case "nohandshake": // 不握手（握手失败降级载体）
 		time.Sleep(30 * time.Second)
 	case "slow": // 握手后响应挂起（熔断载体）
-		out(map[string]any{"plugin": "slow", "proto": 1, "capabilities": []string{CapDispatch}})
+		out(map[string]any{"plugin": "slow", "proto": 1, "capabilities": []string{CapVendor}})
 		in.Scan()
 		for in.Scan() {
 			var env struct {
@@ -144,11 +141,11 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Fatalf("等待超时: %s", what)
 }
 
-// 端到端：握手（granted=配置∩声明）→ 事件订阅到达 → 解析钩子往返。
+// 端到端：握手（granted=配置∩声明）→ 事件订阅到达。
 func TestPluginLifecycleEndToEnd(t *testing.T) {
 	reg := NewRegistry("")
 	reg.backoff = 10 * time.Millisecond
-	spec := helperSpec(t, "ok", CapEvents, CapDispatch)
+	spec := helperSpec(t, "ok", CapEvents)
 	reg.Start(File{Plugins: []Spec{spec}})
 	defer reg.Stop()
 
@@ -166,8 +163,8 @@ func TestPluginLifecycleEndToEnd(t *testing.T) {
 			view = v
 		}
 	}
-	if len(view.Granted) != 2 {
-		t.Fatalf("granted 应为 2 项能力: %+v", view.Granted)
+	if len(view.Granted) != 1 {
+		t.Fatalf("granted 应为 1 项能力: %+v", view.Granted)
 	}
 
 	// 事件订阅：payload 到达插件（helper 以 stderr 行回执）。
@@ -180,15 +177,6 @@ func TestPluginLifecycleEndToEnd(t *testing.T) {
 		}
 		return false
 	})
-
-	// 解析钩子：请求/响应往返。
-	raw, err := reg.ParseLine("ok", `{"x":1}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(raw), "插件解析的文本") {
-		t.Fatalf("解析响应: %s", string(raw))
-	}
 }
 
 // 崩溃退避重启：握手后自杀 → backoff 10ms → 重建实例回 running；
@@ -236,7 +224,7 @@ func TestPluginHandshakeFailDegraded(t *testing.T) {
 func TestRegistryCooldown(t *testing.T) {
 	reg := NewRegistry("")
 	reg.backoff = 10 * time.Millisecond
-	reg.Start(File{Plugins: []Spec{helperSpec(t, "slow", CapDispatch)}})
+	reg.Start(File{Plugins: []Spec{helperSpec(t, "slow", CapVendor)}})
 	defer reg.Stop()
 
 	waitFor(t, "插件 running", func() bool {
@@ -248,11 +236,11 @@ func TestRegistryCooldown(t *testing.T) {
 		return false
 	})
 	for i := 0; i < 3; i++ {
-		if _, err := reg.RequestByCap(CapDispatch, "parse", map[string]any{"line": "x"}, 100*time.Millisecond); err == nil {
+		if _, err := reg.RequestByCap(CapVendor, "verdict", map[string]any{"status": 500, "body": "x"}, 100*time.Millisecond); err == nil {
 			t.Fatal("挂起插件应超时")
 		}
 	}
-	if _, err := reg.RequestByCap(CapDispatch, "parse", map[string]any{"line": "x"}, 100*time.Millisecond); err != ErrCooldown {
+	if _, err := reg.RequestByCap(CapVendor, "verdict", map[string]any{"status": 500, "body": "x"}, 100*time.Millisecond); err != ErrCooldown {
 		t.Fatalf("第 4 次应 ErrCooldown: %v", err)
 	}
 }

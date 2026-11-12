@@ -1,7 +1,6 @@
-// M7-W3/W4 插件接缝测试：配置闸（cfgPlugins 严格解析/校验/热替换）、
+// M7-W3/W5 插件接缝测试：配置闸（cfgPlugins 严格解析/校验/热替换）、
 // 管理面（状态视图/启停/404/未挂载）、trace 扇出链（prev 观察者不中
-// 断、事件到达插件）、W4 三桥（dispatch.parse 词表校验回退、classify
-// 词表校验、未挂载安全降级）。假插件用测试二进制自身（helper 进程，
+// 断、事件到达插件）。假插件用测试二进制自身（helper 进程，
 // 与 internal/plugin 同模式）。
 package gateway
 
@@ -18,7 +17,6 @@ import (
 	"testing"
 	"time"
 
-	"yardmaster/internal/dispatch"
 	"yardmaster/internal/plugin"
 	"yardmaster/internal/store"
 )
@@ -26,7 +24,6 @@ import (
 // TestGatewayPluginHelperProcess 不是真正的测试：作为假插件子进程运行。
 // 能力声明经 GO_GW_PLUGIN_CAPS（逗号分隔）；行为：
 //   - event  → stderr 打 "got-event"（trace 扇出断言载体）
-//   - parse  → 返回 events[{kind: GO_GW_PLUGIN_PARSE_KIND（默认 text）}]
 //   - classify → 返回 {intent: GO_GW_PLUGIN_INTENT}
 func TestGatewayPluginHelperProcess(t *testing.T) {
 	if os.Getenv("GO_GW_PLUGIN_HELPER") != "1" {
@@ -58,13 +55,6 @@ func TestGatewayPluginHelperProcess(t *testing.T) {
 		switch env.Type {
 		case "event":
 			fmt.Fprintln(os.Stderr, "got-event")
-		case "parse":
-			kind := os.Getenv("GO_GW_PLUGIN_PARSE_KIND")
-			if kind == "" {
-				kind = "text"
-			}
-			out(map[string]any{"v": 1, "type": "resp", "id": env.ID,
-				"payload": map[string]any{"events": []map[string]any{{"kind": kind, "text": "插件解析的文本"}}}})
 		case "classify":
 			out(map[string]any{"v": 1, "type": "resp", "id": env.ID,
 				"payload": map[string]any{"intent": os.Getenv("GO_GW_PLUGIN_INTENT")}})
@@ -297,76 +287,6 @@ func TestPluginsViewToggleAndTrace(t *testing.T) {
 		t.Fatalf("未挂载应 400: %d", r2.StatusCode)
 	}
 	r2.Body.Close()
-}
-
-// W4：dispatch.parse 桥——合法 kind 采纳、词表外/未知插件回退 false。
-func TestParseHookBridge(t *testing.T) {
-	reg, stop := startTestPlugins(t,
-		helperSpec("p-ok", []string{plugin.CapDispatch}),
-		helperSpec("p-bad", []string{plugin.CapDispatch}, "GO_GW_PLUGIN_PARSE_KIND=nope"))
-	t.Cleanup(stop)
-
-	s := &Server{Planner: NewPlanner(nil, nil), Version: "t"}
-	s.Dispatch = dispatch.NewEngine(nil)
-	s.AttachPlugins(reg)
-	waitRunning(t, reg, "p-ok")
-	waitRunning(t, reg, "p-bad")
-
-	evs, ok := s.Dispatch.ParseHook("p-ok", `{"type":"assistant"}`)
-	if !ok || len(evs) != 1 || evs[0].Kind != dispatch.EventText || evs[0].Text != "插件解析的文本" {
-		t.Fatalf("合法解析: ok=%v %+v", ok, evs)
-	}
-	if _, ok := s.Dispatch.ParseHook("p-bad", "x"); ok {
-		t.Fatal("词表外 kind 应回退 false")
-	}
-	if _, ok := s.Dispatch.ParseHook("ghost", "x"); ok {
-		t.Fatal("未知插件应回退 false")
-	}
-	// 未挂载插件注册表：ParseHook 为 nil（AttachPlugins 未调用）。
-	s2 := &Server{Dispatch: dispatch.NewEngine(nil)}
-	if s2.Dispatch.ParseHook != nil {
-		t.Fatal("未挂载时 ParseHook 应为 nil")
-	}
-}
-
-// W4：classify 桥——词表内采纳、词表外/超时/未挂载回落空（默认组）。
-func TestClassifyIntentBridge(t *testing.T) {
-	reg, stop := startTestPlugins(t,
-		helperSpec("cls-ok", []string{plugin.CapClassify}, "GO_GW_PLUGIN_INTENT=coding"),
-		helperSpec("cls-bad", []string{plugin.CapClassify}, "GO_GW_PLUGIN_INTENT=not-a-word"))
-	t.Cleanup(stop)
-
-	dir := t.TempDir()
-	s := &Server{Planner: NewPlanner(nil, nil), Version: "t", AppDir: dir}
-	s.Intents = NewIntentChain(filepath.Join(dir, "intents.json"), "", 0, nil)
-	s.AttachPlugins(reg)
-	waitRunning(t, reg, "cls-ok")
-	waitRunning(t, reg, "cls-bad")
-
-	if got := s.classifyIntentWithPlugin("写个函数"); got != "coding" {
-		t.Fatalf("词表内 intent 应采纳: %q", got)
-	}
-	if got := s.classifyIntentWithPlugin("写个函数"); got != "coding" {
-		t.Fatalf("第二次仍应命中: %q", got)
-	}
-	// cls-bad 排在 cls-ok 后；把 cls-ok 不可达才能打到 cls-bad——直接用
-	// 未挂载注册表的 server 验证词表外拒收的另一路径：临时构造仅含 bad。
-	reg2, stop2 := startTestPlugins(t, helperSpec("cls-bad", []string{plugin.CapClassify}, "GO_GW_PLUGIN_INTENT=not-a-word"))
-	t.Cleanup(stop2)
-	s2 := &Server{Planner: NewPlanner(nil, nil), Version: "t", AppDir: dir}
-	s2.Intents = NewIntentChain(filepath.Join(dir, "intents.json"), "", 0, nil)
-	s2.AttachPlugins(reg2)
-	waitRunning(t, reg2, "cls-bad")
-	if got := s2.classifyIntentWithPlugin("x"); got != "" {
-		t.Fatalf("词表外 intent 应拒收: %q", got)
-	}
-
-	// 无 Intents 链（nil 接收者）不崩、词表空 → 一律拒收。
-	s3 := &Server{Planner: NewPlanner(nil, nil), Version: "t"}
-	s3.Plugins = reg
-	if got := s3.classifyIntentWithPlugin("x"); got != "" {
-		t.Fatalf("nil Intents 应拒收: %q", got)
-	}
 }
 
 // LOW-1 回归：serve 启动时 plugins.json 为空——装配期空清单也 Start 并

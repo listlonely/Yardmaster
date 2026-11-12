@@ -33,7 +33,7 @@ func TestPluginCLIFlow(t *testing.T) {
 	home := testenv.New(t)
 	writePluginFile(t, home, `{"plugins":[
 		{"id":"logger","enabled":true,"command":["node","examples/trace-logger.mjs"],"capabilities":["events.trace"]},
-		{"id":"parser","enabled":false,"command":["node","x.mjs"],"capabilities":["dispatch.parse"]},
+		{"id":"parser","enabled":false,"command":["node","x.mjs"],"capabilities":["classify.intent"]},
 		{"id":"helper","enabled":true,"command":["x"],"capabilities":["classify.intent"]}
 	]}`)
 

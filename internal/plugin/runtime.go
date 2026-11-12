@@ -764,34 +764,6 @@ func (r *Registry) record(cap string, ok bool) {
 	}
 }
 
-// ClassifyIntent 意图分类兜底（L1 不可用/冷却时由网关调用）；intent 由
-// 调用方按词表校验（读不懂=不采纳）。
-func (r *Registry) ClassifyIntent(text string) (string, bool) {
-	raw, err := r.RequestByCap(CapClassify, "classify", map[string]any{"text": text}, 300*time.Millisecond)
-	if err != nil {
-		return "", false
-	}
-	var out struct {
-		Intent string `json:"intent"`
-	}
-	if json.Unmarshal(raw, &out) != nil || out.Intent == "" {
-		return "", false
-	}
-	return out.Intent, true
-}
-
-// ParseLine 派发输出解析钩子：返回原始 payload（{"events":[…]}），由
-// 调用方（gateway）反序列化为 dispatch.Event——本包不依赖 dispatch。
-func (r *Registry) ParseLine(pluginID, line string) (json.RawMessage, error) {
-	r.mu.Lock()
-	p := r.plugins[pluginID]
-	r.mu.Unlock()
-	if p == nil || !p.running() || !p.hasCap(CapDispatch) {
-		return nil, ErrNoPlugin
-	}
-	return p.Request("parse", map[string]any{"line": line}, p.timeout())
-}
-
 // VendorVerdict 响应特判钩子：{status, body≤8KB} → verdict payload 原文
 // （调用方解析 action）。
 func (r *Registry) VendorVerdict(status int, body []byte) (json.RawMessage, error) {

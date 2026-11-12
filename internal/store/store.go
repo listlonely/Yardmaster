@@ -34,12 +34,6 @@ func (p Paths) ProvidersPath() string { return filepath.Join(p.AppDir, "provider
 // TraceDir 返回决策记录目录（保留 30 天，F9）。
 func (p Paths) TraceDir() string { return filepath.Join(p.AppDir, "trace") }
 
-// DispatchSessionsPath 返回派发会话持久化文件（M6-W2；与 trace 同目录、
-// 同 30 天留存策略）。
-func (p Paths) DispatchSessionsPath() string {
-	return filepath.Join(p.TraceDir(), "dispatch-sessions.jsonl")
-}
-
 // IntentsPath 返回 intents.json 路径（用户自定义识别策略，PRD F8）。
 func (p Paths) IntentsPath() string { return filepath.Join(p.AppDir, "intents.json") }
 
@@ -51,9 +45,6 @@ func (p Paths) KeysPath() string { return filepath.Join(p.AppDir, "keys.json") }
 
 // PricingPath 返回 pricing.json 路径（模型单价表，M2-W4）。
 func (p Paths) PricingPath() string { return filepath.Join(p.AppDir, "pricing.json") }
-
-// DispatchPath 返回 dispatch.json 路径（任务→Agent 派发配置，M5-W4）。
-func (p Paths) DispatchPath() string { return filepath.Join(p.AppDir, "dispatch.json") }
 
 // PluginsPath 返回 plugins.json 路径（插件清单，M7-W3）。
 func (p Paths) PluginsPath() string { return filepath.Join(p.AppDir, "plugins.json") }

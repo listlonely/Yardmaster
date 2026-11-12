@@ -20,7 +20,7 @@ func TestCorePackagesNoWailsDependency(t *testing.T) {
 		t.Fatalf("定位模块根: %v", err)
 	}
 	for _, pkg := range []string{
-		"./internal/gateway", "./internal/store", "./internal/dispatch",
+		"./internal/gateway", "./internal/store",
 		"./internal/plugin", "./internal/otlp", "./internal/credential",
 		"./internal/netproxy",
 	} {

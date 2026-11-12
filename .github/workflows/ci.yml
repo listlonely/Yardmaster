@@ -23,7 +23,7 @@ jobs:
       # 单测 TestCorePackagesNoWailsDependency。
       - if: matrix.os == 'ubuntu-latest'
         run: |
-          go list -deps ./internal/gateway ./internal/store ./internal/dispatch ./internal/plugin ./internal/otlp ./internal/credential ./internal/netproxy > /tmp/core-deps.txt
+          go list -deps ./internal/gateway ./internal/store ./internal/plugin ./internal/otlp ./internal/credential ./internal/netproxy > /tmp/core-deps.txt
           if grep -q wailsapp /tmp/core-deps.txt; then
             echo "::error::wails 泄漏进网关核心依赖链（铁律 app.md §三）"
             exit 1

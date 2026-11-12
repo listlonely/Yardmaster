@@ -89,6 +89,14 @@ func newGateway(t *testing.T, prov provider.Provider) *httptest.Server {
 	return srv
 }
 
+// decodeInto 把响应体 JSON 解码到 v（失败即 Fatal；原 m5w5 helper 迁入）。
+func decodeInto(t *testing.T, r io.Reader, v any) {
+	t.Helper()
+	if err := json.NewDecoder(r).Decode(v); err != nil {
+		t.Fatalf("响应解析失败: %v", err)
+	}
+}
+
 func post(t *testing.T, url, path, body string) *http.Response {
 	t.Helper()
 	resp, err := http.Post(url+path, "application/json", strings.NewReader(body))
