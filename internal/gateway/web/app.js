@@ -2167,9 +2167,11 @@ function renderAgentList(agents) {
       a.default ? '兜底' : '',
       a.output === 'jsonl' ? 'jsonl' : '',
       a.parser ? `parser:${a.parser}` : '',
+      a.match && a.match.intents && a.match.intents.length ? `intents=${a.match.intents.join('|')}` : '',
       a.match && a.match.intent ? `intent=${a.match.intent}` : '',
       a.match && a.match.prompt_regex ? 'prompt~' : '',
       a.match && a.match.model_regex ? 'model~' : '',
+      a.models && a.models.length ? `专属链×${a.models.length}` : '',
     ].filter(Boolean).join(' · ');
     const meta = [
       cmd.length > 90 ? cmd.slice(0, 90) + '…' : cmd,
@@ -2190,23 +2192,37 @@ function renderAgentList(agents) {
   }).join('') || listEmpty('暂无 Agent——派发将不可用；点「＋ 新建 Agent」添加');
 }
 
-function agentModal(existing) {
+async function agentModal(existing) {
   const isEdit = !!existing;
   const a = existing || {};
+  // 旧单值 intent 迁移进多意图输入（保存后统一写 match.intents）
+  const presetIntents = [...((a.match && a.match.intents) || []),
+    ...((a.match && a.match.intent) ? [a.match.intent] : [])];
+  // 服务商模型清单（链构建下拉数据源；GET 脱敏不影响 models 清单）
+  let provs = [];
+  try {
+    const r = await api('/api/config/providers');
+    provs = (r.providers || []).map((p) => ({ id: p.id, models: (p.models || []).map((m) => m.id) }));
+  } catch { /* 不可用时链构建退化为纯手填 */ }
+  const provOpts = provs.map((p) => `<option value="${esc(p.id)}">${esc(p.id)}</option>`).join('');
+  agentProvModels = provs; // 链构建下拉联动数据（委托处理器读）
+  const intentChips = ['coding', 'writing', 'vision', 'qa', 'long-context']
+    .map((it) => `<button type="button" class="chip" data-intent-chip="${it}"${presetIntents.includes(it) ? ' style="opacity:0.45"' : ''}>${it}</button>`).join(' ');
   formModal(isEdit ? `编辑 Agent ${a.id}` : '新建 Agent',
     frow('ID', `<input class="field mono" name="id" value="${esc(a.id || '')}" ${isEdit ? 'readonly' : 'required'} spellcheck="false" placeholder="唯一标识，如 claude-code">`) +
     frow('命令', `<textarea class="field mono" name="command" rows="3" required spellcheck="false" placeholder="每行一个参数，如：&#10;claude&#10;-p&#10;--output-format stream-json">${esc((a.command || []).join('\n'))}</textarea>`, '每行一个 argv 参数（空格/引号原样保留）；argv 自身含换行的极端配置不支持') +
     frow('工作目录', `<input class="field mono" name="work_dir" value="${esc(a.work_dir || '')}" spellcheck="false" placeholder="可选；默认网关进程工作目录">`) +
-    frow('环境变量', `<textarea class="field mono" name="env" rows="2" spellcheck="false" placeholder="每行一个 KEY=VALUE">${esc((a.env || []).join('\n'))}</textarea>`, '每行一个环境变量（原样显示，本机明文配置）') +
+    frow('环境变量', `<textarea class="field mono" name="env" rows="3" spellcheck="false" placeholder="每行一个 KEY=VALUE">${esc((a.env || []).join('\n'))}</textarea>`, '回环调 LLM 须配网关命名令牌（设置页生成后填 ANTHROPIC_AUTH_TOKEN=<令牌>），否则 Agent 请求会 401；值支持 {model} 占位') +
     frow('超时', `<input class="field mono" name="timeout" value="${esc(a.timeout || '')}" placeholder="如 10m / 30s / 1h；空 = 缺省">`) +
     frow('最大并发', `<input class="field" name="max_concurrent" type="number" min="0" step="1" value="${a.max_concurrent || ''}" placeholder="默认 1">`) +
     frow('输出格式', `<select class="sel" name="output"><option value="">自动（text）</option><option value="text"${a.output === 'text' ? ' selected' : ''}>text · 纯文本</option><option value="jsonl"${a.output === 'jsonl' ? ' selected' : ''}>jsonl · stream-json 事件流</option></select>`) +
     frow('解析插件', `<input class="field mono" name="parser" value="${esc(a.parser || '')}" spellcheck="false" placeholder="可选；输出解析插件 id，不可用=该行 raw 回退">`) +
     frow('兜底', `<label class="switch-line"><input type="checkbox" name="default"${a.default ? ' checked' : ''}><span>无匹配规则时使用（至多一个）</span></label>`) +
-    frow('match · intent', `<input class="field mono" name="m_intent" value="${esc((a.match && a.match.intent) || '')}" spellcheck="false" placeholder="意图精确等于；可选">`) +
+    frow('match · intents（侧重）', `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">${intentChips}</div><input class="field mono" name="m_intents" value="${esc(presetIntents.join(','))}" spellcheck="false" placeholder="逗号分隔，任一命中即用本 Agent">`, '多意图任一命中（Agent 侧重）；chips 点击快捷增删') +
     frow('match · model_regex', `<input class="field mono" name="m_model" value="${esc((a.match && a.match.model_regex) || '')}" spellcheck="false" placeholder="请求模型正则；可选">`) +
     frow('match · prompt_regex', `<input class="field mono" name="m_prompt" value="${esc((a.match && a.match.prompt_regex) || '')}" spellcheck="false" placeholder="任务文本正则；可选">`,
-      '全部留空且不勾兜底 = 仅显式指定时可用'),
+      '意图与正则全部留空且不勾兜底 = 仅显式指定时可用') +
+    frow('模型分配（专属链）', `<div style="display:flex;gap:6px;margin-bottom:6px"><select class="sel" id="mp-provider"><option value="">选服务商…</option>${provOpts}</select><select class="sel" id="mp-model"><option value="">选模型…</option></select><button type="button" class="text add" data-model-add>＋添加</button></div><textarea class="field mono" name="models" rows="3" spellcheck="false" placeholder="每行一个 provider/model，自上而下依次分配">${esc((a.models || []).join('\n'))}</textarea>`, '保存后自动落地为专属路由组 agent-<id>（order），Agent 的 LLM 请求经 ANTHROPIC_MODEL 注入按链分配；仅 Anthropic 系 agent（claude-code）读此注入'),
   async (form) => {
     const v = formVals(form);
     const id = (v.id || '').trim();
@@ -2220,6 +2236,12 @@ function agentModal(existing) {
     const mModel = (v.m_model || '').trim(), mPrompt = (v.m_prompt || '').trim();
     for (const [name, re] of [['model_regex', mModel], ['prompt_regex', mPrompt]]) {
       if (re) { try { new RegExp(re); } catch { throw new Error(`match.${name} 正则非法: ${re}`); } }
+    }
+    const intents = (v.m_intents || '').split(/[\s,，、]+/).map((s) => s.trim()).filter(Boolean);
+    const models = linesOf(v.models);
+    for (const m of models) {
+      const [p, mo, rest] = m.split('/');
+      if (!p || !mo || rest !== undefined) throw new Error(`专属链成员须为 provider/model 两段: ${m}`);
     }
     const rawEnv = linesOf(v.env);
     const env = rawEnv.filter((l) => l.includes('='));
@@ -2235,8 +2257,9 @@ function agentModal(existing) {
       ...(v.output ? { output: v.output } : {}),
       ...(v.parser.trim() ? { parser: v.parser.trim() } : {}),
       ...(isDefault ? { default: true } : {}),
-      ...((v.m_intent || '').trim() || mModel || mPrompt ? { match: {
-        ...((v.m_intent || '').trim() ? { intent: v.m_intent.trim() } : {}),
+      ...(models.length ? { models } : {}),
+      ...(intents.length || mModel || mPrompt ? { match: {
+        ...(intents.length ? { intents } : {}),
         ...(mModel ? { model_regex: mModel } : {}),
         ...(mPrompt ? { prompt_regex: mPrompt } : {}),
       } } : {}),
@@ -2293,6 +2316,44 @@ $('list-agents').addEventListener('click', async (e) => {
   if (e.target.classList.contains('del')) deleteAgent(id);
 });
 $('btn-agent-add').addEventListener('click', () => agentModal(null));
+
+// agentProvModels：Agent 模态链构建器的服务商模型清单（agentModal 渲染时刷新）
+let agentProvModels = [];
+
+// Agent 模态的意图 chips 与专属链构建器（document 级委托——模态动态注入）
+document.addEventListener('click', (e) => {
+  const chip = e.target.dataset && e.target.dataset.intentChip;
+  if (chip) {
+    const form = e.target.closest('form');
+    const inp = form && form.querySelector('[name="m_intents"]');
+    if (!inp) return;
+    const set = new Set(inp.value.split(/[\s,，、]+/).map((s) => s.trim()).filter(Boolean));
+    if (set.has(chip)) { set.delete(chip); e.target.style.opacity = ''; }
+    else { set.add(chip); e.target.style.opacity = '0.45'; }
+    inp.value = [...set].join(',');
+    return;
+  }
+  if (e.target.dataset && e.target.dataset.modelAdd) {
+    const form = e.target.closest('form');
+    const p = form && form.querySelector('#mp-provider');
+    const m = form && form.querySelector('#mp-model');
+    const ta = form && form.querySelector('[name="models"]');
+    if (!p || !m || !ta || !p.value || !m.value) return;
+    const line = p.value + '/' + m.value;
+    const cur = linesOf(ta.value);
+    if (cur.includes(line)) { status('该模型已在链中', 'err'); return; }
+    ta.value = [...cur, line].join('\n');
+  }
+});
+document.addEventListener('change', (e) => {
+  if (!e.target || e.target.id !== 'mp-provider') return;
+  const form = e.target.closest('form');
+  const sel = form && form.querySelector('#mp-model');
+  if (!sel) return;
+  const prov = agentProvModels.find((p) => p.id === e.target.value);
+  sel.innerHTML = '<option value="">选模型…</option>' +
+    (prov ? prov.models.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join('') : '');
+});
 
 async function loadDispatchTemplates() {
   try {

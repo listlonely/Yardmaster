@@ -32,10 +32,11 @@ type Spec struct {
 	ID            string        `json:"id"`                       // 唯一标识（trace/会话引用）
 	Command       []string      `json:"command"`                  // argv 模板；占位 {model}（任务文本恒走 stdin，不进 argv）
 	WorkDir       string        `json:"work_dir,omitempty"`       // 空 = 当前目录
-	Env           []string      `json:"env,omitempty"`            // 附加环境变量（KEY=VAL；继承父进程环境）
+	Env           []string      `json:"env,omitempty"`            // 附加环境变量（KEY=VAL；继承父进程环境；值支持 {model} 占位）
 	Timeout       time.Duration `json:"timeout,omitempty"`        // 0 = DefaultTimeout
 	MaxConcurrent int           `json:"max_concurrent,omitempty"` // 0 = 1
 	Parser        string        `json:"parser,omitempty"`         // 输出解析插件 id（M7-W4；空=内置词表）
+	AgentModel    string        `json:"agent_model,omitempty"`    // 专属模型组（2026-11-12）：非空注入 ANTHROPIC_MODEL（后写覆盖 env 底稿——UI 显式声明优先）
 }
 
 // Outcome 是一次 headless 会话的归一结局。
@@ -91,9 +92,15 @@ func Run(ctx context.Context, spec Spec, task, model string, out io.Writer) Resu
 	if spec.WorkDir != "" {
 		cmd.Dir = spec.WorkDir
 	}
-	if len(spec.Env) > 0 {
-		cmd.Env = append(os.Environ(), spec.Env...)
+	// env 装配：父环境 → spec.Env（{model} 占位展开）→ 专属模型组注入
+	//（ANTHROPIC_MODEL 后写覆盖——Agent 链是 UI 显式声明，优先于 env 底稿；
+	// 协议差异如实标注：仅 Anthropic 系 agent 读此 env，codex/gemini CLI
+	// 的模型由其自身配置文件决定）。
+	env := append(os.Environ(), expandEnv(spec.Env, model)...)
+	if spec.AgentModel != "" {
+		env = append(env, "ANTHROPIC_MODEL="+spec.AgentModel)
 	}
+	cmd.Env = env
 	cmd.Stdin = strings.NewReader(task)
 
 	stdout := newTailWriter(out)
@@ -159,6 +166,20 @@ func (r Result) ExitCodeOf() int {
 	default: // OutcomeExit：透传 Agent 自身退出码
 		return r.ExitCode
 	}
+}
+
+// expandEnv 把 env 值中的 {model} 占位替换为任务模型（与 argv 的 {model}
+// 同语义——agent 经 env 接收模型的场景，如 OPENAI_MODEL={model}）。
+func expandEnv(entries []string, model string) []string {
+	out := make([]string, len(entries))
+	for i, e := range entries {
+		if k, v, ok := strings.Cut(e, "="); ok {
+			out[i] = k + "=" + strings.ReplaceAll(v, "{model}", model)
+			continue
+		}
+		out[i] = e
+	}
+	return out
 }
 
 // expandArgv 展开 argv 模板占位（{model}；未知占位原样保留——不猜语义）。

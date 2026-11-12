@@ -21,14 +21,20 @@ import (
 // ---------- 配置形态 ----------
 
 // Match 是意图→Agent 的命中条件（全部条件与关系；空 match 仅可显式指定）。
+// Intent（单值）与 Intents（多意图，2026-11-12 Agent 侧重扩展）并存，
+// 命中取并集——一个 Agent 可同时承接多个意图。
 type Match struct {
-	Intent      string `json:"intent,omitempty"`       // 精确等于
-	ModelRegex  string `json:"model_regex,omitempty"`  // 请求模型正则
-	PromptRegex string `json:"prompt_regex,omitempty"` // 任务文本正则
+	Intent      string   `json:"intent,omitempty"`       // 精确等于（单值，兼容保留）
+	Intents     []string `json:"intents,omitempty"`      // 多意图任一命中（Agent 侧重）
+	ModelRegex  string   `json:"model_regex,omitempty"`  // 请求模型正则
+	PromptRegex string   `json:"prompt_regex,omitempty"` // 任务文本正则
 }
 
 // AgentSpec 是 dispatch.json 的一个 Agent 条目（JSON 友好形态：timeout
-// 为字符串时长；运行态经 Runtime() 转为 runner 的 Spec）。
+// 为字符串时长；运行态经 Runtime() 转为 runner 的 Spec）。Models 是
+// Agent 专属模型链（2026-11-12 分配策略）：有序 <provider>/<model> 列表，
+// 写路径联动落地为保留前缀组 agent-<id>（order），runner 启动注入
+// ANTHROPIC_MODEL=agent-<id> → Agent 的 LLM 请求按专属链分配。
 type AgentSpec struct {
 	ID            string   `json:"id"`
 	Command       []string `json:"command"`
@@ -40,7 +46,14 @@ type AgentSpec struct {
 	Parser        string   `json:"parser,omitempty"`         // 输出解析插件 id（M7-W4）；不可用=该行 raw 回退
 	Default       bool     `json:"default,omitempty"`        // 兜底，至多一个
 	Match         *Match   `json:"match,omitempty"`
+	Models        []string `json:"models,omitempty"` // 专属模型链（agent-<id> 组联动）
 }
+
+// AgentGroupPrefix 是派发专属组的保留前缀（服务商页手建组禁用，防冲突）。
+const AgentGroupPrefix = "agent-"
+
+// AgentGroupID 返回该 Agent 专属组的 id（Models 非空时有效）。
+func (a AgentSpec) AgentGroupID() string { return AgentGroupPrefix + a.ID }
 
 // DispatchFile 是 dispatch.json 的文件形态。
 type DispatchFile struct {
@@ -52,6 +65,9 @@ type DispatchFile struct {
 func (a AgentSpec) Runtime() (Spec, error) {
 	spec := Spec{ID: a.ID, Command: a.Command, WorkDir: a.WorkDir, Env: a.Env,
 		MaxConcurrent: a.MaxConcurrent, Parser: a.Parser}
+	if len(a.Models) > 0 {
+		spec.AgentModel = a.AgentGroupID() // 专属链 → runner 注入 ANTHROPIC_MODEL=agent-<id>
+	}
 	if a.Timeout != "" {
 		d, err := time.ParseDuration(a.Timeout)
 		if err != nil || d <= 0 {
@@ -106,6 +122,17 @@ func ValidateDispatch(f DispatchFile) error {
 						return fmt.Errorf("agent %s 的 %s 正则非法: %w", a.ID, name, err)
 					}
 				}
+			}
+			for _, it := range a.Match.Intents {
+				if strings.TrimSpace(it) == "" {
+					return fmt.Errorf("agent %s 的 match.intents 含空意图", a.ID)
+				}
+			}
+		}
+		for i, m := range a.Models {
+			p, model, ok := strings.Cut(m, "/")
+			if !ok || strings.TrimSpace(p) == "" || strings.TrimSpace(model) == "" {
+				return fmt.Errorf("agent %s 的 models[%d] 须为 <provider>/<model> 两段形态: %q", a.ID, i, m)
 			}
 		}
 	}
@@ -345,6 +372,18 @@ func (e *Engine) Select(id, task, intent, model string) (AgentSpec, error) {
 func matchHits(m *Match, task, intent, model string) bool {
 	if m.Intent != "" && m.Intent != intent {
 		return false
+	}
+	if len(m.Intents) > 0 {
+		hit := false
+		for _, it := range m.Intents {
+			if it == intent {
+				hit = true
+				break
+			}
+		}
+		if !hit {
+			return false
+		}
 	}
 	if m.ModelRegex != "" && !regexHits(m.ModelRegex, model) {
 		return false

@@ -134,6 +134,28 @@ stdout，结果与耗时留痕。与 `internal/agent` 接线子系统协同成�
 - 动态校验替代静态 sha256：包随代码提交（无发布死锁），HTTPS 直链 +
   zip 结构 + manifest 一致性白名单足够；包内容变更 = 代码提交可追溯。
 
+## 五·乙、Agent 侧重与专属模型链（2026-11-12）
+
+- **Agent 侧重 = 多意图**：`match.intents` 数组任一命中（旧 `intent`
+  单值兼容保留、并集生效）——一个 Agent 可同时承接 coding+qa 等多个
+  意图；UI 模态 intents 输入 + 内置意图 chips 快捷增删。
+- **Agent 专属模型链**：`models` 数组（有序 `<provider>/<model>`）——
+  cfgDispatch 写路径**联动落地**为 providers.json 保留前缀组
+  `agent-<id>`（strategy=order）+ Planner 热替换；成员不存在 → 400
+  拒绝整个 dispatch 保存（fail-closed，原子性）；链清空/Agent 删除 →
+  组删除（rules.json 若引用 group/agent-\<id\> 会悬空，Plan 404 软
+  失败——链策略被放弃即预期）。`agent-` 前缀为派发保留，服务商页手
+  建组禁用。
+- **注入语义**：runner 启动时 `models` 非空 → env 注入
+  `ANTHROPIC_MODEL=agent-<id>`（后写覆盖 spec.Env 底稿——UI 显式声明
+  优先）；`spec.Env` 值支持 `{model}` 占位展开（与 argv 同语义）。
+  **协议差异如实标注**：仅 Anthropic 系 agent（claude-code）读此 env；
+  codex（config.toml）/gemini（settings.json+env 文件）CLI 的模型由
+  其自身配置决定——链绑定对它们需 CLI 配置指向网关后经路由规则配合。
+- **派发回环令牌**：Agent env 的 ANTHROPIC_AUTH_TOKEN 须配网关命名令
+  牌（设置页生成），占位值（如 local-dispatch）会 401——模态 env 提
+  示已注明。
+
 ## 六、事件视图（M6-W3）[2026-11-02-事件级实时]
 
 - Claude Code 实测事件词表（stream-json，W3 事件解析词表依据）：

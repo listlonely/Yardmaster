@@ -254,6 +254,22 @@
 > 包更新提交后短窗口内安装可能拿到旧包，重试即可（cache-bust 留下次
 > 发版捎带）。genwinres appVersion → 0.1.8。
 
+> [2026-11-12-派发链路增强：Agent 侧重与专属模型链] 用户大模块「任务
+> →按侧重匹配 Agent→Agent 的 LLM 走专属分配策略」：① match.intents
+> 多意图（旧单值兼容并集）；② AgentSpec.models 专属链（有序
+> provider/model）**联动落地**为 providers.json 保留前缀组 agent-<id>
+>（order）——Planner 零改动复用全套组机制（轮换/休眠/粘性），成员
+> 存在性 fail-closed（400 拒整个 dispatch 保存=原子性）、清链/删
+> Agent 联动删组（rules 引用悬空=Plan 404 软失败，预期）；③ runner
+> 注入 ANTHROPIC_MODEL=agent-<id>（后写覆盖 env 底稿）+ spec.Env
+> {model} 占位展开——**仅 Anthropic 系生效**（codex/gemini CLI 模型
+> 由其自身配置决定，如实标注）；④ UI：Agent 模态 intents chips +
+> 专属链构建器（provider→model 联动下拉＋添加，textarea 直编）+
+> 回环令牌提示（ANTHROPIC_AUTH_TOKEN 占位会 401——smoke agent 不调
+> LLM 故从未暴露的隐藏坑，本次模态注明）。测试：dispatch_models_test
+> （组建/改/删全周期+热替换 Plan+未知成员 400+Intents 命中+Runtime
+> AgentModel）。genwinres appVersion → 0.1.9。
+
 ## 一、目标与边界
 
 兑现 2026-10-30 桌面壳两步走决策第二步：Windows app 模式以 Wails v3
