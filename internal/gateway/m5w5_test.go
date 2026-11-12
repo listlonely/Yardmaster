@@ -185,7 +185,9 @@ func TestDispatchCancelRunningSession(t *testing.T) {
 func TestDispatchConfigPutRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	engine := dispatch.NewEngine(nil)
-	s := &Server{Planner: NewPlanner(nil, nil), Version: "t", AppDir: dir, Dispatch: engine}
+	// ProvidersPath 需真实可写（cfgDispatch PUT 的组联动会写 providers.json）
+	s := &Server{Planner: NewPlanner(nil, nil), Version: "t", AppDir: dir,
+		ProvidersPath: dir + string(os.PathSeparator) + "providers.json", Dispatch: engine}
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
 

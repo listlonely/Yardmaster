@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"yardmaster/internal/dispatch"
@@ -23,7 +22,8 @@ func newModelsServer(t *testing.T, dispatchSeed string) (*Server, *httptest.Serv
 	appDir := t.TempDir()
 	seed := store.ProvidersFile{Providers: []provider.Provider{{
 		ID: "prov", Name: "T", Protocol: provider.ProtocolChat, BaseURL: "https://up.test",
-		Models: []provider.Model{{ID: "m1"}, {ID: "m2"}},
+		Models:   []provider.Model{{ID: "m1"}, {ID: "m2"}},
+		Accounts: []provider.Account{{Name: "main", APIKey: "k"}},
 	}}}
 	provPath := filepath.Join(appDir, "providers.json")
 	if err := store.SaveProvidersFile(provPath, seed); err != nil {
@@ -87,7 +87,7 @@ func TestDispatchModelsUnknownMember(t *testing.T) {
 
 // TestDispatchModelsIntentsMatch：Match.Intents 多意图任一命中；单值 Intent 并存兼容。
 func TestDispatchModelsIntentsMatch(t *testing.T) {
-	s, srv := newModelsServer(t,
+	s, _ := newModelsServer(t,
 		`{"agents":[{"id":"cc","command":["x"],"match":{"intents":["coding","qa"]}},{"id":"wr","command":["y"],"match":{"intent":"writing"}}]}`)
 	for _, tc := range []struct{ intent, want string }{
 		{"coding", "cc"}, {"qa", "cc"}, {"writing", "wr"},
