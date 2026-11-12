@@ -285,6 +285,19 @@
 > 链构建器与 `agentProvModels`/`mp-*` 委托随自建表单一并删除（chips
 > 委托保留、选中态改 data-selected）；gemini-cli 目录条目预置
 > `match.intent=qa`——三家安装即默认可用。不发版（本地验证后另行安排）。
+>
+> **Agent 插件化发布管线（2026-11-12，边界设计 §3.1 落地）**：包
+> manifest/目录条目双写 version（semver）→ install 版本闸三态（同版
+> 409 / 新版覆盖升级——用户超时/并发/env/意图侧重保留、单值 intent
+> 并入保留集 / 旧包 400 拒降级防 CDN 回退）；目录视图 `local_version`
+> + `updated`，UI「Agent 插件」条目显示版本与「更新到 vX」按钮（409/
+> 400 在下载前拦截不触网）。**两层分配模型实证（边界设计 §3.3）**：无
+> 链 Agent（无 models 无 env）的连接与模型来自接线产物（settings.json
+> env，key=gw-<agent>，model=接线 target）→ 网关 rules 兜底命中接管厂
+> 商分配——trace 实证 `rule=fallback-intent route_path=rule` 实际路由
+> 兜底链成员，中文应答正常；语义=意图分配管「任务给谁+流量走哪条链」，
+> 用户端不出现「厂商分配」概念词。三家包重打（manifest 加 version
+> 1.0.0）。不发版。
 
 ## 一、目标与边界
 

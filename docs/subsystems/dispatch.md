@@ -143,6 +143,16 @@ stdout，结果与耗时留痕。与 `internal/agent` 接线子系统协同成�
   coding、gemini=qa）。CLI 与
   `PUT /api/config/dispatch` 全文档契约保留（含 models 专属链与 env
   ——UI 收敛，契约不收）。
+- **插件化发布管线（2026-11-12，Agent插件化发布与本地配置边界设计 §3.1）**：
+  包 manifest 与目录条目双写 `version`（semver 三段，单一事实源在包
+  内——开发端改包必 bump）；install 端点版本闸三态：同版 409 重复安
+  装 / **新版覆盖升级**（只覆盖开发端拥有部分：启动定义/预置侧重/包
+  物化文件；用户超时/并发/env/意图侧重调整原样保留，旧 match 含单值
+  intent 一并并入保留集）/ 旧包 400 拒降级（防 CDN 缓存回退）；升级
+  后落盘 manifest 版本随包更新。目录视图输出 `local_version`/
+  `updated`，UI「Agent 插件」条目显示版本与「更新到 vX」按钮（同一
+  install 端点；版本闸在下载前拦截，409/400 不触网）。升级 ≠ 重装
+  ——用户的设置是用户的。
 
 ## 五·乙、Agent 侧重与专属模型链（2026-11-12）
 
@@ -169,6 +179,18 @@ stdout，结果与耗时留痕。与 `internal/agent` 接线子系统协同成�
 - **派发回环令牌**：Agent env 的 ANTHROPIC_AUTH_TOKEN 须配网关命名令
   牌（设置页生成），占位值（如 local-dispatch）会 401——模态 env 提
   示已注明。
+- **两层分配模型（2026-11-12，边界设计 §3.3）**：意图层（路由页意图
+  分配，用户唯一需要关心的配置面）+ Agent 层（开发端包预置侧重/专属
+  链）。**无链 Agent 复用意图链**：派发 Agent 无 `models` 时 runner
+  不注入 ANTHROPIC_MODEL，CLI 的连接与模型来自接线产物（settings.json
+  env + model，key=`gw-<agent>`）——CLI 报什么模型不重要，网关
+  rules 意图规则（含兜底链）按意图接管厂商分配。**真机实证（隔离
+  home）**：接线 model=glm-coding/glm-4.7 → 兜底规则命中 →
+  trace `rule=fallback-intent route_path=rule` 实际路由
+  siliconflow/deepseek-ai/DeepSeek-V4.1-Flash，中文应答正常（4s）。
+  语义：意图分配管「任务给谁 + 流量走哪条链」，厂商分配默认继承意
+  图链、仅专属链（agent-<id> 组）可覆盖——用户端不出现「厂商分配」
+  概念词。
 
 ## 六、事件视图（M6-W3）[2026-11-02-事件级实时]
 

@@ -5,6 +5,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -71,6 +72,25 @@ func postCatalogInstall(t *testing.T, srv *httptest.Server, id string) (int, []b
 	return resp.StatusCode, b
 }
 
+// withCatalogVersion 临时替换目录条目的发布版本（升级周期测试用）。
+func withCatalogVersion(t *testing.T, id, version string) {
+	t.Helper()
+	orig := dispatch.Catalog()
+	mutated := append([]dispatch.CatalogEntry(nil), orig...)
+	hit := false
+	for i := range mutated {
+		if mutated[i].Spec.ID == id {
+			mutated[i].Version = version
+			hit = true
+		}
+	}
+	if !hit {
+		t.Fatalf("目录缺少条目 %s", id)
+	}
+	dispatch.SetCatalogForTest(mutated)
+	t.Cleanup(func() { dispatch.SetCatalogForTest(orig) })
+}
+
 // TestDispatchCatalogView：目录 3 条 + installed 标注与 dispatch.json 联动。
 // found 断言仅在本机无该 CLI 时强断言 false（CI 环境；装有 claude 的
 // 开发机不做反向断言）。
@@ -121,7 +141,7 @@ func TestDispatchCatalogView(t *testing.T) {
 func TestDispatchCatalogInstallFullChain(t *testing.T) {
 	src := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		pkg := zipBytes(t, map[string]string{
-			"manifest.json": `{"id":"gemini-cli","spec":{"id":"gemini-cli","command":["./run.cmd"],"output":"text"}}`,
+			"manifest.json": `{"id":"gemini-cli","version":"1.0.0","spec":{"id":"gemini-cli","command":["./run.cmd"],"output":"text","match":{"intent":"qa"}}}`,
 			"run.cmd":       "@gemini -p %*",
 		})
 		_, _ = w.Write(pkg)
@@ -226,6 +246,75 @@ func TestDispatchCatalogMatchInherit(t *testing.T) {
 	}
 	if len(got2.Agents) != 1 || got2.Agents[0].Match == nil || got2.Agents[0].Match.Intent != "writing" {
 		t.Fatalf("manifest 带 match 应原样优先: %+v", got2.Agents)
+	}
+}
+
+// TestDispatchCatalogUpgradeLifecycle：版本闸三态（同版 409 / 新版覆盖
+// 升级且用户基础设置保留 / 旧包 400 拒降级）+ 版本落盘回执（2026-11-12
+// 插件化发布管线）。
+func TestDispatchCatalogUpgradeLifecycle(t *testing.T) {
+	specV1 := `{"id":"gemini-cli","command":["./run.cmd"],"output":"text","match":{"intent":"qa"}}`
+	specV2 := `{"id":"gemini-cli","command":["./run.cmd"],"output":"jsonl","match":{"intent":"writing"}}`
+	// 版本闸在下载前拦截（409/400 不触网）——到达下载的只有场景 B 升级
+	src := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(zipBytes(t, map[string]string{
+			"manifest.json": fmt.Sprintf(`{"id":"gemini-cli","version":%q,"spec":%s}`, "1.1.0", specV2),
+			"run.cmd":       "@gemini -p %*",
+		}))
+	}))
+	t.Cleanup(src.Close)
+	// seed：已装 v1.0.0 条目带用户基础设置（CLI 配的 timeout/env/单值 intent）
+	s, srv := newCatalogServer(t, `{"agents":[{"id":"gemini-cli","command":["gemini","-p"],"timeout":"15m","env":["ANTHROPIC_AUTH_TOKEN=t"],"match":{"intent":"qa"}}]}`)
+	withCatalogURL(t, "gemini-cli", src.URL+"/gemini-cli.zip")
+	dir := s.dispatchAgentsInstallDir("gemini-cli")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"),
+		[]byte(`{"id":"gemini-cli","version":"1.0.0","spec":`+specV1+`}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 场景 A：同版重装 → 409
+	withCatalogVersion(t, "gemini-cli", "1.0.0")
+	if code, _ := postCatalogInstall(t, srv, "gemini-cli"); code != http.StatusConflict {
+		t.Fatalf("同版重装应 409，得到 %d", code)
+	}
+
+	// 场景 B：新版覆盖升级 → 用户基础设置保留 + 包预置部分覆盖
+	withCatalogVersion(t, "gemini-cli", "1.1.0")
+	if code, body := postCatalogInstall(t, srv, "gemini-cli"); code != http.StatusOK {
+		t.Fatalf("升级应 200: %d: %s", code, body)
+	}
+	var got dispatch.DispatchFile
+	raw, err := os.ReadFile(s.dispatchPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Agents) != 1 {
+		t.Fatalf("升级后应仍 1 条: %+v", got.Agents)
+	}
+	a := got.Agents[0]
+	if a.Output != "jsonl" {
+		t.Fatalf("包拥有的 output 应覆盖为新值: %+v", a)
+	}
+	if a.Timeout != "15m" || len(a.Env) != 1 || a.Env[0] != "ANTHROPIC_AUTH_TOKEN=t" {
+		t.Fatalf("用户基础设置应保留: %+v", a)
+	}
+	if a.Match == nil || len(a.Match.Intents) != 1 || a.Match.Intents[0] != "qa" {
+		t.Fatalf("用户意图侧重调整应保留: %+v", a.Match)
+	}
+	if v := s.installedAgentVersion("gemini-cli"); v != "1.1.0" {
+		t.Fatalf("升级后落盘 manifest 应 1.1.0: %q", v)
+	}
+
+	// 场景 C：旧包（0.9.0 < 已装 1.1.0）→ 400 拒降级
+	withCatalogVersion(t, "gemini-cli", "0.9.0")
+	if code, _ := postCatalogInstall(t, srv, "gemini-cli"); code != http.StatusBadRequest {
+		t.Fatalf("旧包应 400 拒降级，得到 %d", code)
 	}
 }
 

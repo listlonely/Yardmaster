@@ -656,13 +656,16 @@ func Suggestions() []AgentSpec {
 }
 
 // CatalogEntry 是 Agent 目录的一个条目（2026-11-11 目录化安装）：Spec 为
-// 安装后的 AgentSpec 形状；DownloadURL 指向 Agent 包（zip：manifest.json
-// + 包装脚本，托管仓库 examples/agent-packs/ 随代码版本化，raw 直链下载
-// 安装）；Probe 为前置 CLI 名（安装面 LookPath 探测）；Desc/Prereq 为
-// 目录展示文案——Prereq 注明 ToS 纪律：CLI 本体用户自装并登录，网关
-// 不代装不代登录（包装脚本仅转发调用）。
+// 安装后的 AgentSpec 形状；Version 为发布版本（semver 三段，随包 manifest
+// 双写——单一事实源在包内；开发端改包必 bump，用户端据此显示可更新与
+// 版本闸防旧包回退，2026-11-12 插件化发布管线）；DownloadURL 指向 Agent
+// 包（zip：manifest.json + 包装脚本，托管仓库 examples/agent-packs/ 随代
+// 码版本化，raw 直链下载安装）；Probe 为前置 CLI 名（安装面 LookPath 探
+// 测）；Desc/Prereq 为目录展示文案——Prereq 注明 ToS 纪律：CLI 本体用户
+// 自装并登录，网关不代装不代登录（包装脚本仅转发调用）。
 type CatalogEntry struct {
 	Spec        AgentSpec `json:"spec"`
+	Version     string    `json:"version,omitempty"`
 	DownloadURL string    `json:"download_url"`
 	Probe       string    `json:"probe"`
 	Desc        string    `json:"desc"`
@@ -675,6 +678,7 @@ type CatalogEntry struct {
 var agentCatalog = []CatalogEntry{
 	{
 		Spec:        AgentSpec{ID: "claude-code", Command: []string{"./run.cmd"}, Output: "jsonl", Match: &Match{Intent: "coding"}},
+		Version:     "1.0.0",
 		DownloadURL: "https://raw.githubusercontent.com/listlonely/Yardmaster/main/examples/agent-packs/claude-code.zip",
 		Probe:       "claude",
 		Desc:        "Claude Code headless（Anthropic 官方 CLI）：stream-json 事件流，形状经 M6-W1 真实冒烟核实",
@@ -683,6 +687,7 @@ var agentCatalog = []CatalogEntry{
 	},
 	{
 		Spec:        AgentSpec{ID: "codex", Command: []string{"./run.cmd"}, Output: "jsonl", Match: &Match{Intent: "coding"}},
+		Version:     "1.0.0",
 		DownloadURL: "https://raw.githubusercontent.com/listlonely/Yardmaster/main/examples/agent-packs/codex.zip",
 		Probe:       "codex",
 		Desc:        "Codex CLI（OpenAI）：exec --json 事件流（文档口径，未经真实凭证实测）",
@@ -690,6 +695,7 @@ var agentCatalog = []CatalogEntry{
 	},
 	{
 		Spec:        AgentSpec{ID: "gemini-cli", Command: []string{"./run.cmd"}, Output: "text", Match: &Match{Intent: "qa"}},
+		Version:     "1.0.0",
 		DownloadURL: "https://raw.githubusercontent.com/listlonely/Yardmaster/main/examples/agent-packs/gemini-cli.zip",
 		Probe:       "gemini",
 		Desc:        "Gemini CLI（Google）：-p 单轮 text 输出（文档口径）",

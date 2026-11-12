@@ -2111,29 +2111,34 @@ async function loadDispatchCatalog() {
   if (!el) return;
   try {
     const r = await api('/api/dispatch/catalog');
-    const entries = (r.catalog || []).filter((e) => !e.installed); // 已安装条目不显示（商店同构）
+    // 已装且无更新的条目不显示；有更新 = 「更新到 vX」按钮（商店同构）
+    const entries = (r.catalog || []).filter((e) => !e.installed || e.updated);
     el.innerHTML = entries.map((e) => {
       const cli = e.found
         ? `✓ 已检测到 ${esc(e.probe)} CLI`
         : `✗ 未检测到 ${esc(e.probe)} CLI（可先安装，装好 CLI 后即用）`;
+      const ver = e.version ? ` · v${esc(e.version)}` : '';
+      const btn = e.updated
+        ? `更新到 v${esc(e.version)}`
+        : '安装';
       return `<div class="row">
         <div class="who">
           <div class="name"><code>${esc(e.spec.id)}</code></div>
-          <div class="sub">${esc(e.desc)}<br>${cli}${e.docs ? ` · <a href="${esc(e.docs)}" target="_blank" rel="noopener">文档</a>` : ''}</div>
+          <div class="sub">${esc(e.desc)}${ver}<br>${cli}${e.docs ? ` · <a href="${esc(e.docs)}" target="_blank" rel="noopener">文档</a>` : ''}</div>
         </div>
         <div class="row-acts">
-          <button type="button" class="text add" data-catalog="${esc(e.spec.id)}">安装</button>
+          <button type="button" class="text add" data-catalog="${esc(e.spec.id)}" data-btn-label="${esc(btn)}">${esc(btn)}</button>
         </div>
       </div>`;
-    }).join('') || listEmpty('目录条目均已安装');
+    }).join('') || listEmpty('全部 Agent 插件均为最新');
   } catch (e) {
-    el.innerHTML = errBox('Agent 目录加载失败: ' + e.message, 'agents');
+    el.innerHTML = errBox('Agent 插件目录加载失败: ' + e.message, 'agents');
   }
 }
 
 async function installCatalog(id) {
   const btn = document.querySelector(`[data-catalog="${CSS.escape(id)}"]`);
-  if (btn) { btn.disabled = true; btn.textContent = '安装中…'; }
+  if (btn) { btn.dataset.label = btn.textContent; btn.disabled = true; btn.textContent = '安装中…'; }
   try {
     const r = await api(`/api/dispatch/catalog/${encodeURIComponent(id)}/install`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
@@ -2142,7 +2147,7 @@ async function installCatalog(id) {
     loadDispatchAgents(); // 列表 + 目录区（已装过滤）+ 派发下拉同步
   } catch (e) {
     status(`安装失败: ${e.message}`, 'err', 8000);
-    if (btn) { btn.disabled = false; btn.textContent = '安装'; }
+    if (btn) { btn.disabled = false; btn.textContent = btn.dataset.label || '安装'; }
   }
 }
 
