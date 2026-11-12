@@ -64,7 +64,7 @@
 | :-- | :-- | :-- |
 | Go plugin 包 | 原生 Go 接口 | **排除**：cgo + 不支持 Windows（交叉编译矩阵铁律） |
 | yaegi 等嵌入式解释器 | 单二进制、调用 RTT 低；但解释器开销、panic 隔离不彻底（解释器自身缺陷可穿透 recover）、插件作者被绑死 Go、调试体验差 | 备选：留作未来「轻量内联钩子」（如路由表达式）场景，不承担本设计四类扩展点 |
-| **子进程插件协议** | 语言无关（node/python/exe 任一可执行体）、OS 进程边界天然崩溃隔离、父侧 os/exec+bufio 纯 Go 零 cgo（与 dispatch.Run 进程管理经验同构） | **选型**：插件**长驻进程**（spawn 一次摊薄启动成本），NDJSON 管道通信；管道 RTT 亚毫秒，满足全部钩子预算（§七） |
+| **子进程插件协议** | 语言无关（node/python/exe 任一可执行体）、OS 进程边界天然崩溃隔离、父侧 os/exec+bufio 纯 Go 零 cgo | **选型**：插件**长驻进程**（spawn 一次摊薄启动成本），NDJSON 管道通信；管道 RTT 亚毫秒，满足全部钩子预算（§七） |
 
 可行性复核结论：四类扩展点中唯一的请求路径内联钩子（vendor.verdict）
 预算 800ms，长驻进程管道往返 P99 <10ms，余量充足；事件订阅为
@@ -101,14 +101,11 @@ fire-and-forget 不占请求路径。**无不可行项，主线采纳。**
 - payload = Trace 结构（元数据：候选链/结局/耗时/用量）——**无对话
   内容**（§4.4 决策记录纪律，插件侧同规）。
 
-### 四·二、dispatch.parse（派发输出解析，W4）
+### 四·二、dispatch.parse（已移除）
 
-- 请求 `{line:"…"}` → 响应
-  `{events:[{kind,text,tool,subtype,final}]}`（kind 枚举与 M6-W3 六类
-  一致，外加 `raw`）；一行可出多事件（assistant content 拆分同款）。
-- 超时/错误/非法枚举 → 该行按 raw 回退，内容零丢失；plugins.json 中
-  agent 条目可指定 `parser:"<插件id>"`（dispatch 配置扩展，同走
-  PUT /api/config/dispatch 校验闸）。
+> 2026-11-12：随派发子系统与 Agent 概念移除（见 §一）。曾有的契约：
+> 请求 `{line}` → 响应 `{events:[…]}`，超时按 raw 回退——仅作历史存档，
+> 现网关不再声明/授予该能力，声明它的存量插件按未知能力禁用。
 
 ### 四·三、classify.intent（意图分类，W4）
 
@@ -173,7 +170,7 @@ fire-and-forget 不占请求路径。**无不可行项，主线采纳。**
 - plugins.json 形态：
   `{"plugins":[{"id","command[]","enabled","capabilities[]","timeout_ms","env[]","options"}]}`
   ——校验：id 非空唯一、command 非空、capability ∈ 枚举
-  （events.trace / dispatch.parse / classify.intent / vendor.verdict /
+  （events.trace / classify.intent / vendor.verdict / provider.oauth /
   provider.rewrite / provider.rewrite.response / provider.rewrite.event）、
   timeout ∈ [100ms, 30s]；**解析失败=全部插件禁用**+报错指引（绝不
   当作空配置静默跑）；写路径走管理 API 同一闸门（校验+备份+审计）。
@@ -184,13 +181,12 @@ fire-and-forget 不占请求路径。**无不可行项，主线采纳。**
 | capability | 暴露数据 | 明确不暴露 |
 | :-- | :-- | :-- |
 | events.trace | Trace 元数据（候选链/结局/耗时/用量） | 对话内容、密钥 |
-| dispatch.parse | 派发输出的单行文本 | Agent env、任务全文 |
 | classify.intent | 任务文本 | 密钥 |
 | vendor.verdict | 状态码+响应体节选 ≤8KB | 请求头、密钥、账号 env |
 
 - 插件进程环境：默认**最小 env**（不透传父进程全量环境）；需要变量
   经 plugins.json `env[]` 显式声明——含凭证语义的 env 不进持久化与
-  管理面回显（同 dispatch env 纪律）。唯一自动注入项：
+  管理面回显。唯一自动注入项：
   `YM_APP_DIR=<网关数据目录>`（2026-11-11 起）——插件持久化状态的
   标准出口（context-guard 缓存等），用户零配置且跨设备正确。
 - 信任边界直白陈述：插件与网关同用户身份运行，能做的用户手工也能做
@@ -207,8 +203,8 @@ fire-and-forget 不占请求路径。**无不可行项，主线采纳。**
 - **超时**：每请求/响应钩子独立 deadline（按 plugins.json timeout_ms，
   缺省 1s）；到时按各契约失败语义处理，不杀进程（连续超时走冷却/
   判死）。
-- **停止**：父优雅关停时杀直接子进程；孙进程残留=已知边界（与派发
-  同款，跨平台纯 Go 约束，不引入 cgo）。
+- **停止**：父优雅关停时杀直接子进程；孙进程残留=已知边界（跨平台
+  纯 Go 约束，不引入 cgo）。
 - **panic 隔离**：OS 进程边界天然隔离；父侧读循环任何错误不外溢出
   插件注册表。
 
@@ -219,7 +215,6 @@ fire-and-forget 不占请求路径。**无不可行项，主线采纳。**
 | OnTrace 扇出入队 | <1ms | 有界队列满 drop-oldest+计数 |
 | vendor.verdict 往返 | 800ms | pass（内置先行兜底） |
 | classify.intent 往返 | 300ms | 回落默认组+冷却 |
-| dispatch.parse 往返 | 1s | raw 回退 |
 | 握手 | 5s | 插件降级禁用 |
 | 内存 | 每插件队列 ≤1MB（1024×1KB 均值） | 计数留痕 |
 
@@ -244,5 +239,4 @@ P99 <10ms（httptest 计时，不碰网络）。
   声明=裁剪+审计告警；未知 capability/枚举外值=拒绝装载该插件。
 - 五铁律：plugins.json 为新配置，写路径走管理 API 同一闸门（校验+
   备份+审计），CLI 同规。
-- 凭证安全：四类 payload 白名单外零暴露；插件 env 显式声明且不落盘
-  回显（同 dispatch env 纪律）。
+- 凭证安全：payload 白名单外零暴露；插件 env 显式声明且不落盘回显。
