@@ -84,13 +84,6 @@ func newPlugin(spec Spec, appDir string) *Plugin {
 	}
 }
 
-func (p *Plugin) timeout() time.Duration {
-	if p.spec.TimeoutMS > 0 {
-		return time.Duration(p.spec.TimeoutMS) * time.Millisecond
-	}
-	return time.Second
-}
-
 func (p *Plugin) hasCap(c string) bool {
 	for _, g := range p.granted {
 		if g == c {
