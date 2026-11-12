@@ -2222,7 +2222,7 @@ async function agentModal(existing) {
     frow('match · model_regex', `<input class="field mono" name="m_model" value="${esc((a.match && a.match.model_regex) || '')}" spellcheck="false" placeholder="请求模型正则；可选">`) +
     frow('match · prompt_regex', `<input class="field mono" name="m_prompt" value="${esc((a.match && a.match.prompt_regex) || '')}" spellcheck="false" placeholder="任务文本正则；可选">`,
       '意图与正则全部留空且不勾兜底 = 仅显式指定时可用') +
-    frow('模型分配（专属链）', `<div style="display:flex;gap:6px;margin-bottom:6px"><select class="sel" id="mp-provider"><option value="">选服务商…</option>${provOpts}</select><select class="sel" id="mp-model"><option value="">选模型…</option></select><button type="button" class="text add" data-model-add>＋添加</button></div><textarea class="field mono" name="models" rows="3" spellcheck="false" placeholder="每行一个 provider/model，自上而下依次分配">${esc((a.models || []).join('\n'))}</textarea>`, '保存后自动落地为专属路由组 agent-<id>（order），Agent 的 LLM 请求经 ANTHROPIC_MODEL 注入按链分配；仅 Anthropic 系 agent（claude-code）读此注入'),
+    frow('模型分配（专属链）', `<div style="display:flex;gap:6px;margin-bottom:6px"><select class="sel" id="mp-provider"><option value="">选服务商…</option>${provOpts}</select><select class="sel" id="mp-model"><option value="">选模型…</option></select><button type="button" class="text add" data-model-add>＋添加</button></div><textarea class="field mono" name="models" rows="3" spellcheck="false" placeholder="每行一个 provider/model，自上而下依次分配">${esc((a.models || []).join('\n'))}</textarea>`, '保存后自动落地为专属路由组 agent-<id>（order），Agent 的 LLM 请求经 ANTHROPIC_MODEL=group/agent-<id> 注入按链分配；仅 Anthropic 系 agent（claude-code）读此注入'),
   async (form) => {
     const v = formVals(form);
     const id = (v.id || '').trim();

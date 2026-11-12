@@ -34,7 +34,8 @@ type Match struct {
 // 为字符串时长；运行态经 Runtime() 转为 runner 的 Spec）。Models 是
 // Agent 专属模型链（2026-11-12 分配策略）：有序 <provider>/<model> 列表，
 // 写路径联动落地为保留前缀组 agent-<id>（order），runner 启动注入
-// ANTHROPIC_MODEL=agent-<id> → Agent 的 LLM 请求按专属链分配。
+// ANTHROPIC_MODEL=group/agent-<id>（网关组目标语言）→ Agent 的 LLM
+// 请求按专属链分配。
 type AgentSpec struct {
 	ID            string   `json:"id"`
 	Command       []string `json:"command"`
@@ -52,6 +53,11 @@ type AgentSpec struct {
 // AgentGroupPrefix 是派发专属组的保留前缀（服务商页手建组禁用，防冲突）。
 const AgentGroupPrefix = "agent-"
 
+// GroupTargetPrefix 是网关模型目标语言的组引用前缀（"group/<id>"）。
+// ANTHROPIC_MODEL 注入值须带此前缀，请求侧 Plan 才会解析为组路由
+//（裸 agent-<id> 会被判为未知 provider 404——真机闭环实证修正）。
+const GroupTargetPrefix = "group/"
+
 // AgentGroupID 返回该 Agent 专属组的 id（Models 非空时有效）。
 func (a AgentSpec) AgentGroupID() string { return AgentGroupPrefix + a.ID }
 
@@ -66,7 +72,7 @@ func (a AgentSpec) Runtime() (Spec, error) {
 	spec := Spec{ID: a.ID, Command: a.Command, WorkDir: a.WorkDir, Env: a.Env,
 		MaxConcurrent: a.MaxConcurrent, Parser: a.Parser}
 	if len(a.Models) > 0 {
-		spec.AgentModel = a.AgentGroupID() // 专属链 → runner 注入 ANTHROPIC_MODEL=agent-<id>
+		spec.AgentModel = GroupTargetPrefix + a.AgentGroupID() // 专属链 → runner 注入 ANTHROPIC_MODEL=group/agent-<id>
 	}
 	if a.Timeout != "" {
 		d, err := time.ParseDuration(a.Timeout)

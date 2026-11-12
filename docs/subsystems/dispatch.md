@@ -147,7 +147,9 @@ stdout，结果与耗时留痕。与 `internal/agent` 接线子系统协同成�
   失败——链策略被放弃即预期）。`agent-` 前缀为派发保留，服务商页手
   建组禁用。
 - **注入语义**：runner 启动时 `models` 非空 → env 注入
-  `ANTHROPIC_MODEL=agent-<id>`（后写覆盖 spec.Env 底稿——UI 显式声明
+  `ANTHROPIC_MODEL=group/agent-<id>`（组目标语言；裸 `agent-<id>` 经
+  请求侧 Plan 会判未知 provider 404——真机闭环实证修正）（后写覆盖
+  spec.Env 底稿——UI 显式声明
   优先）；`spec.Env` 值支持 `{model}` 占位展开（与 argv 同语义）。
   **协议差异如实标注**：仅 Anthropic 系 agent（claude-code）读此 env；
   codex（config.toml）/gemini（settings.json+env 文件）CLI 的模型由

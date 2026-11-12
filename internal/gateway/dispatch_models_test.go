@@ -101,10 +101,10 @@ func TestDispatchModelsIntentsMatch(t *testing.T) {
 	if _, err := s.Dispatch.Select("", "任务", "vision", ""); err == nil {
 		t.Fatal("vision 不在任何 Agent 侧重内，应 fail-closed 报错")
 	}
-	// Runtime：链非空 → AgentModel 填专属组 id（runner env 注入依据）
+	// Runtime：链非空 → AgentModel 填组目标引用（runner env 注入依据）
 	spec, rerr := dispatch.AgentSpec{ID: "cc", Command: []string{"x"}, Models: []string{"prov/m1"}}.Runtime()
-	if rerr != nil || spec.AgentModel != "agent-cc" {
-		t.Fatalf("Runtime 应填 AgentModel=agent-cc: got=%q err=%v", spec.AgentModel, rerr)
+	if rerr != nil || spec.AgentModel != "group/agent-cc" {
+		t.Fatalf("Runtime 应填 AgentModel=group/agent-cc: got=%q err=%v", spec.AgentModel, rerr)
 	}
 	spec2, _ := dispatch.AgentSpec{ID: "cc", Command: []string{"x"}}.Runtime()
 	if spec2.AgentModel != "" {

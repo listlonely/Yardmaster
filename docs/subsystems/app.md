@@ -261,7 +261,8 @@
 >（order）——Planner 零改动复用全套组机制（轮换/休眠/粘性），成员
 > 存在性 fail-closed（400 拒整个 dispatch 保存=原子性）、清链/删
 > Agent 联动删组（rules 引用悬空=Plan 404 软失败，预期）；③ runner
-> 注入 ANTHROPIC_MODEL=agent-<id>（后写覆盖 env 底稿）+ spec.Env
+> 注入 ANTHROPIC_MODEL=group/agent-\<id\>（组目标语言；后写覆盖 env
+> 底稿）+ spec.Env
 > {model} 占位展开——**仅 Anthropic 系生效**（codex/gemini CLI 模型
 > 由其自身配置决定，如实标注）；④ UI：Agent 模态 intents chips +
 > 专属链构建器（provider→model 联动下拉＋添加，textarea 直编）+
