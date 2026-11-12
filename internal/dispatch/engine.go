@@ -689,7 +689,7 @@ var agentCatalog = []CatalogEntry{
 		Prereq:      "需本机已安装 codex 并登录；网关不代装不代登录",
 	},
 	{
-		Spec:        AgentSpec{ID: "gemini-cli", Command: []string{"./run.cmd"}, Output: "text"},
+		Spec:        AgentSpec{ID: "gemini-cli", Command: []string{"./run.cmd"}, Output: "text", Match: &Match{Intent: "qa"}},
 		DownloadURL: "https://raw.githubusercontent.com/listlonely/Yardmaster/main/examples/agent-packs/gemini-cli.zip",
 		Probe:       "gemini",
 		Desc:        "Gemini CLI（Google）：-p 单轮 text 输出（文档口径）",

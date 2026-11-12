@@ -112,7 +112,7 @@ func (s *Server) handleDispatchCatalogInstall(w http.ResponseWriter, id string) 
 	}
 	if entry.DownloadURL == "" {
 		writeAPIErr(w, &apiError{status: http.StatusServiceUnavailable,
-			Msg: "Agent " + id + " 的安装包暂未发布——可先手动接入 dispatch.json"})
+			Msg: "Agent " + id + " 的安装包暂未发布（后续版本提供）"})
 		return
 	}
 
@@ -134,6 +134,13 @@ func (s *Server) handleDispatchCatalogInstall(w http.ResponseWriter, id string) 
 		_ = os.RemoveAll(dir)
 		writeAPIErr(w, badRequest(fmt.Errorf("manifest.id=%q 与目录条目 %q 不一致", manifest.ID, id)))
 		return
+	}
+	// 预设侧重继承（2026-11-12）：包装包 manifest 只承载启动定义——
+	// 安装后默认侧重以目录条目为单一事实源（manifest 未带 match 时
+	// 继承；带 match 的包原样优先）。
+	if spec.Match == nil && entry.Spec.Match != nil {
+		m := *entry.Spec.Match
+		spec.Match = &m
 	}
 	if err := dispatch.ValidateDispatch(dispatch.DispatchFile{
 		Agents:    append([]dispatch.AgentSpec(nil), f.Agents...),

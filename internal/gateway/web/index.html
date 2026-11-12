@@ -257,14 +257,14 @@
       </div>
     </section>
 
-    <!-- Agent（2026-11 独立页：派发目标定义管理，从派发页拆出） -->
+    <!-- Agent（2026-11 独立页：派发目标定义管理，从派发页拆出；
+         2026-11-12 收敛：目录安装为唯一添加途径，已装 Agent 仅暴露基础设置） -->
     <section id="page-agents" class="view" hidden>
-      <div class="label">Agent 管理 <span class="label-note">派发目标定义（dispatch.json）；编辑经管理 API 校验+备份+审计，热生效</span></div>
-      <div class="list" id="list-agents"></div>
-      <div class="after-list"><button type="button" class="text add" id="btn-agent-add">＋ 新建 Agent</button></div>
-
-      <div class="label">Agent 目录 <span class="label-note">内置预设一键下载安装（包内包装脚本调用本机 CLI）；需本机已装对应 CLI 并登录——网关不代装不代登录</span></div>
+      <div class="label">Agent 目录 <span class="label-note">添加 Agent 的唯一途径：内置预设一键下载安装（包内包装脚本调用本机 CLI）；需本机已装对应 CLI 并登录——网关不代装不代登录</span></div>
       <div class="list" id="list-agent-catalog"></div>
+
+      <div class="label">已安装 <span class="label-note">基础设置（环境变量/超时/并发/意图侧重）经管理 API 校验+备份+审计，热生效</span></div>
+      <div class="list" id="list-agents"></div>
       <p class="foot-note">Agent 定义经管理 API（PUT /api/config/dispatch：严格校验、写前备份、审计）保存后热重载，运行中会话不受影响；「派发」页的 Agent 下拉与会话过滤即时同步。</p>
     </section>
 

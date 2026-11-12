@@ -274,6 +274,16 @@
 > group/agent-claude-code 走组路由 + served=siliconflow/main
 > zai-org/GLM-5.3-Flash 链首成员）——claude 对自定义模型 id 仅报上下
 > 文窗提示（非错误，官方 gateway 场景文档所述）。genwinres appVersion → 0.1.9。
+>
+> **Agent 添加途径收敛（2026-11-12，用户决策「添加不需要自建，途径=从目录下载安装」）**：
+> 「＋ 新建 Agent」自建表单自 UI 移除（CLI 与 PUT 全文档契约保留），
+> 目录安装为唯一途径（目录区置顶、已装条目过滤）；已安装 Agent 的
+> 「编辑」改「设置」，仅暴露基础设置四项（环境变量/超时/最大并发/
+> 意图侧重）+ 定义只读简览，保存=仅覆盖基础四项（command/models/
+> match.regex 等原样保留，JSON 深拷贝防 match 指针污染）；设置模态
+> 链构建器与 `agentProvModels`/`mp-*` 委托随自建表单一并删除（chips
+> 委托保留）；gemini-cli 目录条目预置 `match.intent=qa`——三家安装
+> 即默认可用。不发版（本地验证后另行安排）。
 
 ## 一、目标与边界
 

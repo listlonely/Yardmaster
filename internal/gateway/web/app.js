@@ -2125,7 +2125,7 @@ async function loadDispatchCatalog() {
           <button type="button" class="text add" data-catalog="${esc(e.spec.id)}">安装</button>
         </div>
       </div>`;
-    }).join('') || listEmpty('目录条目均已安装——用上方「＋ 新建 Agent」自定义即可');
+    }).join('') || listEmpty('目录条目均已安装');
   } catch (e) {
     el.innerHTML = errBox('Agent 目录加载失败: ' + e.message, 'agents');
   }
@@ -2185,100 +2185,64 @@ function renderAgentList(agents) {
         <div class="sub">${esc(meta)}</div>
       </div>
       <div class="row-acts">
-        <button type="button" class="text edit" data-agent="${esc(a.id)}">编辑</button>
+        <button type="button" class="text edit" data-agent="${esc(a.id)}">设置</button>
         <button type="button" class="text del" data-agent="${esc(a.id)}">删除</button>
       </div>
     </div>`;
-  }).join('') || listEmpty('暂无 Agent——派发将不可用；点「＋ 新建 Agent」添加');
+  }).join('') || listEmpty('暂无 Agent——从上方目录一键安装（claude-code / codex / gemini-cli）');
 }
 
-async function agentModal(existing) {
-  const isEdit = !!existing;
-  const a = existing || {};
+// settingsAgentModal：已安装 Agent 的基础设置（2026-11-12 收敛——目录安装
+// 为唯一添加途径；仅暴露环境变量/超时/并发/意图侧重四项，command 等
+// 底层字段只读展示。保存=仅覆盖基础四项，其余字段原样保留）。
+async function settingsAgentModal(existing) {
+  const a = existing;
   // 旧单值 intent 迁移进多意图输入（保存后统一写 match.intents）
   const presetIntents = [...((a.match && a.match.intents) || []),
     ...((a.match && a.match.intent) ? [a.match.intent] : [])];
-  // 服务商模型清单（链构建下拉数据源；GET 脱敏不影响 models 清单）
-  let provs = [];
-  try {
-    const r = await api('/api/config/providers');
-    provs = (r.providers || []).map((p) => ({ id: p.id, models: (p.models || []).map((m) => m.id) }));
-  } catch { /* 不可用时链构建退化为纯手填 */ }
-  const provOpts = provs.map((p) => `<option value="${esc(p.id)}">${esc(p.id)}</option>`).join('');
-  agentProvModels = provs; // 链构建下拉联动数据（委托处理器读）
   const intentChips = ['coding', 'writing', 'vision', 'qa', 'long-context']
     .map((it) => `<button type="button" class="chip" data-intent-chip="${it}"${presetIntents.includes(it) ? ' style="opacity:0.45"' : ''}>${it}</button>`).join(' ');
-  formModal(isEdit ? `编辑 Agent ${a.id}` : '新建 Agent',
-    frow('ID', `<input class="field mono" name="id" value="${esc(a.id || '')}" ${isEdit ? 'readonly' : 'required'} spellcheck="false" placeholder="唯一标识，如 claude-code">`) +
-    frow('命令', `<textarea class="field mono" name="command" rows="3" required spellcheck="false" placeholder="每行一个参数，如：&#10;claude&#10;-p&#10;--output-format stream-json">${esc((a.command || []).join('\n'))}</textarea>`, '每行一个 argv 参数（空格/引号原样保留）；argv 自身含换行的极端配置不支持') +
-    frow('工作目录', `<input class="field mono" name="work_dir" value="${esc(a.work_dir || '')}" spellcheck="false" placeholder="可选；默认网关进程工作目录">`) +
-    frow('环境变量', `<textarea class="field mono" name="env" rows="3" spellcheck="false" placeholder="每行一个 KEY=VALUE">${esc((a.env || []).join('\n'))}</textarea>`, '回环调 LLM 须配网关命名令牌（设置页生成后填 ANTHROPIC_AUTH_TOKEN=<令牌>），否则 Agent 请求会 401；值支持 {model} 占位') +
+  formModal(`设置 Agent ${a.id}`,
+    frow('定义', `<span class="mono">${esc(a.command.join(' '))}</span>`, '安装包预置的启动定义（只读；全量自定义走 CLI / dispatch.json 全文档契约）') +
+    frow('环境变量', `<textarea class="field mono" name="env" rows="3" spellcheck="false" placeholder="每行一个 KEY=VALUE">${esc((a.env || []).join('\n'))}</textarea>`, '回环调 LLM 须配网关命名令牌（设置页生成后填 ANTHROPIC_AUTH_TOKEN=<令牌>，另加 ANTHROPIC_BASE_URL=http://127.0.0.1:8317），否则 Agent 请求会 401；值支持 {model} 占位') +
     frow('超时', `<input class="field mono" name="timeout" value="${esc(a.timeout || '')}" placeholder="如 10m / 30s / 1h；空 = 缺省">`) +
     frow('最大并发', `<input class="field" name="max_concurrent" type="number" min="0" step="1" value="${a.max_concurrent || ''}" placeholder="默认 1">`) +
-    frow('输出格式', `<select class="sel" name="output"><option value="">自动（text）</option><option value="text"${a.output === 'text' ? ' selected' : ''}>text · 纯文本</option><option value="jsonl"${a.output === 'jsonl' ? ' selected' : ''}>jsonl · stream-json 事件流</option></select>`) +
-    frow('解析插件', `<input class="field mono" name="parser" value="${esc(a.parser || '')}" spellcheck="false" placeholder="可选；输出解析插件 id，不可用=该行 raw 回退">`) +
-    frow('兜底', `<label class="switch-line"><input type="checkbox" name="default"${a.default ? ' checked' : ''}><span>无匹配规则时使用（至多一个）</span></label>`) +
-    frow('match · intents（侧重）', `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">${intentChips}</div><input class="field mono" name="m_intents" value="${esc(presetIntents.join(','))}" spellcheck="false" placeholder="逗号分隔，任一命中即用本 Agent">`, '多意图任一命中（Agent 侧重）；chips 点击快捷增删') +
-    frow('match · model_regex', `<input class="field mono" name="m_model" value="${esc((a.match && a.match.model_regex) || '')}" spellcheck="false" placeholder="请求模型正则；可选">`) +
-    frow('match · prompt_regex', `<input class="field mono" name="m_prompt" value="${esc((a.match && a.match.prompt_regex) || '')}" spellcheck="false" placeholder="任务文本正则；可选">`,
-      '意图与正则全部留空且不勾兜底 = 仅显式指定时可用') +
-    frow('模型分配（专属链）', `<div style="display:flex;gap:6px;margin-bottom:6px"><select class="sel" id="mp-provider"><option value="">选服务商…</option>${provOpts}</select><select class="sel" id="mp-model"><option value="">选模型…</option></select><button type="button" class="text add" data-model-add>＋添加</button></div><textarea class="field mono" name="models" rows="3" spellcheck="false" placeholder="每行一个 provider/model，自上而下依次分配">${esc((a.models || []).join('\n'))}</textarea>`, '保存后自动落地为专属路由组 agent-<id>（order），Agent 的 LLM 请求经 ANTHROPIC_MODEL=group/agent-<id> 注入按链分配；仅 Anthropic 系 agent（claude-code）读此注入'),
+    frow('意图侧重', `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">${intentChips}</div><input class="field mono" name="m_intents" value="${esc(presetIntents.join(','))}" spellcheck="false" placeholder="逗号分隔，任一命中即用本 Agent">`, '多意图任一命中（安装包默认侧重可在此调整）；全部留空 = 仅显式指定时可用'),
   async (form) => {
     const v = formVals(form);
-    const id = (v.id || '').trim();
-    if (!id) throw new Error('ID 不能为空');
-    const command = linesOf(v.command);
-    if (command.length === 0) throw new Error('命令不能为空（每行一个参数）');
     const timeout = (v.timeout || '').trim();
     if (timeout && !/^\d+(\.\d+)?(ms|s|m|h)$/.test(timeout)) {
       throw new Error('超时须为如 10m / 30s / 1h 的时长');
     }
-    const mModel = (v.m_model || '').trim(), mPrompt = (v.m_prompt || '').trim();
-    for (const [name, re] of [['model_regex', mModel], ['prompt_regex', mPrompt]]) {
-      if (re) { try { new RegExp(re); } catch { throw new Error(`match.${name} 正则非法: ${re}`); } }
-    }
     const intents = (v.m_intents || '').split(/[\s,，、]+/).map((s) => s.trim()).filter(Boolean);
-    const models = linesOf(v.models);
-    for (const m of models) {
-      const [p, mo, rest] = m.split('/');
-      if (!p || !mo || rest !== undefined) throw new Error(`专属链成员须为 provider/model 两段: ${m}`);
-    }
     const rawEnv = linesOf(v.env);
     const env = rawEnv.filter((l) => l.includes('='));
     if (rawEnv.length !== env.length) throw new Error('环境变量每行须为 KEY=VALUE');
-    const isDefault = v.default === 'on';
-    const spec = {
-      id,
-      command,
-      ...(v.work_dir.trim() ? { work_dir: v.work_dir.trim() } : {}),
-      ...(env.length ? { env } : {}),
-      ...(timeout ? { timeout } : {}),
-      ...(parseInt(v.max_concurrent, 10) > 0 ? { max_concurrent: parseInt(v.max_concurrent, 10) } : {}),
-      ...(v.output ? { output: v.output } : {}),
-      ...(v.parser.trim() ? { parser: v.parser.trim() } : {}),
-      ...(isDefault ? { default: true } : {}),
-      ...(models.length ? { models } : {}),
-      ...(intents.length || mModel || mPrompt ? { match: {
-        ...(intents.length ? { intents } : {}),
-        ...(mModel ? { model_regex: mModel } : {}),
-        ...(mPrompt ? { prompt_regex: mPrompt } : {}),
-      } } : {}),
-    };
-    // fresh GET 构造全文档（templates 原样保留）
+    const mc = parseInt(v.max_concurrent, 10);
+    // fresh GET 构造全文档：仅覆盖基础四项（空值=删字段），command/
+    // work_dir/output/parser/default/models/match.regex 原样保留。
     const cur = await api('/api/config/dispatch');
     const agents = cur.agents || [];
-    const idx = agents.findIndex((x) => x.id === id);
-    if (isEdit && idx < 0) throw new Error(`Agent ${id} 已不存在（配置可能被并行修改），请刷新后重试`);
-    if (!isEdit && idx >= 0) throw new Error(`Agent ${id} 已存在`);
-    if (isDefault && agents.some((x) => x.default && x.id !== id)) {
-      throw new Error(`已有兜底 Agent（default 至多一个）：${agents.filter((x) => x.default).map((x) => x.id).join('、')}`);
+    const idx = agents.findIndex((x) => x.id === a.id);
+    if (idx < 0) throw new Error(`Agent ${a.id} 已不存在（配置可能被并行修改），请刷新后重试`);
+    const spec = JSON.parse(JSON.stringify(agents[idx])); // 深拷贝（断开 match 指针）
+    if (env.length) spec.env = env; else delete spec.env;
+    if (timeout) spec.timeout = timeout; else delete spec.timeout;
+    if (mc > 0) spec.max_concurrent = mc; else delete spec.max_concurrent;
+    if (intents.length) {
+      if (spec.match) spec.match.intents = intents;
+      else spec.match = { intents };
+    } else if (spec.match) {
+      delete spec.match.intents;
     }
-    if (idx >= 0) agents[idx] = spec; else agents.push(spec);
+    if (spec.match) delete spec.match.intent; // 单值已迁移
+    if (spec.match && Object.keys(spec.match).length === 0) delete spec.match;
+    agents[idx] = spec;
     await api('/api/config/dispatch', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ agents, templates: cur.templates || [] }),
     });
-    status(`Agent ${id} 已保存（写前备份已留底，热生效）`, 'ok');
+    status(`Agent ${a.id} 已保存（写前备份已留底，热生效）`, 'ok');
     loadDispatchAgents();
   });
 }
@@ -2312,47 +2276,21 @@ $('list-agents').addEventListener('click', async (e) => {
     loadDispatchAgents();
     return;
   }
-  if (e.target.classList.contains('edit')) agentModal(entry);
+  if (e.target.classList.contains('edit')) settingsAgentModal(entry);
   if (e.target.classList.contains('del')) deleteAgent(id);
 });
-$('btn-agent-add').addEventListener('click', () => agentModal(null));
 
-// agentProvModels：Agent 模态链构建器的服务商模型清单（agentModal 渲染时刷新）
-let agentProvModels = [];
-
-// Agent 模态的意图 chips 与专属链构建器（document 级委托——模态动态注入）
+// Agent 设置模态的意图 chips（document 级委托——模态动态注入）
 document.addEventListener('click', (e) => {
   const chip = e.target.dataset && e.target.dataset.intentChip;
-  if (chip) {
-    const form = e.target.closest('form');
-    const inp = form && form.querySelector('[name="m_intents"]');
-    if (!inp) return;
-    const set = new Set(inp.value.split(/[\s,，、]+/).map((s) => s.trim()).filter(Boolean));
-    if (set.has(chip)) { set.delete(chip); e.target.style.opacity = ''; }
-    else { set.add(chip); e.target.style.opacity = '0.45'; }
-    inp.value = [...set].join(',');
-    return;
-  }
-  if (e.target.dataset && e.target.dataset.modelAdd) {
-    const form = e.target.closest('form');
-    const p = form && form.querySelector('#mp-provider');
-    const m = form && form.querySelector('#mp-model');
-    const ta = form && form.querySelector('[name="models"]');
-    if (!p || !m || !ta || !p.value || !m.value) return;
-    const line = p.value + '/' + m.value;
-    const cur = linesOf(ta.value);
-    if (cur.includes(line)) { status('该模型已在链中', 'err'); return; }
-    ta.value = [...cur, line].join('\n');
-  }
-});
-document.addEventListener('change', (e) => {
-  if (!e.target || e.target.id !== 'mp-provider') return;
+  if (!chip) return;
   const form = e.target.closest('form');
-  const sel = form && form.querySelector('#mp-model');
-  if (!sel) return;
-  const prov = agentProvModels.find((p) => p.id === e.target.value);
-  sel.innerHTML = '<option value="">选模型…</option>' +
-    (prov ? prov.models.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join('') : '');
+  const inp = form && form.querySelector('[name="m_intents"]');
+  if (!inp) return;
+  const set = new Set(inp.value.split(/[\s,，、]+/).map((s) => s.trim()).filter(Boolean));
+  if (set.has(chip)) { set.delete(chip); e.target.style.opacity = ''; }
+  else { set.add(chip); e.target.style.opacity = '0.45'; }
+  inp.value = [...set].join(',');
 });
 
 async function loadDispatchTemplates() {

@@ -174,6 +174,61 @@ func TestDispatchCatalogInstallFullChain(t *testing.T) {
 	}
 }
 
+// TestDispatchCatalogMatchInherit：预设侧重继承（2026-11-12）——manifest
+// 未带 match 继承目录条目预置（gemini-cli=qa）；manifest 带 match 原样
+// 优先（不被目录条目覆盖）。
+func TestDispatchCatalogMatchInherit(t *testing.T) {
+	// 场景一：manifest 无 match → 继承目录条目 qa
+	src := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(zipBytes(t, map[string]string{
+			"manifest.json": `{"id":"gemini-cli","spec":{"id":"gemini-cli","command":["./run.cmd"],"output":"text"}}`,
+			"run.cmd":       "@gemini -p %*",
+		}))
+	}))
+	t.Cleanup(src.Close)
+	s, srv := newCatalogServer(t, `{"agents":[]}`)
+	withCatalogURL(t, "gemini-cli", src.URL+"/gemini-cli.zip")
+	if code, body := postCatalogInstall(t, srv, "gemini-cli"); code != http.StatusOK {
+		t.Fatalf("install status = %d, body = %s", code, body)
+	}
+	raw, err := os.ReadFile(s.dispatchPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got dispatch.DispatchFile
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Agents) != 1 || got.Agents[0].Match == nil || got.Agents[0].Match.Intent != "qa" {
+		t.Fatalf("manifest 无 match 应继承目录条目预置 qa: %+v", got.Agents)
+	}
+
+	// 场景二：manifest 自带 match → 原样优先
+	src2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(zipBytes(t, map[string]string{
+			"manifest.json": `{"id":"gemini-cli","spec":{"id":"gemini-cli","command":["./run.cmd"],"output":"text","match":{"intent":"writing"}}}`,
+			"run.cmd":       "@gemini -p %*",
+		}))
+	}))
+	t.Cleanup(src2.Close)
+	s2, srv2 := newCatalogServer(t, `{"agents":[]}`)
+	withCatalogURL(t, "gemini-cli", src2.URL+"/gemini-cli.zip")
+	if code, body := postCatalogInstall(t, srv2, "gemini-cli"); code != http.StatusOK {
+		t.Fatalf("install status = %d, body = %s", code, body)
+	}
+	raw2, err := os.ReadFile(s2.dispatchPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got2 dispatch.DispatchFile
+	if err := json.Unmarshal(raw2, &got2); err != nil {
+		t.Fatal(err)
+	}
+	if len(got2.Agents) != 1 || got2.Agents[0].Match == nil || got2.Agents[0].Match.Intent != "writing" {
+		t.Fatalf("manifest 带 match 应原样优先: %+v", got2.Agents)
+	}
+}
+
 // TestDispatchCatalogInstallUnknown：未知目录 id → 404。
 func TestDispatchCatalogInstallUnknown(t *testing.T) {
 	_, srv := newCatalogServer(t, "")

@@ -133,19 +133,30 @@ stdout，结果与耗时留痕。与 `internal/agent` 接线子系统协同成�
   Windows 形态（run.cmd）；Linux 用户可按上表形状手配 dispatch.json。
 - 动态校验替代静态 sha256：包随代码提交（无发布死锁），HTTPS 直链 +
   zip 结构 + manifest 一致性白名单足够；包内容变更 = 代码提交可追溯。
+- **UI 收敛（2026-11-12）：目录安装为添加 Agent 的唯一途径**——自建
+  表单（「＋ 新建 Agent」）自 UI 移除；目录条目置顶展示，已装条目
+  自动过滤。已安装 Agent 的「设置」模态仅暴露**基础设置四项**：环境
+  变量（回环令牌提示）/ 超时 / 最大并发 / 意图侧重（安装包默认侧重
+  可调）；command 等底层字段只读展示、保存时仅覆盖基础四项（其余
+  原样保留）。gemini-cli 目录条目预置 `match.intent=qa`（三家安装即
+  默认可用：claude-code/codex=coding、gemini=qa）。CLI 与
+  `PUT /api/config/dispatch` 全文档契约保留（含 models 专属链——UI
+  收敛，契约不收）。
 
 ## 五·乙、Agent 侧重与专属模型链（2026-11-12）
 
 - **Agent 侧重 = 多意图**：`match.intents` 数组任一命中（旧 `intent`
   单值兼容保留、并集生效）——一个 Agent 可同时承接 coding+qa 等多个
-  意图；UI 模态 intents 输入 + 内置意图 chips 快捷增删。
+  意图；UI 设置模态 intents 输入 + 内置意图 chips 快捷增删（2026-11-12
+  收敛后 UI 仅此入口可调侧重）。
 - **Agent 专属模型链**：`models` 数组（有序 `<provider>/<model>`）——
   cfgDispatch 写路径**联动落地**为 providers.json 保留前缀组
   `agent-<id>`（strategy=order）+ Planner 热替换；成员不存在 → 400
   拒绝整个 dispatch 保存（fail-closed，原子性）；链清空/Agent 删除 →
   组删除（rules.json 若引用 group/agent-\<id\> 会悬空，Plan 404 软
   失败——链策略被放弃即预期）。`agent-` 前缀为派发保留，服务商页手
-  建组禁用。
+  建组禁用。**UI 收敛（同日）**：设置模态不再暴露链构建器，models 走
+  CLI / dispatch.json 全文档契约维护（组联动写路径不变）。
 - **注入语义**：runner 启动时 `models` 非空 → env 注入
   `ANTHROPIC_MODEL=group/agent-<id>`（组目标语言；裸 `agent-<id>` 经
   请求侧 Plan 会判未知 provider 404——真机闭环实证修正）（后写覆盖
