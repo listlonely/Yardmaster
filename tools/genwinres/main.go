@@ -38,7 +38,7 @@ import (
 )
 
 // appVersion 嵌入 exe 属性的资源版本（三段，第四位补 0）。
-const appVersion = "0.1.10"
+const appVersion = "0.2.0"
 
 // iconSrcCandidates 是图标单一事实源的候选路径：go:generate 的工作
 // 目录是 cmd/yardmaster（指令所在包目录），手动跑本工具时是本目录——
