@@ -269,7 +269,11 @@
 > 回环令牌提示（ANTHROPIC_AUTH_TOKEN 占位会 401——smoke agent 不调
 > LLM 故从未暴露的隐藏坑，本次模态注明）。测试：dispatch_models_test
 > （组建/改/删全周期+热替换 Plan+未知成员 400+Intents 命中+Runtime
-> AgentModel）。genwinres appVersion → 0.1.9。
+> AgentModel 断言）。**真机闭环（隔离 home + 真实上游）**：命名令牌
+> 回环鉴权 ✓ → claude CLI 实跑 6.5s ok → trace 双证（request_model=
+> group/agent-claude-code 走组路由 + served=siliconflow/main
+> zai-org/GLM-5.3-Flash 链首成员）——claude 对自定义模型 id 仅报上下
+> 文窗提示（非错误，官方 gateway 场景文档所述）。genwinres appVersion → 0.1.9。
 
 ## 一、目标与边界
 
