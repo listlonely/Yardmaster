@@ -84,7 +84,7 @@ var PluginStoreIndex = []storeEntry{
 		Desc:        "New API 的敏感词过滤：请求拒发/掩码 + 回复掩码（流式逐帧），New API 同款 words/patterns"},
 	{ID: "system-prompt", Ver: "0.1.0", Author: "@magpie-community", Cap: plugin.CapRewrite,
 		DownloadURL: "https://raw.githubusercontent.com/listlonely/Yardmaster/main/examples/plugin-packs/system-prompt.zip",
-		Desc:        "系统提示词注入：无则补、有则保（override 可并入），按协议写入各自位置；agents 可过滤"},
+		Desc:        "系统提示词注入：无则补、有则保（override 可并入），按协议写入各自位置；可按调用方过滤"},
 	// output-strategy / history-trim / codex-history（2026-11-10 第二批迁移，
 	// 同通道换文件即用；上游 @magpie-community/plugins MIT，本地载体
 	// plugins/magpie-bridge/，安装包发布在仓库 examples/plugin-packs/）。
