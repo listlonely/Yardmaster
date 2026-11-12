@@ -1,5 +1,10 @@
 # gateway — 本地网关与路由子系统
 
+> **2026-11-12**：派发子系统（/api/dispatch/*、AttachDispatch、RoutePath=dispatch）
+> 与 Agent 接线引擎已移除——本文历史段落中的派发/接线叙述为存档记录；
+> 「按意图分配模型」由任务规则 + 意图判定链 + 路由组（chain-<intent>）
+> 在请求路径直接承载。
+
 ## 职责与真源
 
 | 部分 | 职责 | 真源 |
