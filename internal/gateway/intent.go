@@ -38,11 +38,12 @@ const (
 	// pluginClassifyTimeout 是插件分类兜底的往返预算（§四·三）。文档基线
 	// 300ms 面向词表型插件；LLM 驱动的 Agent 分类器（examples/agent-
 	// classifier）需要真实模型往返——2026-11-16 真机实测分类脑往返
-	// DeepSeek-V4.1-Flash ≈2.4s / glm-5.3-flash ≈1.9s，1.5s 硬顶下
-	// agent 等无种子意图结构性超时（词表判不出→恒落 fallback），故取
-	// 3s。超限回落默认组；Registry 连续 3 次失败冷却 5 分钟，熔断期间
-	// 零等待直达后续层，不拖垮热路径。
-	pluginClassifyTimeout = 3 * time.Second
+	// DeepSeek-V4.1-Flash 2.4-4.4s 波动（中位 ≈3s），3s 预算下 agent 等
+	// 无种子意图常判不中，故取 4s 覆住中位+波动。插件侧已补 agent 高
+	// 置信种子走快路径，LLM 只兜种子外长尾——多等的代价被快路径分流。
+	// 超限回落默认组；Registry 连续 3 次失败冷却 5 分钟，熔断期间零等
+	// 待直达后续层，不拖垮热路径。
+	pluginClassifyTimeout = 4 * time.Second
 )
 
 // IntentChain 是意图判定链。

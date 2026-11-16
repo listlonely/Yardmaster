@@ -12,7 +12,7 @@
 //
 // 分类策略（快者先行，慢者兜底）：
 //   1. 缓存命中（512 条 LRU 语义：超限整体重置）
-//   2. 关键词快路径（内置五意图中英关键词，零成本零延迟）
+//   2. 关键词快路径（内置意图中英关键词含 agent 复合种子，零成本零延迟）
 //   3. LLM 分类：经网关自身推理端点调用「分类脑」模型——享受网关的
 //      路由/故障转移/代理，并自带 X-Gw-Internal 防递归头（分类调用
 //      不再触发分类）。
@@ -53,19 +53,25 @@ let opts = {};
 const gateway = () => (opts.gateway || process.env.YM_GATEWAY_URL || 'http://127.0.0.1:8317').replace(/\/+$/, '');
 const model = () => opts.model || process.env.YM_CLASSIFIER_MODEL || '';
 const token = () => opts.token || process.env.YM_GATEWAY_TOKEN || '';
-const fetchTimeout = () => Math.max(200, Math.min(Number(opts.timeout_ms) || 1200, 2800));
+const fetchTimeout = () => Math.max(200, Math.min(Number(opts.timeout_ms) || 1200, 4400));
 
 // ---- 缓存（消息 → 意图；超限整体重置，与网关 L1 缓存同纪律）----
 const CACHE_CAP = 512;
 const cache = new Map();
 
 // ---- 关键词快路径（内置意图；命中且在词表内才返回）----
+// agent（0.1.2）补高置信复合种子：agent 语义开放，靠 LLM 判定受分类脑
+// 往返时延制约（真机实测 2.4-4.4s 波动，网关兜底预算内常判不中）。
+// 种子选「复合任务动词/短语」（调研/选型/竞品…）——歧义远小于裸名词；
+// 放在表尾：专项意图（coding/qa/writing/long-context/vision）先抢，
+// 兜到 agent。命中即零 LLM 往返，不受上游时段性慢影响。
 const KEYWORDS = {
   coding: ['代码', '编程', '报错', 'bug', '重构', '实现', '函数', '编译', '调试', '测试用例', 'code', 'refactor', 'fix', 'debug', 'compile'],
   qa: ['什么是', '为什么', '解释', '介绍', '翻译', '是什么', '怎么理解', '区别', 'explain', 'what is', 'why'],
   writing: ['写一篇', '文案', '润色', '文章', '邮件', '报告草稿', '大纲', 'essay', 'polish', 'rewrite'],
   'long-context': ['长文档', '整个仓库', '全文', '超长', '长文本', '整份文件', '仓库级'],
   vision: ['图片', '截图', '看图', '识别图', '图像', '这一张图', 'image', 'screenshot'],
+  agent: ['调研', '选型', '竞品', '可行性', '对比分析', '方案对比', '多方案', '路线图', '帮我规划', '规划一下', '梳理一下', 'research', 'trade-off', 'tradeoff', 'compare and', 'come up with'],
 };
 
 function quickIntent(text, vocabulary) {
