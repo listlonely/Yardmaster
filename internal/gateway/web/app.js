@@ -1687,44 +1687,10 @@ const INTENT_DEFS = [
     rec: '链策略配「Agent 分配」；适合不确定该走哪条固定链的请求（需装 Agent 类插件）' },
 ];
 
-// 意图试算（路由页输入框）：输入一句话 → POST /api/intent/preview 走真实
-// 判定链（L0 → L1 → Agent 插件，经用户设定的分类脑）→ 预览意图与分配。
+// 意图试算（2026-11-16 用户定稿：独属于智能路由——路由页输入框已移除，
+// 仅保留智能代理弹窗内的试算）：POST /api/intent/preview 走真实判定链
+//（自定义 L0 → 分类脑/内置 L0 → L1）→ 预览意图与分配。
 const INTENT_META = Object.fromEntries(INTENT_DEFS.map((d) => [d.id, d]));
-
-async function intentTry() {
-  const inp = $('intent-try-input');
-  const box = $('intent-try-result');
-  const text = inp.value.trim();
-  if (!text) { status('先输入要试算的意图描述', '', 4000); return; }
-  box.hidden = false;
-  box.innerHTML = '<div class="row"><div class="who"><div class="name muted2">智能代理分析中…（判定链：内置规则 → 分类脑，最长约 1.5s）</div></div></div>';
-  try {
-    const r = await api('/api/intent/preview', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
-    });
-    const meta = INTENT_META[r.intent];
-    const title = meta ? `${meta.icon} ${meta.label}` : r.intent ? `❔ ${esc(r.intent)}` : '未判定';
-    let detail;
-    if (r.intent && (r.members || []).length) {
-      // 已配置调用链：展示分配到的成员链 + 命中的规则
-      detail = `<div style="margin-top:7px">${chainHTML(r.members, '')}` +
-        (r.rule ? `<span class="pill soft" style="margin-left:6px">规则 ${esc(r.rule)}</span>` : '') + `</div>` +
-        `<div class="sub" style="margin-top:6px">将按此链分配${r.intent === 'agent' ? '；链策略为 Agent 分配时由智能代理自主挑模型' : ''}</div>`;
-    } else if (r.intent) {
-      detail = `<div class="sub" style="margin-top:6px">意图「${esc(r.intent)}」尚未配置调用链——实际请求将走兜底；点上方「一键分配」补齐</div>`;
-    } else {
-      detail = `<div class="sub" style="margin-top:6px">未能判定意图——实际请求将走兜底链</div>`;
-    }
-    box.innerHTML = `<div class="row"><div class="who">
-      <div class="name">${title}<span class="pill soft">试算结果</span></div>${detail}
-    </div></div>`;
-  } catch (e) {
-    box.innerHTML = `<div class="row"><div class="who"><div class="name muted2">试算失败: ${esc(e.message)}</div></div></div>`;
-  }
-}
-$('btn-intent-try').addEventListener('click', intentTry);
-$('intent-try-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') intentTry(); });
 
 // 成员显示名：'glm/glm-4.6@main' → 'glm-4.6@main'；'deepseek' → 'deepseek'
 function memberLabel(m) {
@@ -2171,7 +2137,7 @@ async function agentChainModal(label) {
     },
   });
   dlg.catch(() => {}); // 取消/关闭不算错误
-  // 弹窗内意图试算（与首页 intentTry 同端点同渲染语义）
+  // 弹窗内意图试算（POST /api/intent/preview，渲染语义见上方注释）
   const root = q('#modal-root .dialog:last-child');
   // 分类脑选择即时反映状态 pill（已配置/未配置）
   const brainSelEl = root.querySelector('[name=brain]');

@@ -202,15 +202,6 @@
     <!-- 路由（融合：意图 = 一条有序调用链，2026-11 原型定稿） -->
     <section id="page-routing" class="view" hidden>
       <div class="label"><span class="tick"></span><b>意图分配</b><span class="note">意图由网关内置识别；每类任务配一条有序模型链，按策略自动分配</span><span class="sp"></span><button type="button" class="text add" id="btn-quick-alloc" hidden>一键分配推荐链</button></div>
-      <!-- 意图试算：输入一句话，Agent（经分类脑）分析意图并预览分配 -->
-      <div class="intent-try">
-        <div class="search grow">
-          <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.5 10.5 3 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-          <input id="intent-try-input" type="text" spellcheck="false" autocomplete="off" placeholder="输入一句话，预览意图判定与分配（如：帮我把这段话润色成公文）" aria-label="意图试算输入">
-        </div>
-        <button type="button" class="btn-primary" id="btn-intent-try">分析</button>
-      </div>
-      <div class="list clip" id="intent-try-result" hidden></div>
       <div class="list" id="list-intents"></div>
       <!-- 智能路由（2026-11-16）：智能代理与其余意图分开管理——分类脑接管开关 -->
       <div class="label" id="sec-agent-label" hidden><span class="tick"></span><b>智能路由</b><span class="note">开启接管后由分类脑先行判定意图（自定义关键词规则仍最优先）</span></div>
