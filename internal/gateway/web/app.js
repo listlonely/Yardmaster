@@ -1903,16 +1903,13 @@ function renderAgentSection(chain, views) {
   lbl.hidden = sec.hidden = false;
   const takeover = !!(cache.settings && cache.settings.agent_takeover);
   const brain = agentBrainOf(views);
-  const members = chain?.group ? chain.group.members : (chain?.members || []);
-  const has = members.length > 0;
-  const strategy = chain?.group ? chain.group.strategy : '';
-  const hits = (chain?.rule || {}).hits || 0;
+  const has = (chain?.group ? chain.group.members : (chain?.members || [])).length > 0;
   const d = INTENT_META.agent;
+  // 行内不展示候选链与 ⚙ 策略徽章（用户定稿 2026-11-16）：接管语义下
+  // 分类脑判意图+挑模型，候选池与 agent 策略在弹窗/后台工作，展示徒增误解。
   sec.innerHTML = `<div class="row intent-row"><div class="who">
-    <div class="name">${d.icon} ${esc(d.label)} <code>agent</code><span class="pill ${takeover ? 'ok' : 'soft'}">${takeover ? '接管中' : '默认意图链'}</span>${hits ? `<span class="pill soft">${hits} 次/今日</span>` : ''}</div>
-    <div class="sub">${esc(d.desc)}${brain ? `；分类脑 <code>${esc(brain.model)}</code>` : '；未配置分类脑——点「编辑链」选择决策模型后可开启接管'}</div>
-    ${has ? `<div style="margin-top:7px">${chainHTML(members, strategy)}</div>` : ''}</div>` +
-    (!has ? `<span class="muted2" style="flex:none">未配置</span>` : '') +
+    <div class="name">${d.icon} ${esc(d.label)} <code>agent</code><span class="pill ${takeover ? 'ok' : 'soft'}">${takeover ? '接管中' : '默认意图链'}</span></div>
+    <div class="sub">${esc(d.desc)}${brain ? `；分类脑 <code>${esc(brain.model)}</code>` : '；未配置分类脑——点「编辑链」选择决策模型后可开启接管'}</div></div>` +
     `<label class="switch-line" style="flex:none" title="${brain ? '开启后由分类脑先行判定意图，失败自动回落内置规则' : '需先配置分类脑（点「编辑链」）'}"><button type="button" class="lib-switch${takeover ? ' on' : ''}" id="agent-takeover" role="switch" aria-checked="${takeover}"${brain ? '' : ' disabled'} aria-label="智能路由接管"><i></i></button><span>接管意图判定</span></label>` +
     `<div class="row-acts" style="opacity:1">
       <button type="button" class="text add" data-chain="agent" data-label="${esc(d.label)}">${has ? '编辑链' : '＋ 配置调用链'}</button>
