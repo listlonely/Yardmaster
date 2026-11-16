@@ -40,12 +40,26 @@ func (s *Server) AttachPlugins(r *plugin.Registry) {
 		s.Intents.WithPluginIntents(r.DeclaredIntents)
 		// 插件分类兜底（classify.intent，docs §四·三）：L1 未配置/冷却/
 		// 失败时经 Registry 发 {text, vocabulary}（payload 带全词表供
-		// Agent 分类器构造提示词），响应 {intent} 须命中词表。往返预算
-		// pluginClassifyTimeout；连续 3 次失败由 Registry 冷却 5 分钟。
+		// Agent 分类器构造提示词），响应 {intent} 须命中词表。
+		// 多插件并发归并（2026-11-16）：RequestByCapFirstHit 并发请求
+		// 全部 classify 插件，首个返回「词表内非空意图」者胜出（校验
+		// 前移进归并器，词表外不占赢位）——词表快插件毫秒级先于 LLM
+		// 插件命中，慢插件不被跳过也不拖累（赢家即返）。全空=ErrNoHit
+		// 视同未命中；全错才计熔断（连 3 败冷却 5 分钟）。
 		// L1SelfHeader 防递归由插件侧自带（分类脑调用经网关推理端点）。
 		s.Intents.WithPluginClassify(func(ctx context.Context, text string, vocabulary []string) (string, error) {
-			raw, err := r.RequestByCap(plugin.CapClassify, "classify",
-				map[string]any{"text": text, "vocabulary": vocabulary}, pluginClassifyTimeout)
+			vocab := make(map[string]bool, len(vocabulary))
+			for _, v := range vocabulary {
+				vocab[v] = true
+			}
+			raw, err := r.RequestByCapFirstHit(plugin.CapClassify, "classify",
+				map[string]any{"text": text, "vocabulary": vocabulary},
+				func(raw json.RawMessage) bool {
+					var resp struct {
+						Intent string `json:"intent"`
+					}
+					return json.Unmarshal(raw, &resp) == nil && resp.Intent != "" && vocab[resp.Intent]
+				}, pluginClassifyTimeout)
 			if err != nil {
 				return "", err
 			}

@@ -6,6 +6,7 @@ package plugin
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -97,6 +98,75 @@ func TestPluginHelperProcess(t *testing.T) {
 			var env struct {
 				Type string `json:"type"`
 				ID   string `json:"id"`
+			}
+			if json.Unmarshal(in.Bytes(), &env) != nil {
+				continue
+			}
+			if env.Type == "ping" {
+				out(map[string]any{"v": 1, "type": "pong"})
+			}
+		}
+	case "classify-hit": // classify 快路径：立即回词表内意图（FirstHit 快者载体）
+		out(map[string]any{"plugin": "classify-hit", "proto": 1, "capabilities": []string{CapClassify}})
+		in.Scan()
+		for in.Scan() {
+			var env struct {
+				Type string `json:"type"`
+				ID   string `json:"id"`
+			}
+			if json.Unmarshal(in.Bytes(), &env) != nil {
+				continue
+			}
+			switch env.Type {
+			case "classify":
+				out(map[string]any{"v": 1, "type": "resp", "id": env.ID, "payload": map[string]any{"intent": "qa"}})
+			case "ping":
+				out(map[string]any{"v": 1, "type": "pong"})
+			}
+		}
+	case "classify-empty": // classify 诚实空：立即回空意图（无赢家载体）
+		out(map[string]any{"plugin": "classify-empty", "proto": 1, "capabilities": []string{CapClassify}})
+		in.Scan()
+		for in.Scan() {
+			var env struct {
+				Type string `json:"type"`
+				ID   string `json:"id"`
+			}
+			if json.Unmarshal(in.Bytes(), &env) != nil {
+				continue
+			}
+			switch env.Type {
+			case "classify":
+				out(map[string]any{"v": 1, "type": "resp", "id": env.ID, "payload": map[string]any{"intent": ""}})
+			case "ping":
+				out(map[string]any{"v": 1, "type": "pong"})
+			}
+		}
+	case "classify-slowhit": // classify 慢有效：延迟后回词表内意图（慢者兜底载体）
+		out(map[string]any{"plugin": "classify-slowhit", "proto": 1, "capabilities": []string{CapClassify}})
+		in.Scan()
+		for in.Scan() {
+			var env struct {
+				Type string `json:"type"`
+				ID   string `json:"id"`
+			}
+			if json.Unmarshal(in.Bytes(), &env) != nil {
+				continue
+			}
+			switch env.Type {
+			case "classify":
+				time.Sleep(150 * time.Millisecond)
+				out(map[string]any{"v": 1, "type": "resp", "id": env.ID, "payload": map[string]any{"intent": "agent"}})
+			case "ping":
+				out(map[string]any{"v": 1, "type": "pong"})
+			}
+		}
+	case "classify-hang": // classify 收到不回（超时熔断载体）
+		out(map[string]any{"plugin": "classify-hang", "proto": 1, "capabilities": []string{CapClassify}})
+		in.Scan()
+		for in.Scan() {
+			var env struct {
+				Type string `json:"type"`
 			}
 			if json.Unmarshal(in.Bytes(), &env) != nil {
 				continue
@@ -284,6 +354,100 @@ func TestSameSpecIntents(t *testing.T) {
 	if !sameSpec(base, Spec{ID: base.ID, Command: base.Command, Enabled: true,
 		Capabilities: base.Capabilities}) {
 		t.Fatal("双方均无意图声明不应误报差异")
+	}
+}
+
+// validIntent 是 FirstHit 测试的校验回调：intent 非空即有效。
+func validIntent(raw json.RawMessage) bool {
+	var r struct {
+		Intent string `json:"intent"`
+	}
+	return json.Unmarshal(raw, &r) == nil && r.Intent != ""
+}
+
+// RequestByCapFirstHit 多插件并发归并（2026-11-16）：有效快者赢、空不
+// 占赢位由慢有效兜底、全空 ErrNoHit 不计熔断（可立即重试）、全错计
+// 熔断进冷却（第 4 次 ErrCooldown）。
+func TestRequestByCapFirstHit(t *testing.T) {
+	// 场景 1+2：快有效 + 并发空 → hit 赢；空快 + 慢有效 → 慢者兜底赢
+	// （空应答不占赢位）。
+	reg := NewRegistry("")
+	reg.backoff = 10 * time.Millisecond
+	reg.Start(File{Plugins: []Spec{
+		helperSpec(t, "classify-hit", CapClassify),
+		helperSpec(t, "classify-empty", CapClassify),
+		helperSpec(t, "classify-slowhit", CapClassify),
+	}})
+	defer reg.Stop()
+	waitFor(t, "running", func() bool {
+		for _, v := range reg.Views() {
+			if v.Status != StatusRunning {
+				return false
+			}
+		}
+		return true
+	})
+	payload := map[string]any{"text": "x", "vocabulary": []string{"qa", "agent"}}
+	raw, err := reg.RequestByCapFirstHit(CapClassify, "classify", payload, validIntent, time.Second)
+	if err != nil {
+		t.Fatalf("快者有效应胜出: %v", err)
+	}
+	var got struct {
+		Intent string `json:"intent"`
+	}
+	if json.Unmarshal(raw, &got) != nil || got.Intent != "qa" {
+		t.Fatalf("应命中 classify-hit 的 qa: %s", raw)
+	}
+
+	// 场景 2：空快 + 慢有效 → 空应答不占赢位，慢者兜底赢。
+	regB := NewRegistry("")
+	regB.backoff = 10 * time.Millisecond
+	regB.Start(File{Plugins: []Spec{
+		helperSpec(t, "classify-empty", CapClassify),
+		helperSpec(t, "classify-slowhit", CapClassify),
+	}})
+	defer regB.Stop()
+	waitFor(t, "running", func() bool {
+		for _, v := range regB.Views() {
+			if v.Status != StatusRunning {
+				return false
+			}
+		}
+		return true
+	})
+	rawB, err := regB.RequestByCapFirstHit(CapClassify, "classify", payload, validIntent, time.Second)
+	if err != nil {
+		t.Fatalf("慢者有效应兜底胜出: %v", err)
+	}
+	if json.Unmarshal(rawB, &got) != nil || got.Intent != "agent" {
+		t.Fatalf("空不占赢位，应命中 slowhit 的 agent: %s", rawB)
+	}
+
+	// 场景 3：全空 → ErrNoHit 且不计熔断（连发 4 次都不进冷却）。
+	reg2 := NewRegistry("")
+	reg2.backoff = 10 * time.Millisecond
+	reg2.Start(File{Plugins: []Spec{helperSpec(t, "classify-empty", CapClassify)}})
+	defer reg2.Stop()
+	waitFor(t, "running", func() bool { return reg2.Views()[0].Status == StatusRunning })
+	for i := 0; i < 4; i++ {
+		if _, err := reg2.RequestByCapFirstHit(CapClassify, "classify", payload, validIntent, time.Second); !errors.Is(err, ErrNoHit) {
+			t.Fatalf("全空应 ErrNoHit（且第 %d 次不应熔断）: %v", i+1, err)
+		}
+	}
+
+	// 场景 4：全错（挂起超时）→ 连续 3 次计失败，第 4 次 ErrCooldown。
+	reg3 := NewRegistry("")
+	reg3.backoff = 10 * time.Millisecond
+	reg3.Start(File{Plugins: []Spec{helperSpec(t, "classify-hang", CapClassify)}})
+	defer reg3.Stop()
+	waitFor(t, "running", func() bool { return reg3.Views()[0].Status == StatusRunning })
+	for i := 0; i < 3; i++ {
+		if _, err := reg3.RequestByCapFirstHit(CapClassify, "classify", payload, validIntent, 150*time.Millisecond); err == nil || errors.Is(err, ErrCooldown) {
+			t.Fatalf("第 %d 次应为超时错误: %v", i+1, err)
+		}
+	}
+	if _, err := reg3.RequestByCapFirstHit(CapClassify, "classify", payload, validIntent, 150*time.Millisecond); !errors.Is(err, ErrCooldown) {
+		t.Fatalf("连续 3 败后应 ErrCooldown: %v", err)
 	}
 }
 

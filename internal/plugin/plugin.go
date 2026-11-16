@@ -70,6 +70,10 @@ type File struct {
 // ErrNoPlugin 是无可用的目标插件（未装载/未运行/无该能力）。
 var ErrNoPlugin = errors.New("无可用的插件（未装载/未运行/未授予该能力）")
 
+// ErrNoHit 是并发归并无有效结果：全部插件应答均未通过校验（诚实空/
+// 词表外），但能力本身健康（有成功应答即不计熔断失败）。
+var ErrNoHit = errors.New("全部插件均未产出有效结果")
+
 // ErrCooldown 是该能力处于失败冷却中（连续失败熔断）。
 var ErrCooldown = errors.New("插件能力冷却中（连续失败，5 分钟后重试）")
 

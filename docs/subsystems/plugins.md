@@ -109,10 +109,17 @@ fire-and-forget 不占请求路径。**无不可行项，主线采纳。**
 
 ### 四·三、classify.intent（意图分类，W4）
 
-- 请求 `{text:"…"}` → 响应 `{intent:"…"}`；intent 必须命中现词表
-  （内置+自定义），未知值视同失败回落默认组（不猜）。
+- 请求 `{text:"…", vocabulary:[…]}` → 响应 `{intent:"…"}`；intent 必须
+  命中现词表（内置+自定义+插件声明），未知值视同失败回落默认组（不猜）。
 - 位置：内置链顺序不变（用户自定义 → 内置 L0 → L1 → 默认组），插件
   分类器在 **L1 不可用/冷却期间**作为兜底（不动热路径主链）。
+- **多插件并发归并**（2026-11-16）：classify 请求经
+  `RequestByCapFirstHit` 并发发给**全部**运行中的 classify 插件，首个
+  返回「词表内非空 intent」者胜出并立即返回（其余在途结果丢弃）——
+  纯词表插件毫秒级应答先于 LLM 插件命中，慢插件不被跳过也不拖累
+  整体；全部应答无效但能力健康 → 视同未命中（不计熔断），全部出错
+  才计入「连续 3 次失败冷却 5 分钟」。请求-响应预算见 §七成本表
+  （classify 往返一栏）。
 
 ### 四·四、vendor.verdict（响应特判，W4）
 
@@ -135,6 +142,7 @@ fire-and-forget 不占请求路径。**无不可行项，主线采纳。**
 - **同能力单插件语义**：RequestByCap 按清单序取**第一个** granted 含
   该能力的运行中插件——同声明多个 rewrite 插件时二选一（如
   history-trim 与 context-guard 互斥，按 plugins.json 声明顺序）。
+  例外：classify.intent 走 RequestByCapFirstHit 并发归并（见 §四·三）。
 - **magpie-bridge 适配层**（plugins/magpie-bridge/，node ≥18 或 bun）：
   通用协议桥 `node adapter.mjs <id> <middleware.js>`；中间件单文件零
   npm 依赖，导出 `onRequest(body, ctx)`，ctx={options,model,path,

@@ -739,6 +739,67 @@ func (r *Registry) RequestByCap(cap, msgType string, payload any, timeout time.D
 	return raw, err
 }
 
+// RequestByCapFirstHit 并发请求全部运行中具备该能力的插件，首个应答
+// 通过 isValid 的胜出并立即返回（其余在途结果丢弃——p.Request 自带
+// timeout 封顶，无泄漏）。多插件并发归并（2026-11-16）：classify 意图
+// 判定从「声明序单发」升级为「全员并发、有效快者赢」——纯词表插件
+// 毫秒级应答先于 LLM 插件命中，慢插件不再被跳过也不拖累整体（赢家即
+// 返，不等最慢）。校验语义（何为「有效」）由调用方经 isValid 注入，
+// 本方法保持能力路由通用。
+//
+// 归并与熔断口径：任一插件产出有效结果 → record ok；全部应答无效但
+// 有成功应答（诚实空/词表外）→ record ok（能力健康）+ ErrNoHit（外层
+// 视同未命中）；全部出错 → record fail（连续 3 次冷却 5 分钟）+ 最后
+// 错误。
+func (r *Registry) RequestByCapFirstHit(cap, msgType string, payload any,
+	isValid func(json.RawMessage) bool, timeout time.Duration) (json.RawMessage, error) {
+	r.mu.Lock()
+	if cd := r.cool[cap]; cd != nil && time.Now().Before(cd.until) {
+		r.mu.Unlock()
+		return nil, ErrCooldown
+	}
+	var plugs []*Plugin
+	for _, id := range r.order {
+		if pl := r.plugins[id]; pl.running() && pl.hasCap(cap) {
+			plugs = append(plugs, pl)
+		}
+	}
+	r.mu.Unlock()
+	if len(plugs) == 0 {
+		return nil, ErrNoPlugin
+	}
+	type reply struct {
+		raw json.RawMessage
+		err error
+	}
+	ch := make(chan reply, len(plugs)) // 有界：全部应答必有一落点
+	for _, pl := range plugs {
+		go func(pl *Plugin) {
+			raw, err := pl.Request(msgType, payload, timeout)
+			ch <- reply{raw, err}
+		}(pl)
+	}
+	var lastErr error
+	anyOK := false // 有插件成功应答（无论结果有效否）= 能力健康
+	for range plugs {
+		rep := <-ch
+		if rep.err != nil {
+			lastErr = rep.err
+			continue
+		}
+		anyOK = true
+		if isValid(rep.raw) {
+			r.record(cap, true)
+			return rep.raw, nil
+		}
+	}
+	r.record(cap, anyOK)
+	if !anyOK {
+		return nil, lastErr // 全部出错（lastErr 必非 nil）
+	}
+	return nil, ErrNoHit
+}
+
 // record 熔断计数：失败入 5 分钟窗口，连续 3 次 → 冷却。
 func (r *Registry) record(cap string, ok bool) {
 	r.mu.Lock()
