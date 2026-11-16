@@ -243,6 +243,33 @@ func TestQuotaPollerFeedsRouting(t *testing.T) {
 	}
 }
 
+// 余额端点被厂商停服（HTTP 410，如硅基流动 /v1/user/info 2026-08-14
+// 停服）：识别为稳态「厂商已停服」而非普通失败；保留上次值、余额为
+// 空时不伪造数值。
+func TestQuotaProbeRetired410(t *testing.T) {
+	appDir := t.TempDir()
+	paths := newPaths(appDir)
+	balSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusGone)
+		_, _ = w.Write([]byte(`{"code":20092,"message":"This endpoint is deprecated and is no longer available.","data":null}`))
+	}))
+	defer balSrv.Close()
+
+	prov := provider.Provider{ID: "siliconflow", Protocol: provider.ProtocolChat, BaseURL: "http://up.invalid",
+		QuotaProbe: &provider.QuotaProbe{URL: balSrv.URL},
+		Accounts:   []provider.Account{{Name: "main", APIKey: "k", Status: provider.AccountAvailable}}}
+	planner := NewPlanner([]provider.Provider{prov}, nil)
+	srv := &Server{Planner: planner, AppDir: appDir, ProvidersPath: paths.ProvidersPath()}
+	srv.pollQuotas(context.Background())
+	acc := planner.Providers()[0].Accounts[0]
+	if acc.Balance != 0 || acc.BalanceAt != 0 {
+		t.Fatalf("无既有余额不应伪造数值: %+v", acc)
+	}
+	if !strings.Contains(acc.ProbeErr, "已停服") {
+		t.Fatalf("410 应标记为厂商停服而非普通失败: %q", acc.ProbeErr)
+	}
+}
+
 // 手动触发余额探测 API（M9-W3）：与后台 ticker 同路径，响应携带
 // 各账号探测结果 + 写后 state（余额已落账）。
 func TestQuotaProbeAPI(t *testing.T) {

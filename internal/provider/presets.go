@@ -47,7 +47,10 @@ var Presets = []Preset{
 	{ID: "kimi-messages", Name: "Kimi/Moonshot（Anthropic 协议）", Protocol: ProtocolMessages,
 		BaseURL: "https://api.moonshot.cn/anthropic"},
 	{ID: "siliconflow", Name: "SiliconFlow 硅基流动", Protocol: ProtocolChat,
-		BaseURL:    "https://api.siliconflow.cn/v1",
+		BaseURL: "https://api.siliconflow.cn/v1",
+		// /v1/user/info 已被厂商停服（2026-08-14，HTTP 410 code 20092），
+		// 官方替代 API 尚未上线。保留端点占位：探测侧按 410 识别为
+		// 「厂商停服」中性提示而非失败告警；官方出新端点后此处跟进替换。
 		QuotaProbe: &QuotaProbe{URL: "https://api.siliconflow.cn/v1/user/info"}},
 	{ID: "anthropic", Name: "Anthropic 官方", Protocol: ProtocolMessages,
 		BaseURL: "https://api.anthropic.com"},

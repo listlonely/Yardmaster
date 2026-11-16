@@ -1027,8 +1027,14 @@ function acctRow(p, a, live, resting, global) {
   const liveParts = [];
   if (restUntil) liveParts.push(`休眠至 ${esc(restUntil.replace('T', ' '))}`);
   if (lv.probe_err) {
-    // 探测失败不再静默（此前原因只在 serve 日志）：行内直接给出原因
-    liveParts.push(`<span class="pill prefail" title="最近一次余额/窗口探测失败：${esc(lv.probe_err)}">探测失败 · ${esc(lv.probe_err)}</span>`);
+    // 探测失败不再静默（此前原因只在 serve 日志）：行内直接给出原因；
+    // 厂商停服（如硅基流动 /v1/user/info 2026-08-14 下线）是稳态，
+    // 用中性琥珀提示而非红色失败
+    if (lv.probe_err.includes('已停服')) {
+      liveParts.push(`<span class="pill warn" title="余额端点已被厂商下线（410 Gone），等官方替代 API 上线后自动恢复">端点已停服 · ${esc(lv.probe_err)}</span>`);
+    } else {
+      liveParts.push(`<span class="pill prefail" title="最近一次余额/窗口探测失败：${esc(lv.probe_err)}">探测失败 · ${esc(lv.probe_err)}</span>`);
+    }
   }
   if (lv.window_status === 'restricted' && (lv.window_reset_at || 0) * 1000 > Date.now()) {
     liveParts.push(`窗口限频 · 重置 ${esc(new Date(lv.window_reset_at * 1000).toLocaleTimeString())}`);
@@ -2964,7 +2970,7 @@ async function probeQuotas() {
     const r = await api('/api/quota/probe', { method: 'POST' });
     const ps = r.probes || [];
     if (!ps.length) { status('无账号配置余额探测（quota_probe）', '', 5000); return; }
-    const fail = ps.filter((p) => p.error);
+    const fail = ps.filter((p) => p.error && !p.error.includes('已停服'));
     status(`余额探测完成：${ps.length - fail.length}/${ps.length} 成功` +
       (fail.length ? `（失败：${fail.map((p) => p.provider + '/' + p.account).join('、')}）` : ''),
       fail.length ? 'warn' : 'ok', 6000);
@@ -2979,7 +2985,13 @@ async function probeQuotas() {
 // 无需登录」语义；未配置 quota_probe 端点时给引导空态。
 function probeResultHTML(hit) {
   if (!hit) return '<span class="pill warn">无结果</span>';
-  if (hit.error) return `<span class="pill err">失败</span> ${esc(hit.error)}`;
+  if (hit.error) {
+    // 厂商停服（HTTP 410）是稳态而非故障：琥珀提示，不计失败
+    if (hit.error.includes('已停服')) {
+      return `<span class="pill warn">端点已停服</span> ${esc(hit.error)}（等官方替代 API）`;
+    }
+    return `<span class="pill err">失败</span> ${esc(hit.error)}`;
+  }
   if ((hit.windows || []).length) {
     return hit.windows.map((w) => {
       const pct = w.pct != null ? Math.round(w.pct)

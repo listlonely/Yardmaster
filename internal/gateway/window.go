@@ -9,6 +9,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -381,7 +382,12 @@ func (s *Server) pollQuotas(ctx context.Context) []probeResult {
 			}
 			bal, wins, err := s.probeBalance(ctx, &prov, acc)
 			if err != nil {
-				slog.Warn("余额轮询失败（保留上次值）", "provider", prov.ID, "account", acc.Name, "err", err)
+				if errors.Is(err, errQuotaRetired) {
+					// 厂商停服是稳态（等官方替代 API），降为 INFO 不刷 WARN
+					slog.Info("余额端点已停服（厂商弃用，保留上次值）", "provider", prov.ID, "account", acc.Name, "err", err)
+				} else {
+					slog.Warn("余额轮询失败（保留上次值）", "provider", prov.ID, "account", acc.Name, "err", err)
+				}
 				s.Planner.SetProbeErr(prov.ID+"/"+acc.Name, err.Error())
 				out = append(out, probeResult{Provider: prov.ID, Account: acc.Name, Err: err.Error()})
 				continue
@@ -407,6 +413,12 @@ func (s *Server) notifyAccountRest(accountKey, reason string) {
 	}
 }
 
+// errQuotaRetired 表示厂商已停服余额端点（HTTP 410 Gone）：稳态而非
+// 瞬时故障，重试无意义，探测侧按「端点已停服」中性提示降级而非失败
+// 告警。实例：硅基流动 /v1/user/info 于 2026-08-14 停服（code 20092），
+// 官方替代 API 尚未上线。
+var errQuotaRetired = errors.New("厂商已停服该余额端点（HTTP 410）")
+
 // probeBalance 请求余额端点并解析数值；订阅窗口形态时同时带回
 // 归一窗口数组（控制台双窗口卡 + POST /api/quota/probe 应答）。
 func (s *Server) probeBalance(ctx context.Context, prov *provider.Provider, acc provider.Account) (float64, []provider.PlanWindow, error) {
@@ -429,6 +441,9 @@ func (s *Server) probeBalance(ctx context.Context, prov *provider.Provider, acc 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusGone {
+			return 0, nil, errQuotaRetired
+		}
 		return 0, nil, fmt.Errorf("余额端点 HTTP %d", resp.StatusCode)
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
