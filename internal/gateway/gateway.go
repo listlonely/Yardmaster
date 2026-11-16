@@ -169,6 +169,9 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/plugins/{id}/disable", func(w http.ResponseWriter, r *http.Request) {
 		s.handlePluginToggle(w, r.PathValue("id"), "disable")
 	})
+	mux.HandleFunc("PUT /api/plugins/{id}/options", func(w http.ResponseWriter, r *http.Request) {
+		s.handlePluginOptions(w, r, r.PathValue("id"))
+	}) // 插件静态配置整体替换（热生效，如分类脑）
 	mux.Handle("GET /web/", http.StripPrefix("/web/", http.FileServerFS(webSub())))
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {
 		index, err := fs.ReadFile(webFS, "web/index.html")

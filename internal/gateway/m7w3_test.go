@@ -97,9 +97,8 @@ func waitRunning(t *testing.T, reg *plugin.Registry, id string) {
 	t.Fatalf("插件 %s 未进入 running", id)
 }
 
-func helperSpec(id string, caps []string, extraEnv ...string) plugin.Spec {
+func helperSpec(id string, caps []string) plugin.Spec {
 	env := []string{"GO_GW_PLUGIN_HELPER=1", "GO_GW_PLUGIN_CAPS=" + strings.Join(caps, ",")}
-	env = append(env, extraEnv...)
 	return plugin.Spec{
 		ID: id, Enabled: true, Capabilities: caps, TimeoutMS: 300,
 		Command: helperCommand(), Env: env,
@@ -326,5 +325,86 @@ func TestPluginsHotMountAfterEmptyStart(t *testing.T) {
 	got.Body.Close()
 	if len(view.Plugins) != 1 || view.Plugins[0].ID != "hotp" || view.Plugins[0].Status != plugin.StatusRunning {
 		t.Fatalf("热挂载后视图: %+v", view)
+	}
+}
+
+// PUT /api/plugins/{id}/options：整体替换静态配置（同一写路径 + 注册表
+// 热替换），视图透出 options（如 agent-classifier 的分类脑）；body 非
+// 对象 400、未知 id 404、未挂载 400。
+func TestPluginOptionsAPI(t *testing.T) {
+	dir := t.TempDir()
+	reg, stop := startTestPlugins(t, helperSpec("optp", []string{plugin.CapClassify}))
+	t.Cleanup(stop)
+
+	s := &Server{Planner: NewPlanner(nil, nil), Version: "t", AppDir: dir}
+	s.AttachPlugins(reg)
+
+	f := plugin.File{Plugins: []plugin.Spec{helperSpec("optp", []string{plugin.CapClassify})}}
+	if err := plugin.Save(filepath.Join(dir, "plugins.json"), f); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(s.Handler())
+	t.Cleanup(srv.Close)
+	waitRunning(t, reg, "optp")
+
+	put := func(url, body string) *http.Response {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodPut, url, strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		r, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+
+	// 写入分类脑形态 options → 200 + 落盘 + 视图热替换后仍 running。
+	if r := put(srv.URL+"/api/plugins/optp/options", `{"model":"glm-coding/glm-4.7-air","gateway":"","timeout_ms":2500}`); r.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", r.StatusCode)
+	} else {
+		r.Body.Close()
+	}
+	var saved plugin.File
+	if err := store.LoadJSON(filepath.Join(dir, "plugins.json"), &saved); err != nil {
+		t.Fatal(err)
+	}
+	if len(saved.Plugins) != 1 || saved.Plugins[0].Options["model"] != "glm-coding/glm-4.7-air" {
+		t.Fatalf("落盘 options: %+v", saved.Plugins)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if vs := reg.Views(); len(vs) == 1 && vs[0].Options["model"] == "glm-coding/glm-4.7-air" && vs[0].Status == plugin.StatusRunning {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if vs := reg.Views(); len(vs) != 1 || vs[0].Options["model"] != "glm-coding/glm-4.7-air" || vs[0].Status != plugin.StatusRunning {
+		t.Fatalf("视图 options/状态: %+v", vs)
+	}
+
+	// body 非对象 → 400；未知 id → 404。
+	if r := put(srv.URL+"/api/plugins/optp/options", `["not","object"]`); r.StatusCode != http.StatusBadRequest {
+		t.Fatalf("非对象 body 应 400: %d", r.StatusCode)
+	} else {
+		r.Body.Close()
+	}
+	if r := put(srv.URL+"/api/plugins/nope/options", `{}`); r.StatusCode != http.StatusNotFound {
+		t.Fatalf("未知 id 应 404: %d", r.StatusCode)
+	} else {
+		r.Body.Close()
+	}
+
+	// 未挂载注册表 → 400。
+	s2 := &Server{Planner: NewPlanner(nil, nil), Version: "t", AppDir: dir}
+	srv2 := httptest.NewServer(s2.Handler())
+	t.Cleanup(srv2.Close)
+	if r := put(srv2.URL+"/api/plugins/x/options", `{}`); r.StatusCode != http.StatusBadRequest {
+		t.Fatalf("未挂载应 400: %d", r.StatusCode)
+	} else {
+		r.Body.Close()
 	}
 }

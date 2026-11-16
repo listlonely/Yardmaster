@@ -1697,7 +1697,7 @@ async function intentTry() {
   const text = inp.value.trim();
   if (!text) { status('先输入要试算的意图描述', '', 4000); return; }
   box.hidden = false;
-  box.innerHTML = '<div class="row"><div class="who"><div class="name muted2">智能代理分析中…（经分类脑，最长约 1.5s）</div></div></div>';
+  box.innerHTML = '<div class="row"><div class="who"><div class="name muted2">智能代理分析中…（判定链：内置规则 → 分类脑，最长约 1.5s）</div></div></div>';
   try {
     const r = await api('/api/intent/preview', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -2032,15 +2032,29 @@ const STRATEGIES = [
 // 意图并预览分配（同首页试算框，POST /api/intent/preview）；候选模型始终
 // 与服务商页配置的清单同步（保存时全量重建 chain-agent 成员，运行时由
 // Agent 插件按请求语境自主挑选），服务商页增删模型后重新保存即同步。
-function agentChainModal(label) {
+async function agentChainModal(label) {
   const provs = cache.providers?.providers || [];
   const members = provs.flatMap((p) => (p.models || []).map((m) => `${p.id}/${m.id}`));
   const accTotal = provs.reduce((n, p) => n + (p.accounts || []).length, 0);
+  // 分类脑 = classify 插件的 options.model（读当前值，保存时整体写回）。
+  // 未配置 → 插件仅内置关键词规则（与握手日志同口径）。视图不可达时按
+  // 未配置渲染，不阻断弹窗。
+  let brainPlug = null, brainCur = '';
+  try {
+    const pv = await api('/api/plugins');
+    brainPlug = (pv.plugins || []).find((p) => p.enabled && p.status === 'running' && (p.granted || []).includes('classify.intent')) || null;
+    brainCur = String((brainPlug && brainPlug.options || {}).model || '');
+  } catch { brainPlug = null; }
   const dlg = openDialog({
     title: `智能代理 · 意图配置`,
     body:
-      `<div class="pick-hint"><span>与其他意图不同：无需挑选模型——候选始终与服务商清单同步，运行时由智能代理（Agent 插件）按请求语境自主挑选最合适的模型</span></div>` +
-      `<div class="label"><span class="tick"></span><b>意图试算</b><span class="note">输入一句话，Agent 用你设定的分类脑分析意图并预览分配</span></div>` +
+      `<div class="pick-hint"><span>与其他意图不同：无需挑选候选模型——候选始终与服务商清单同步，运行时由智能代理（Agent 插件）按请求语境自主挑选最合适的模型</span></div>` +
+      frow('分类脑', `<div class="net-pick"><select class="field" name="brain" style="flex:1;min-width:0">` +
+        `<option value="">不配置（仅内置关键词规则）</option>` +
+        members.map((m) => `<option value="${esc(m)}"${m === brainCur ? ' selected' : ''}>${esc(m)}</option>`).join('') +
+        `</select><span class="pill ${brainCur ? 'ok' : 'warn'}">${brainCur ? '已配置' : '未配置'}</span></div>`,
+        '读请求、判意图、挑候选的「决策模型」——建议选便宜快速的小模型；调用经网关自身路由（受意图分配与额度管理管辖），key 不出本机。留空则仅用内置关键词规则，语义开放请求将走兜底。') +
+      `<div class="label" style="margin-top:12px"><span class="tick"></span><b>意图试算</b><span class="note">输入一句话预览判定与分配；分类脑配置后保存即生效</span></div>` +
       `<div class="intent-try" style="margin:4px 0 2px"><div class="search">` +
       `<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.5 10.5 3 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>` +
       `<input type="text" name="agent_try" spellcheck="false" autocomplete="off" placeholder="输入一句话，预览 Agent 的判定与分配（如：帮我把这段话润色成公文）" aria-label="意图试算输入"></div>` +
@@ -2049,8 +2063,8 @@ function agentChainModal(label) {
       `<div class="label" style="margin-top:12px"><span class="tick"></span><b>候选模型（与服务商清单同步）</b><span class="note">${members.length} 个模型 · ${accTotal} 个账号；服务商页增删模型后重新保存即同步</span></div>` +
       `<div class="chips" style="padding:2px 0 4px">${members.map((m) => `<code>${esc(m)}</code>`).join(' ') || '<span class="muted2" style="font-size:12px">清单为空——先在「服务商」页添加并检测模型</span>'}</div>`,
     yes: '保存',
-    footNote: '保存 = 候选与服务商清单全量同步（chain-agent 组 · agent 策略 · 热生效）',
-    onSubmit: async () => {
+    footNote: '保存 = 候选全量同步 + 分类脑写入（chain-agent 组 · plugins.json · 备份+审计+热生效）',
+    onSubmit: async (form) => {
       if (!members.length) throw new Error('没有可用模型——先在「服务商」页添加并检测出模型清单');
       // 组：候选全量同步（strategy=agent；成员不含账号席位=自动展开全部账号）
       await putProvidersDoc((cur) => {
@@ -2076,20 +2090,47 @@ function agentChainModal(label) {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ rules }),
       });
-      status(`智能代理已保存：候选与服务商清单同步（${members.length} 个模型）（热生效，写前备份已留底）`, 'ok');
+      // 分类脑变更 → 整体写回插件 options（model 换新值，其余键保留）；
+      // options 语义变化触发实例重建，新握手把配置透传给插件
+      const nextBrain = (form.querySelector('[name=brain]')?.value || '').trim();
+      const brainChanged = brainPlug && nextBrain !== brainCur;
+      if (brainChanged) {
+        await api(`/api/plugins/${encodeURIComponent(brainPlug.id)}/options`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...(brainPlug.options || {}), model: nextBrain }),
+        });
+      }
+      status(`智能代理已保存：候选与服务商清单同步（${members.length} 个模型）` +
+        (brainChanged ? `；分类脑 → ${nextBrain || '未配置（仅关键词规则）'}` : '') +
+        '（热生效，写前备份已留底）', 'ok');
       afterWrite();
+      if (brainChanged) {
+        // options 变更触发插件实例重建，期间路由页按就绪态门控会暂时隐藏
+        // 「智能代理」行——重建完成后延迟重拉一次，行自动回来
+        setTimeout(() => { if (!q('#page-routing').hidden) loadRouting(); }, 2500);
+      }
     },
   });
   dlg.catch(() => {}); // 取消/关闭不算错误
   // 弹窗内意图试算（与首页 intentTry 同端点同渲染语义）
   const root = q('#modal-root .dialog:last-child');
+  // 分类脑选择即时反映状态 pill（已配置/未配置）
+  const brainSelEl = root.querySelector('[name=brain]');
+  const brainPill = root.querySelector('.net-pick .pill');
+  brainSelEl?.addEventListener('change', () => {
+    const on = !!brainSelEl.value;
+    if (brainPill) {
+      brainPill.className = 'pill ' + (on ? 'ok' : 'warn');
+      brainPill.textContent = on ? '已配置' : '未配置';
+    }
+  });
   const analyze = async () => {
     const inp = root.querySelector('input[name=agent_try]');
     const box = root.querySelector('#agent-try-result');
     const text = inp.value.trim();
     if (!text) { box.hidden = false; box.innerHTML = '<div class="ap-probing">先输入一句话再分析</div>'; return; }
     box.hidden = false;
-    box.innerHTML = '<div class="ap-probing">智能代理分析中…（经分类脑，最长约 1.5s）</div>';
+    box.innerHTML = '<div class="ap-probing">智能代理分析中…（判定链：内置规则 → 分类脑，最长约 1.5s）</div>';
     try {
       const r = await api('/api/intent/preview', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },

@@ -475,17 +475,18 @@ func (p *Plugin) Stop() {
 
 // StatusView 是管理面的插件状态视图。
 type StatusView struct {
-	ID           string      `json:"id"`
-	Command      []string    `json:"command"`
-	Enabled      bool        `json:"enabled"`
-	Capabilities []string    `json:"capabilities"`
-	Desc         string      `json:"desc,omitempty"`
-	Intents      []IntentRef `json:"intents,omitempty"`
-	Granted      []string    `json:"granted,omitempty"`
-	Status       Status      `json:"status"`
-	Crash1H      int         `json:"crash_1h"`
-	Dropped      int64       `json:"dropped_events,omitempty"`
-	LogTail      []string    `json:"log_tail,omitempty"`
+	ID           string         `json:"id"`
+	Command      []string       `json:"command"`
+	Enabled      bool           `json:"enabled"`
+	Capabilities []string       `json:"capabilities"`
+	Desc         string         `json:"desc,omitempty"`
+	Intents      []IntentRef    `json:"intents,omitempty"`
+	Granted      []string       `json:"granted,omitempty"`
+	Options      map[string]any `json:"options,omitempty"` // 静态配置（握手透传；非凭证，如 agent-classifier 的分类脑）
+	Status       Status         `json:"status"`
+	Crash1H      int            `json:"crash_1h"`
+	Dropped      int64          `json:"dropped_events,omitempty"`
+	LogTail      []string       `json:"log_tail,omitempty"`
 }
 
 func (p *Plugin) view() StatusView {
@@ -494,7 +495,7 @@ func (p *Plugin) view() StatusView {
 	return StatusView{
 		ID: p.spec.ID, Command: p.spec.Command, Enabled: p.spec.Enabled,
 		Capabilities: p.spec.Capabilities, Desc: p.spec.Desc, Intents: p.spec.Intents,
-		Granted: p.granted,
+		Granted: p.granted, Options: p.spec.Options,
 		Status:  p.status, Crash1H: len(p.failAt), Dropped: p.dropN.Load(),
 		LogTail: append([]string(nil), p.logTail...),
 	}

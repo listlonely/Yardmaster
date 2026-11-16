@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -110,4 +112,47 @@ func (s *Server) handlePluginToggle(w http.ResponseWriter, id, action string) {
 	}
 	s.Plugins.Reload(f)
 	writeJSON(w, map[string]any{"ok": true, "effect": effectImmediate, "id": id, "enabled": action == "enable"})
+}
+
+// handlePluginOptions 整体替换插件静态配置（PUT /api/plugins/{id}/options，
+// body = 完整 options JSON 对象；置 null/空对象 = 清空）。同一写路径
+//（校验+备份+审计）+ 注册表热替换；options 语义变化触发实例重建，新
+// 握手把 settings.options 透传给插件（如 agent-classifier 的分类脑）。
+func (s *Server) handlePluginOptions(w http.ResponseWriter, r *http.Request, id string) {
+	if s.Plugins == nil {
+		writeAPIErr(w, badRequest(errors.New("插件未挂载（plugins.json 未配置或解析失败）")))
+		return
+	}
+	var opts map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&opts); err != nil {
+		writeAPIErr(w, badRequest(fmt.Errorf("body 须为 JSON 对象: %w", err)))
+		return
+	}
+	var f plugin.File
+	if err := s.loadCurrentForWrite(s.pluginsPath(), &f); err != nil {
+		writeAPIErr(w, err)
+		return
+	}
+	found := false
+	for i := range f.Plugins {
+		if f.Plugins[i].ID == id {
+			found = true
+			f.Plugins[i].Options = opts
+		}
+	}
+	if !found {
+		writeAPIErr(w, errNotFound("插件 "+id))
+		return
+	}
+	if err := plugin.Validate(f); err != nil {
+		writeAPIErr(w, badRequest(err))
+		return
+	}
+	if err := s.writeConfig(s.pluginsPath(), cfgPlugins, f); err != nil {
+		writeAPIErr(w, err)
+		return
+	}
+	s.Plugins.Reload(f)
+	slog.Info("插件配置已更新", "id", id, "options", opts)
+	writeJSON(w, map[string]any{"ok": true, "effect": effectImmediate, "id": id, "options": opts})
 }
