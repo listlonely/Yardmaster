@@ -283,9 +283,12 @@ func waitOAuthFlights(t *testing.T, s *Server) {
 }
 
 // waitOAuthRefreshed 轮询等待异步刷新完成（测试辅助）。
+// 上限 1000×10ms≈10s+：CI Windows 在 -race 下刷新链路（HTTP + 备份 +
+// 落库）曾挤不进 2s 硬顶（见 waitOAuthFlights 注释的同源前科），
+// 放宽等待窗不影响成功路径（条件满足即返回）。
 func waitOAuthRefreshed(t *testing.T, s *Server) {
 	t.Helper()
-	for i := 0; i < 200; i++ {
+	for i := 0; i < 1000; i++ {
 		paths := store.Paths{AppDir: s.AppDir}
 		o, err := credential.Store{Path: paths.CredentialsPath()}.Load("anthropic/main")
 		if err == nil && o.AccessToken == "at-new" {
