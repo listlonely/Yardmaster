@@ -48,6 +48,9 @@ func TestExtractBalance(t *testing.T) {
 		{`{"code":200,"data":{"total_balance":"123.45"}}`, 123.45},
 		{`{"balance": 0}`, 0},
 		{`{"result":{"credit": 7.5}}`, 7.5},
+		// 货币前缀字符串（SiliconFlow user/info 的 "¥41.62" 形状）
+		{`{"code":200,"data":{"balance":"¥41.62"}}`, 41.62},
+		{`{"data":{"balance":"$12.5"}}`, 12.5},
 	}
 	for _, tc := range cases {
 		got, ok := extractBalance([]byte(tc.body))
@@ -61,30 +64,84 @@ func TestExtractBalance(t *testing.T) {
 }
 
 // 订阅窗口形态（GLM /api/monitor/usage/quota/limit，真机采样样本
-// [M9-W3]）：取 limits[] 最小 remaining，与数组顺序无关。
+// [M9-W3]）：取 limits[] 最小 remaining，与数组顺序无关；同时归一出
+// 窗口数组（M10-F：窗口名 + 已用/总量 + 重置时间）。
 func TestExtractPlanQuota(t *testing.T) {
 	realSample := `{"code":200,"msg":"操作成功","success":true,"data":{"level":"pro","limits":[
 		{"type":"CREDIT_LIMIT","unit":3,"number":5,"usage":12000,"currentValue":945,
 		 "remaining":11054,"percentage":7,"nextResetTime":1793690514565},
 		{"type":"CREDIT_LIMIT","unit":6,"number":1,"usage":60000,"currentValue":14331,
 		 "remaining":45668,"percentage":23,"nextResetTime":1793933920971}]}}`
-	got, ok := extractPlanQuota([]byte(realSample))
+	got, wins, ok := extractPlanQuota([]byte(realSample))
 	if !ok || got != 11054 {
 		t.Fatalf("真机样本应取最小 remaining 11054: %v %v", got, ok)
+	}
+	if len(wins) != 2 {
+		t.Fatalf("应归一出 2 个窗口: %v", wins)
+	}
+	// 窗口 1：unit=3,number=5 → 「5小时额度」；总量 = 945+11054；pct=7；重置=毫秒→秒
+	if wins[0].Name != "5小时额度" || wins[0].Used != 945 || wins[0].Total != 11999 {
+		t.Fatalf("窗口 1 归一不符: %+v", wins[0])
+	}
+	if wins[0].Pct == nil || *wins[0].Pct != 7 || wins[0].ResetAt != 1793690514 {
+		t.Fatalf("窗口 1 pct/reset 不符: %+v", wins[0])
+	}
+	// 窗口 2：unit=6,number=1 → 「周额度」
+	if wins[1].Name != "周额度" || wins[1].Used != 14331 || wins[1].Total != 59999 {
+		t.Fatalf("窗口 2 归一不符: %+v", wins[1])
 	}
 	// 顺序翻转：仍取最紧窗口（不依赖数组顺序——通用 extractBalance 的
 	// "remaining" 键命中会取数组首个，语义错误）
 	reversed := `{"success":true,"data":{"limits":[
 		{"remaining":45668,"percentage":23},{"remaining":11054,"percentage":7}]}}`
-	if got, ok := extractPlanQuota([]byte(reversed)); !ok || got != 11054 {
+	if got, _, ok := extractPlanQuota([]byte(reversed)); !ok || got != 11054 {
 		t.Fatalf("顺序无关: %v %v", got, ok)
 	}
 	// 通用余额形态不应被 plan 解析器吞掉（probeBalance 回退路径）
-	if _, ok := extractPlanQuota([]byte(`{"code":200,"data":{"total_balance":"123.45"}}`)); ok {
+	if _, _, ok := extractPlanQuota([]byte(`{"code":200,"data":{"total_balance":"123.45"}}`)); ok {
 		t.Fatal("余额形态应返回 false 走回退")
 	}
-	if _, ok := extractPlanQuota([]byte(`{"success":false,"msg":"denied"}`)); ok {
+	if _, _, ok := extractPlanQuota([]byte(`{"success":false,"msg":"denied"}`)); ok {
 		t.Fatal("无 limits 应返回 false")
+	}
+}
+
+// 预设默认探测端点（2026-11-13）：存量 provider（文件里无 quota_probe）
+// 升级重启后由 NewPlanner/Reload 运行态补齐——Coding Plan 双窗口卡与
+// SiliconFlow 余额由此才能出现；显式配置（含禁用）优先。
+func TestPresetQuotaDefaultsInjected(t *testing.T) {
+	glm := provider.Provider{ID: "glm-coding", Name: "glm-coding", Protocol: provider.ProtocolChat,
+		BaseURL: "https://open.bigmodel.cn/api/coding/paas/v4",
+		Accounts: []provider.Account{{Name: "main"}}}
+	sf := provider.Provider{ID: "siliconflow", Name: "siliconflow", Protocol: provider.ProtocolChat,
+		BaseURL: "https://api.siliconflow.cn/v1",
+		Accounts: []provider.Account{{Name: "main"}}}
+	custom := provider.Provider{ID: "my-relay", Name: "my-relay", Protocol: provider.ProtocolChat,
+		BaseURL: "https://relay.example.com/v1",
+		Accounts: []provider.Account{{Name: "main"}}}
+	disabled := provider.Provider{ID: "glm-coding", Name: "glm-coding", Protocol: provider.ProtocolChat,
+		BaseURL:    "https://open.bigmodel.cn/api/coding/paas/v4",
+		QuotaProbe: &provider.QuotaProbe{URL: ""},
+		Accounts:   []provider.Account{{Name: "main"}}}
+
+	p := NewPlanner([]provider.Provider{glm, sf, custom, disabled}, nil)
+	got := p.Providers()
+	if got[0].QuotaProbe == nil || got[0].QuotaProbe.URL != "https://open.bigmodel.cn/api/monitor/usage/quota/limit" {
+		t.Fatalf("glm-coding 应补 Coding Plan 用量端点: %+v", got[0].QuotaProbe)
+	}
+	if got[1].QuotaProbe == nil || got[1].QuotaProbe.URL != "https://api.siliconflow.cn/v1/user/info" {
+		t.Fatalf("siliconflow 应补 user/info 余额端点: %+v", got[1].QuotaProbe)
+	}
+	if got[2].QuotaProbe != nil {
+		t.Fatalf("预设外自定义服务商不得注入: %+v", got[2].QuotaProbe)
+	}
+	if got[3].QuotaProbe == nil || got[3].QuotaProbe.URL != "" {
+		t.Fatalf("显式配置（含禁用）应优先于预设默认: %+v", got[3].QuotaProbe)
+	}
+	// Reload 同口径
+	p.Reload([]provider.Provider{glm}, nil)
+	if got = p.Providers(); got[0].QuotaProbe == nil || got[0].QuotaProbe.URL == "" {
+		t.Fatalf("Reload 后仍应补默认端点: %+v", got[0].QuotaProbe)
 	}
 }
 

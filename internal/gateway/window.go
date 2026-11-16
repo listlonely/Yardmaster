@@ -104,7 +104,10 @@ func numOf(raw any) (float64, bool) {
 	case float64:
 		return n, true
 	case string:
-		f, err := strconv.ParseFloat(strings.TrimSpace(n), 64)
+		s := strings.TrimSpace(n)
+		// 货币前缀（SiliconFlow user/info 的 "¥41.62" 等厂商形状）
+		s = strings.TrimLeft(s, "¥￥$€£ ")
+		f, err := strconv.ParseFloat(s, 64)
 		return f, err == nil
 	}
 	return 0, false
@@ -115,7 +118,11 @@ func numOf(raw any) (float64, bool) {
 // 真机采样核实 [M9-W3]——真实响应比 Magpie 形状多 usage/currentValue/
 // remaining 字段）。取 limits[] 中最小 remaining = 最紧额度窗口的剩余
 // 额度（SwitchWhenSpent 的 Balance<=0 休眠语义天然对齐）；无 limits/
-// remaining 返回 false 走通用余额解析。真机样本（2026-11-03，pro 档）：
+// remaining 返回 false 走通用余额解析。同时把 limits[] 归一为
+// PlanWindow 窗口数组（窗口名 + 已用/总量 + 重置时间，控制台 F 卡）。
+// 窗口名由 unit/number 推断（真机样本 [M9-W3]：unit=3,number=5 →
+// 「5小时额度」；unit=6,number=1 → 「周额度」；其余枚举未知 → 兜底名）。
+// 真机样本（2026-11-03，pro 档）：
 // {"code":200,"success":true,"data":{"level":"pro","limits":[
 //
 //	{"type":"CREDIT_LIMIT","unit":3,"number":5,"usage":12000,
@@ -123,22 +130,28 @@ func numOf(raw any) (float64, bool) {
 //	 "nextResetTime":1793690514565},
 //	{"type":"CREDIT_LIMIT","unit":6,"number":1,...,"remaining":45668,
 //	 "percentage":23,...}]}}
-func extractPlanQuota(body []byte) (float64, bool) {
+func extractPlanQuota(body []byte) (float64, []provider.PlanWindow, bool) {
 	var r struct {
 		Success *bool `json:"success"`
 		Data    *struct {
 			Limits []struct {
-				Remaining *float64 `json:"remaining"`
+				Unit          *int     `json:"unit"`
+				Number        *int     `json:"number"`
+				CurrentValue  *float64 `json:"currentValue"`
+				Remaining     *float64 `json:"remaining"`
+				Percentage    *float64 `json:"percentage"`
+				NextResetTime *int64   `json:"nextResetTime"` // Unix 毫秒
 			} `json:"limits"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &r); err != nil {
-		return 0, false
+		return 0, nil, false
 	}
 	if r.Data == nil || len(r.Data.Limits) == 0 {
-		return 0, false
+		return 0, nil, false
 	}
 	min := -1.0
+	var wins []provider.PlanWindow
 	for _, l := range r.Data.Limits {
 		if l.Remaining == nil {
 			continue
@@ -146,11 +159,66 @@ func extractPlanQuota(body []byte) (float64, bool) {
 		if min < 0 || *l.Remaining < min {
 			min = *l.Remaining
 		}
+		w := planWindowOf(l.Unit, l.Number, l.CurrentValue, l.Remaining, l.Percentage, l.NextResetTime)
+		wins = append(wins, w)
 	}
 	if min < 0 {
-		return 0, false
+		return 0, nil, false
 	}
-	return min, true
+	return min, wins, true
+}
+
+// planWindowOf 把厂商 limit 条目归一为 PlanWindow：已用 = currentValue、
+// 总量 = currentValue + remaining；厂商给了 percentage 就透传（credits
+// 型原始单位没有可靠总量概念时仍可渲染百分比）；nextResetTime 毫秒→秒。
+func planWindowOf(unit, number *int, current, remaining, pct *float64, resetMs *int64) provider.PlanWindow {
+	w := provider.PlanWindow{Name: planWindowName(unit, number)}
+	if current != nil {
+		w.Used = *current
+		if remaining != nil {
+			w.Total = *current + *remaining
+		}
+	}
+	if pct != nil {
+		p := *pct
+		w.Pct = &p
+	}
+	if resetMs != nil && *resetMs > 0 {
+		w.ResetAt = *resetMs / 1000
+	}
+	return w
+}
+
+// planWindowName 由 unit/number 枚举推断窗口名（枚举语义以真机样本为准）。
+func planWindowName(unit, number *int) string {
+	u, n := 0, 0
+	if unit != nil {
+		u = *unit
+	}
+	if number != nil {
+		n = *number
+	}
+	var label string
+	switch u {
+	case 3:
+		label = "小时" // 真机样本 [M9-W3]：unit=3,number=5 → 5 小时窗口
+	case 6:
+		label = "周" // 真机样本 [M9-W3]：unit=6,number=1 → 周窗口
+	case 4:
+		label = "天"
+	case 7:
+		label = "月"
+	default:
+		return "额度窗口"
+	}
+	// 周/月单窗口不加系数（真机样本形状：「周额度」而非「1周额度」）
+	if (u == 6 || u == 7) && n <= 1 {
+		return label + "额度"
+	}
+	if n <= 0 {
+		return label + "额度"
+	}
+	return fmt.Sprintf("%d%s额度", n, label)
 }
 
 // SetWindow 记录账号订阅窗口状态（响应头学习）。
@@ -183,6 +251,45 @@ func (p *Planner) SetBalance(key string, bal float64) {
 			if p.providers[i].Accounts[j].Name == accountNameOf(key) {
 				p.providers[i].Accounts[j].Balance = bal
 				p.providers[i].Accounts[j].BalanceAt = time.Now().Unix()
+				return
+			}
+		}
+	}
+}
+
+// SetWindows 记录账号订阅额度窗口（额度探测 limits[] 归一，M10-F）；
+// 空数组不清空旧值（探测失败保留上次值，与 SetBalance 同纪律）。
+func (p *Planner) SetWindows(key string, wins []provider.PlanWindow) {
+	if len(wins) == 0 {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i := range p.providers {
+		if p.providers[i].ID != providerIDOf(key) {
+			continue
+		}
+		for j := range p.providers[i].Accounts {
+			if p.providers[i].Accounts[j].Name == accountNameOf(key) {
+				p.providers[i].Accounts[j].Windows = wins
+				return
+			}
+		}
+	}
+}
+
+// SetProbeErr 记录账号最近一次探测失败原因（运行态，控制台显示用；
+// 成功探测由调用方传 "" 清空）。
+func (p *Planner) SetProbeErr(key string, msg string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i := range p.providers {
+		if p.providers[i].ID != providerIDOf(key) {
+			continue
+		}
+		for j := range p.providers[i].Accounts {
+			if p.providers[i].Accounts[j].Name == accountNameOf(key) {
+				p.providers[i].Accounts[j].ProbeErr = msg
 				return
 			}
 		}
@@ -234,16 +341,18 @@ func accountSpent(a provider.Account, now time.Time) bool {
 
 // probeResult 是单账号一次余额探测的结果（手动触发 API 返回用）。
 type probeResult struct {
-	Provider string  `json:"provider"`
-	Account  string  `json:"account"`
-	Balance  float64 `json:"balance,omitempty"`
-	Err      string  `json:"error,omitempty"`
+	Provider string               `json:"provider"`
+	Account  string               `json:"account"`
+	Balance  float64              `json:"balance,omitempty"`
+	Windows  []provider.PlanWindow `json:"windows,omitempty"` // 订阅窗口归一（M10-F）
+	Err      string               `json:"error,omitempty"`
 }
 
 // StartQuotaPoller 启动余额轮询后台任务（随 ctx 退出；30 分钟或
 // QuotaProbe.Interval）。
 func (s *Server) StartQuotaPoller(ctx context.Context) {
 	go func() {
+		s.pollQuotas(ctx) // 启动即首轮：重启/新增服务商后无需等满一个轮询周期
 		ticker := time.NewTicker(30 * time.Minute)
 		defer ticker.Stop()
 		for {
@@ -270,19 +379,22 @@ func (s *Server) pollQuotas(ctx context.Context) []probeResult {
 			if acc.Auth == provider.AuthOAuth {
 				continue // OAuth 订阅的余额语义不同，W5 不轮询
 			}
-			bal, err := s.probeBalance(ctx, &prov, acc)
+			bal, wins, err := s.probeBalance(ctx, &prov, acc)
 			if err != nil {
 				slog.Warn("余额轮询失败（保留上次值）", "provider", prov.ID, "account", acc.Name, "err", err)
+				s.Planner.SetProbeErr(prov.ID+"/"+acc.Name, err.Error())
 				out = append(out, probeResult{Provider: prov.ID, Account: acc.Name, Err: err.Error()})
 				continue
 			}
 			s.Planner.SetBalance(prov.ID+"/"+acc.Name, bal)
+			s.Planner.SetWindows(prov.ID+"/"+acc.Name, wins)
+			s.Planner.SetProbeErr(prov.ID+"/"+acc.Name, "") // 成功即清失败态
 			if bal <= 0 {
 				slog.Info("账号余额耗尽，休眠至次日重置（SwitchWhenSpent）",
 					"provider", prov.ID, "account", acc.Name, "balance", bal)
 				s.notifyAccountRest(prov.ID+"/"+acc.Name, "余额耗尽，次日重置")
 			}
-			out = append(out, probeResult{Provider: prov.ID, Account: acc.Name, Balance: bal})
+			out = append(out, probeResult{Provider: prov.ID, Account: acc.Name, Balance: bal, Windows: wins})
 		}
 	}
 	return out
@@ -295,11 +407,12 @@ func (s *Server) notifyAccountRest(accountKey, reason string) {
 	}
 }
 
-// probeBalance 请求余额端点并解析数值。
-func (s *Server) probeBalance(ctx context.Context, prov *provider.Provider, acc provider.Account) (float64, error) {
+// probeBalance 请求余额端点并解析数值；订阅窗口形态时同时带回
+// 归一窗口数组（控制台双窗口卡 + POST /api/quota/probe 应答）。
+func (s *Server) probeBalance(ctx context.Context, prov *provider.Provider, acc provider.Account) (float64, []provider.PlanWindow, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, prov.QuotaProbe.URL, nil)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	for k, v := range prov.QuotaProbe.Headers {
 		req.Header.Set(k, v)
@@ -312,22 +425,23 @@ func (s *Server) probeBalance(ctx context.Context, prov *provider.Provider, acc 
 	hc := &http.Client{Timeout: 15 * time.Second}
 	resp, err := hc.Do(req)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("余额端点 HTTP %d", resp.StatusCode)
+		return 0, nil, fmt.Errorf("余额端点 HTTP %d", resp.StatusCode)
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
-	bal, ok := extractPlanQuota(b) // 订阅窗口形态优先（确定性最小 remaining）
+	bal, wins, ok := extractPlanQuota(b) // 订阅窗口形态优先（确定性最小 remaining）
 	if !ok {
 		bal, ok = extractBalance(b) // 回退通用余额形态
+		if !ok {
+			return 0, nil, fmt.Errorf("余额响应无数值字段")
+		}
+		return bal, nil, nil
 	}
-	if !ok {
-		return 0, fmt.Errorf("余额响应无数值字段")
-	}
-	return bal, nil
+	return bal, wins, nil
 }

@@ -34,6 +34,11 @@ const (
 	l1ErrStreakToCool = 3
 	l1CacheCap        = 2048 // 达到上限整体重置（防御性兜底）
 	l1MaxOutputRunes  = 64   // 分类输出只需一个意图 id
+	// pluginClassifyTimeout 是插件分类兜底的往返预算（§四·三）。文档基线
+	// 300ms 面向词表型插件；LLM 驱动的 Agent 分类器（examples/agent-
+	// classifier）需要真实模型往返，取 1.5s——超限回落默认组，Registry
+	// 自带连续 3 次失败冷却 5 分钟，不拖垮热路径。
+	pluginClassifyTimeout = 1500 * time.Millisecond
 )
 
 // IntentChain 是意图判定链。
@@ -43,7 +48,8 @@ type IntentChain struct {
 	l1Timeout   time.Duration
 	call        L1Caller // nil=L1 关闭
 
-	pluginIntents func() []plugin.IntentRef // 启用插件声明的意图（nil=无插件注入）
+	pluginIntents   func() []plugin.IntentRef                     // 启用插件声明的意图（nil=无插件注入）
+	pluginClassify  func(ctx context.Context, text string, vocabulary []string) (string, error) // 插件分类兜底（nil=未接线）
 
 	mu            sync.Mutex
 	intentsStamp  time.Time // intents.json mtime（热生效）
@@ -80,8 +86,16 @@ func (c *IntentChain) WithPluginIntents(fn func() []plugin.IntentRef) {
 	c.pluginIntents = fn
 }
 
+// WithPluginClassify 注入插件分类兜底（classify.intent，§四·三；AttachPlugins
+// 装配）：L1 未配置/冷却/失败时经 Registry 请求插件。vocabulary 由链内
+// 传入（锁内取，回调侧不得再拿链锁）。nil=未接线（无插件时零开销）。
+func (c *IntentChain) WithPluginClassify(fn func(ctx context.Context, text string, vocabulary []string) (string, error)) {
+	c.pluginClassify = fn
+}
+
 // Classify 返回消息意图 id（内置或自定义词表）；无法判定返回空串。
-// nil 接收者安全（网关未装配判定链时静默跳过）。
+// 判定链：自定义 L0 → 内置 L0 → L1 → 插件分类兜底（§四·三：L1 未配置/
+// 冷却/失败时才落到插件）。nil 接收者安全（网关未装配判定链时静默跳过）。
 func (c *IntentChain) Classify(message string) string {
 	if c == nil {
 		return ""
@@ -97,7 +111,10 @@ func (c *IntentChain) Classify(message string) string {
 		slog.Debug("意图判定", "source", "l0", "intent", v.Intent)
 		return v.Intent
 	}
-	return c.classifyL1Locked(strategy, message)
+	if intent := c.classifyL1Locked(strategy, message); intent != "" {
+		return intent
+	}
+	return c.classifyPluginLocked(strategy, message)
 }
 
 // Vocabulary 返回当前生效的意图词表（内置+自定义+启用插件声明；插件
@@ -208,6 +225,58 @@ func intentsOf(strategy *classify.UserStrategy) []classify.IntentDef {
 		return nil
 	}
 	return strategy.Intents
+}
+
+// classifyPluginLocked 插件分类兜底（§四·三）：L1 未配置/冷却/失败时经
+// Registry 发 {text, vocabulary} 请求，返回意图须命中全词表（内置+自定义+
+// 插件声明），词表外视同失败回落默认组（不猜）。结果与 L1 共用缓存；
+// 瞬时错误不缓存（Registry 侧自带 3 失败冷却 5 分钟）。
+func (c *IntentChain) classifyPluginLocked(strategy *classify.UserStrategy, message string) string {
+	if c.pluginClassify == nil {
+		return "" // 未接线：链路不变（L0 → L1 → 默认组）
+	}
+	hash := sha256.Sum256([]byte("plugin\x00" + message))
+	key := hex.EncodeToString(hash[:])
+	if intent, ok := c.cache[key]; ok {
+		if intent != "" {
+			slog.Debug("意图判定", "source", "plugin-cache", "intent", intent)
+		}
+		return intent
+	}
+	known := map[string]bool{}
+	// 词表 = 内置 + 自定义 + 插件声明（payload 全量带给插件构造提示词）
+	vocabulary := append([]string(nil), classify.BuiltinIntents...)
+	for _, id := range classify.BuiltinIntents {
+		known[id] = true
+	}
+	for _, def := range intentsOf(strategy) {
+		known[def.ID] = true
+		vocabulary = append(vocabulary, def.ID)
+	}
+	if c.pluginIntents != nil {
+		for _, ir := range c.pluginIntents() {
+			known[ir.ID] = true
+			vocabulary = append(vocabulary, ir.ID)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), pluginClassifyTimeout)
+	defer cancel()
+	out, err := c.pluginClassify(ctx, message, vocabulary)
+	if err != nil {
+		slog.Debug("插件分类失败", "err", err)
+		return "" // 瞬时错误不缓存
+	}
+	intent := validateL1Output(out, known)
+	if len(c.cache) >= l1CacheCap {
+		c.cache = map[string]string{}
+	}
+	c.cache[key] = intent // 词表外也缓存，避免同一消息反复调用插件
+	if intent == "" {
+		slog.Debug("插件分类输出不在词表内", "output", truncateForLog(out))
+		return ""
+	}
+	slog.Info("意图判定", "source", "plugin", "intent", intent)
+	return intent
 }
 
 // validateL1Output 校验 L1 输出：去空白与引号后必须命中词表。

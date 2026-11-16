@@ -21,7 +21,10 @@ type Verdict struct {
 }
 
 // BuiltinIntents 是内置意图词表（L0/L1 与任务规则共用，W5 定稿）。
-var BuiltinIntents = []string{"coding", "qa", "writing"}
+// "agent"（2026-11-13）与编程/问答/写作同级：语义开放或跨域的请求
+// 交给 Agent 按语境自主选厂商模型处理。L0 无关键词种子——它只能由
+// L1 / Agent 分类器判入（语义开放，不适合词表穷举）。
+var BuiltinIntents = []string{"coding", "qa", "writing", "agent"}
 
 // codeFeatureRe 是 L0 的代码结构特征：代码围栏、diff 标记、带常见扩展名
 // 的文件路径（多行模式）。命中即判 coding（结构特征比词表更可靠）。

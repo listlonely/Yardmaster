@@ -15,18 +15,26 @@ type Preset struct {
 }
 
 // Presets 是内置预设表（ID 唯一；后缀 -messages 表示 Anthropic 协议形态）。
+// QuotaProbe：Coding Plan 用量端点 /api/monitor/usage/quota/limit 返回
+// limits[] 双窗口（5小时+周），由网关 extractPlanQuota 归一（M9-W3 真机
+// 采样）；按量厂商用余额端点（Zhipu finance/balance、SiliconFlow
+// user/info 的 "¥xx.xx" 字符串余额）。
 var Presets = []Preset{
 	{ID: "glm-coding", Name: "智谱 GLM Coding Plan", Protocol: ProtocolChat,
-		BaseURL: "https://open.bigmodel.cn/api/coding/paas/v4", Note: "Coding Plan key 专用；按量 key 请用 glm"},
+		BaseURL: "https://open.bigmodel.cn/api/coding/paas/v4", Note: "Coding Plan key 专用；按量 key 请用 glm",
+		QuotaProbe: &QuotaProbe{URL: "https://open.bigmodel.cn/api/monitor/usage/quota/limit"}},
 	{ID: "glm-coding-messages", Name: "智谱 GLM Coding Plan（Anthropic 协议）", Protocol: ProtocolMessages,
-		BaseURL: "https://open.bigmodel.cn/api/anthropic"},
+		BaseURL: "https://open.bigmodel.cn/api/anthropic",
+		QuotaProbe: &QuotaProbe{URL: "https://open.bigmodel.cn/api/monitor/usage/quota/limit"}},
 	{ID: "glm", Name: "智谱开放平台（按量计费）", Protocol: ProtocolChat,
 		BaseURL: "https://open.bigmodel.cn/api/paas/v4", Note: "Coding Plan key 会被 1113 拒绝并自动纠偏到 coding 端点",
 		QuotaProbe: &QuotaProbe{URL: "https://open.bigmodel.cn/api/paas/v4/finance/balance"}},
 	{ID: "zai-coding", Name: "Z.ai GLM Coding Plan", Protocol: ProtocolChat,
-		BaseURL: "https://api.z.ai/api/coding/paas/v4"},
+		BaseURL: "https://api.z.ai/api/coding/paas/v4",
+		QuotaProbe: &QuotaProbe{URL: "https://api.z.ai/api/monitor/usage/quota/limit"}},
 	{ID: "zai-coding-messages", Name: "Z.ai GLM Coding Plan（Anthropic 协议）", Protocol: ProtocolMessages,
-		BaseURL: "https://api.z.ai/api/anthropic"},
+		BaseURL: "https://api.z.ai/api/anthropic",
+		QuotaProbe: &QuotaProbe{URL: "https://api.z.ai/api/monitor/usage/quota/limit"}},
 	{ID: "zai", Name: "Z.ai 开放平台（按量计费）", Protocol: ProtocolChat,
 		BaseURL:    "https://api.z.ai/api/paas/v4",
 		QuotaProbe: &QuotaProbe{URL: "https://api.z.ai/api/paas/v4/finance/balance"}},
@@ -39,7 +47,8 @@ var Presets = []Preset{
 	{ID: "kimi-messages", Name: "Kimi/Moonshot（Anthropic 协议）", Protocol: ProtocolMessages,
 		BaseURL: "https://api.moonshot.cn/anthropic"},
 	{ID: "siliconflow", Name: "SiliconFlow 硅基流动", Protocol: ProtocolChat,
-		BaseURL: "https://api.siliconflow.cn/v1"},
+		BaseURL:    "https://api.siliconflow.cn/v1",
+		QuotaProbe: &QuotaProbe{URL: "https://api.siliconflow.cn/v1/user/info"}},
 	{ID: "anthropic", Name: "Anthropic 官方", Protocol: ProtocolMessages,
 		BaseURL: "https://api.anthropic.com"},
 	{ID: "openai", Name: "OpenAI 官方", Protocol: ProtocolChat,

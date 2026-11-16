@@ -134,6 +134,24 @@ type Account struct {
 	// restricted 且未到 reset → 候选排末段（窗口重置自动回归）。
 	WindowStatus  string `json:"window_status,omitempty"`
 	WindowResetAt int64  `json:"window_reset_at,omitempty"`
+	// Windows 是订阅额度窗口运行态（额度探测 limits[] 归一，M10-F）：
+	// 窗口形状厂商无关（窗口名 + 已用/总量 + 重置时间）。仅运行态——
+	// config GET/PUT 走文件文档（不含本字段），不会落 providers.json。
+	Windows []PlanWindow `json:"windows,omitempty"`
+	// ProbeErr 是最近一次余额/窗口探测的失败原因（运行态，仅控制台
+	// 显示用；成功探测即清空）。仅运行态，不落 providers.json。
+	ProbeErr string `json:"probe_err,omitempty"`
+}
+
+// PlanWindow 是订阅账号的一个额度窗口（厂商无关归一形状）：
+// 控制台双窗口卡（如 GLM Coding Plan 5小时 + 周）由此直接渲染。
+// 单窗口（如月度 token 上限）渲染一张全宽卡；Used/Total 缺省时用 Pct。
+type PlanWindow struct {
+	Name    string   `json:"name"`              // 窗口名（如「5小时额度」「周额度」）
+	Used    float64  `json:"used,omitempty"`    // 已用量（原始单位：积分/tokens）
+	Total   float64  `json:"total,omitempty"`   // 总量（原始单位）
+	Pct     *float64 `json:"pct,omitempty"`     // 已用百分比（厂商直接给时用，0~100）
+	ResetAt int64    `json:"reset_at,omitempty"` // 重置时刻（Unix 秒；0=未知）
 }
 
 // Validate 校验账号认证形态一致性（配置矛盾即拒绝，fail-closed）：
@@ -164,6 +182,10 @@ const (
 	StrategySmart  Strategy = "smart"  // 优先额度窗口最快重置、浪费最少的账号
 	StrategyUsage  Strategy = "usage"  // 当日用量升序（负载均衡；无需额度配置）
 	StrategyWeight Strategy = "weight" // 加权轮询：按 Group.Weights 分流
+	// StrategyAgent（2026-11-13）：Agent 插件按请求语境自主选模型——
+	// Plan 内按 smart 基线排序，网关在转发前经 route.pick 钩子让插件
+	// 重排候选（选中者置首）；插件不可用/失败/超时回落本基线。
+	StrategyAgent Strategy = "agent"
 )
 
 // Group 把「成员模型 × 账号池」组成一个可被引用的虚拟模型（F6）。

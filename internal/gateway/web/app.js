@@ -1,6 +1,6 @@
-// yardmaster 控制台（2026-11-03 深度重构：Magpie 构造与交互对齐）
+﻿// yardmaster 控制台（2026-11-03 深度重构：Magpie 构造与交互对齐）
 // —— 构造：.list/.row 行卡片取代 <table>；.who/.name/.sub 两行式信息层级；
-//    应用壳（body 不滚、各视图独立滚动）；单一滑动高亮 .nav-hl；
+//    应用壳（body 不滚、各视图独立滚动）；选中导航项自带卡片浮起 + accent 侧轨；
 // —— 交互：status() 状态行反馈（不再用 toast）；Magpie 式模态（含确认框）；
 //    骨架屏加载态；服务商客户端查找；胶囊开关；document.hidden 轮询守卫。
 // 数据源不变：/api/state、/api/config/*、/api/trace、/api/cost、
@@ -28,26 +28,33 @@ if (/Windows/i.test(navigator.userAgent)) {
   document.documentElement.classList.add('win');
 }
 
-// ---------- 主题：三态循环 auto→light→dark，localStorage 持久化 ----------
+// ---------- 主题：三态 auto/light/dark，localStorage 持久化；侧栏脚部三态切换（E） ----------
 const THEME_KEY = 'ym-theme';
 function applyTheme(t) {
   if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
   else delete document.documentElement.dataset.theme; // auto=跟随系统
-  $('theme-text').textContent = { auto: '跟随系统', light: '亮色', dark: '暗色' }[t] || '跟随系统';
+  document.querySelectorAll('.side-theme button').forEach((b) => {
+    b.classList.toggle('on', b.dataset.t === t);
+  });
 }
 applyTheme(localStorage.getItem(THEME_KEY) || 'auto');
 function cycleTheme() {
   const cur = localStorage.getItem(THEME_KEY) || 'auto';
   const next = { auto: 'light', light: 'dark', dark: 'auto' }[cur] || 'auto';
-  localStorage.setItem(THEME_KEY, next);
+  setTheme(next);
+}
+function setTheme(t) {
+  localStorage.setItem(THEME_KEY, t);
   // 明暗互换的颜色过渡（一次性类；reduced-motion 由 CSS 旁路）
   const root = document.documentElement;
   root.classList.add('theming');
-  clearTimeout(applyTheme.t);
-  applyTheme.t = setTimeout(() => root.classList.remove('theming'), 340);
-  applyTheme(next);
+  clearTimeout(setTheme.t);
+  setTheme.t = setTimeout(() => root.classList.remove('theming'), 340);
+  applyTheme(t);
 }
-$('btn-theme').addEventListener('click', cycleTheme);
+document.querySelectorAll('.side-theme button').forEach((b) => {
+  b.addEventListener('click', () => setTheme(b.dataset.t || 'auto'));
+});
 
 // 外链守卫（M8-W3）：原生窗口不追外部导航。
 document.addEventListener('click', (e) => {
@@ -173,7 +180,8 @@ function fmtTime(t) {
 // ---------- 模态（Magpie .dialog 构造） ----------
 
 // openDialog：表单模态。返回 Promise：提交成功 resolve，取消/关闭 reject。
-function openDialog({ title, body, yes = '保存', danger = false, onSubmit }) {
+// footNote：底栏左侧的保存语义说明（G：写路径提示，不占表单区）。
+function openDialog({ title, body, yes = '保存', danger = false, footNote, onSubmit }) {
   return new Promise((resolve, reject) => {
     const back = document.createElement('div');
     back.className = 'modal-back';
@@ -183,7 +191,7 @@ function openDialog({ title, body, yes = '保存', danger = false, onSubmit }) {
           <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
         </button></div>
       <form><div class="ebody">${body}</div>
-        <div class="dlg-bar"><span class="modal-err"></span>
+        <div class="dlg-bar">${footNote ? `<span class="dlg-note">${footNote}</span>` : ''}<span class="modal-err"></span>
           <button type="button" class="text dlg-cancel">取消</button>
           <button type="submit" class="${danger ? 'btn-danger' : 'btn-primary'}">${esc(yes)}</button>
         </div></form></div>`;
@@ -235,34 +243,24 @@ function skeleton(el, n = 4) {
     `<div class="sk-row"><div class="sk-bone" style="width:${widths[i % widths.length]}%"></div></div>`).join('');
 }
 
-// ---------- 视图切换（data-tab/hash 机制不变；Magpie 构造的滑动高亮） ----------
+// ---------- 视图切换（data-tab/hash 机制不变；E：选中项自带卡片浮起 + accent 侧轨） ----------
 const tabsBox = $('tabs');
-const navHl = document.createElement('div');
-navHl.className = 'nav-hl';
-tabsBox.appendChild(navHl);
+
+// 页面副标题（crumb）：一句话点出该页管什么
+const CRUMBS = {
+  overview: '驾驶舱',
+  providers: '上游与账号',
+  routing: '意图与调用链',
+  observe: '决策追溯与成本',
+  plugins: '商店与适配',
+  settings: '偏好与装配',
+};
 
 let view = '';
 
-function placeHl(btn, instant = false) {
-  if (!btn) { navHl.classList.remove('ready'); return; }
-  const r = btn.getBoundingClientRect();
-  const pr = tabsBox.getBoundingClientRect();
-  if (instant) navHl.style.transition = 'none';
-  navHl.style.height = r.height + 'px';
-  navHl.style.transform = `translateY(${r.top - pr.top}px)`;
-  if (instant) { navHl.getBoundingClientRect(); navHl.style.transition = ''; }
-  navHl.classList.add('ready');
-}
-
-// 窗口缩放后行位置变了，高亮形状跟随重定位。
-addEventListener('resize', () => placeHl(tabsBox.querySelector('.nav-it.on'), true));
-
 document.querySelectorAll('#tabs .nav-it').forEach((b) => {
   b.addEventListener('click', () => { show(b.dataset.tab); b.blur(); });
-  // 悬停时高亮形状跟随（Magpie navTopGo 心智）：离开导航区回到当前页
-  b.addEventListener('pointerenter', (e) => { if (e.buttons === 0) placeHl(b); });
 });
-tabsBox.addEventListener('pointerleave', () => placeHl(tabsBox.querySelector('.nav-it.on')));
 
 function show(name) {
   if (!document.getElementById('page-' + name)) name = 'overview';
@@ -271,7 +269,7 @@ function show(name) {
   document.querySelectorAll('#tabs .nav-it').forEach((b) => {
     const on = b.dataset.tab === name;
     b.classList.toggle('on', on);
-    if (on) { b.setAttribute('aria-current', 'page'); placeHl(b, first); }
+    if (on) b.setAttribute('aria-current', 'page');
     else b.removeAttribute('aria-current');
   });
   // 视图切换：支持的引擎走 View Transition（旧页淡出新页淡入，Magpie
@@ -289,6 +287,7 @@ function show(name) {
   const title = tabsBox.querySelector(`.nav-it[data-tab="${name}"]`)?.dataset.title ||
     ({ settings: '设置' }[name] || name);
   $('page-title').textContent = title;
+  $('page-crumb').textContent = CRUMBS[name] || '';
   if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
   // 激活即拉数据（观察者打开什么就看什么，Magpie show() 语义）
   if (name === 'overview') loadOverview();
@@ -310,7 +309,11 @@ async function refreshState() {
   // servedAnew（Magpie 6673171 增量吸收）：页面由旧二进制伺服、服务端已
   // 换新（用户升级并重启 serve）→ 自动重载一次跟上。页面由同一 serve
   // 伺服，重载后 boot 即新版本，无循环风险；dev 态两侧同名不触发。
-  if (bootVersion === null) bootVersion = cache.state.version || '';
+  if (bootVersion === null) {
+    bootVersion = cache.state.version || '';
+    const bv = $('brand-ver'); // 品牌行版本号（E：侧栏顶部）
+    if (bv) bv.textContent = bootVersion;
+  }
   else if (!servedReloaded && cache.state.version && cache.state.version !== bootVersion) {
     servedReloaded = true;
     location.reload();
@@ -322,15 +325,16 @@ let bootVersion = null; // 首次 state 应答的版本（页面伺服版本）
 let servedReloaded = false;
 let updInited = false;
 
-// ---------- 侧栏网关状态灯 ----------
+// ---------- 侧栏网关状态卡（E：标题 + 地址） ----------
 function renderSideGw(ok) {
   const b = $('side-gw');
   b.hidden = false;
   b.classList.toggle('err', !ok);
   b.classList.toggle('off', false);
+  $('side-gw-t').textContent = ok ? '网关运行中' : '网关不可达';
   $('side-gw-text').textContent = ok
-    ? '网关运行中' + (cache.settings?.listen ? ' · ' + cache.settings.listen : '')
-    : '网关不可达';
+    ? (cache.settings?.listen || '127.0.0.1:8317')
+    : 'serve 未响应';
 }
 
 // ---------- 升级提示（B1：Magpie .update 可隐藏角标同构） ----------
@@ -426,8 +430,8 @@ setInterval(() => { if (!document.hidden) checkUpdate(); }, 3600e3);
 // ---------- 总览 ----------
 
 function statCard(label, value, sub) {
-  return `<div class="stat"><div class="stat-v">${value}</div>
-    <div class="stat-l">${esc(label)}</div>
+  return `<div class="stat"><div class="stat-top"><span class="stat-l">${esc(label)}</span></div>
+    <div class="stat-v">${value}</div>
     ${sub ? `<div class="stat-s">${esc(sub)}</div>` : ''}</div>`;
 }
 
@@ -595,8 +599,6 @@ async function loadSettings() {
     const s = await api('/api/config/settings');
     cache.settings = s;
     $('set-proxy').value = s.global_proxy || '';
-    $('set-l1').value = s.l1_classifier || '';
-    $('set-l1-timeout').value = s.l1_timeout_ms || '';
     $('set-listen').value = s.listen || '';
     $('set-update').value = s.update || 'check';
     $('set-close').value = s.close_action || 'hide';
@@ -631,8 +633,8 @@ $('btn-save-settings').addEventListener('click', async () => {
   const b = $('btn-save-settings');
   const body = {
     global_proxy: $('set-proxy').value.trim(),
-    l1_classifier: $('set-l1').value.trim(),
-    l1_timeout_ms: parseInt($('set-l1-timeout').value, 10) || 0,
+    // l1_classifier / l1_timeout_ms 已从设置表单移除（CLI settings set 维护）；
+    // 服务端对空值保留现值，此处省略即不清零。
     listen: $('set-listen').value.trim(),
     notify: $('set-notify').classList.contains('on'),
     autostart: $('set-autostart').classList.contains('on'),
@@ -832,11 +834,16 @@ const guide = {
 };
 
 function gstep(n, title, desc, done, actionHTML) {
-  return '<div class="gstep' + (done ? ' done' : '') + '">' +
-    '<span class="gnum">' + (done ? '✓' : n) + '</span>' +
+  // 预览稿形：序号恒显（done 时绿底），完成对勾独立在行右侧
+  return '<div class="gstep' + (done ? ' done' : ' todo') + '">' +
+    '<span class="gnum">' + n + '</span>' +
     '<div><h4>' + esc(title) + '</h4><p>' + desc + '</p>' +
-    (done ? '<span class="gtick">已完成</span>' : '<div class="gact">' + (actionHTML || '') + '</div>') +
-    '</div></div>';
+    (done ? '' : '<div class="gact">' + (actionHTML || '') + '</div>') +
+    '</div>' +
+    (done
+      ? '<svg class="gtick" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 8.5 7 12l5.5-7"/></svg>'
+      : '') +
+    '</div>';
 }
 
 function renderGuide() {
@@ -902,6 +909,8 @@ $('btn-copy-url').addEventListener('click', async () => {
   }
 });
 // 首页令牌/代理栏「去配置」→ 设置页对应区块；hero API 速览端点复制
+// 首页快捷生成令牌（预览稿定稿）：复用设置页生成弹窗（含 plain 一次性展示）
+$('ov-tok-gen').addEventListener('click', () => $('btn-token-gen').click());
 $('ov-tok-goto').addEventListener('click', () => gotoSettings('#sec-tokens'));
 $('ov-proxy-goto').addEventListener('click', () => gotoSettings('#sec-proxy'));
 $('ov-api-links').addEventListener('click', (e) => {
@@ -914,7 +923,6 @@ $('qa-probe').addEventListener('click', () => probeQuotas());
 $('qa-reload').addEventListener('click', async () => {
   try { await reloadConfig(); } catch (e) { status('重载失败: ' + e.message, 'err'); }
 });
-$('btn-settings').addEventListener('click', () => show('settings'));
 $('btn-reload').addEventListener('click', async () => {
   const b = $('btn-reload');
   b.classList.add('spin');
@@ -959,6 +967,35 @@ function usageBar(a) {
     <span>${fmtTokens(used)} / ${fmtTokens(quota)}（${pct}%）</span>`;
 }
 
+// ---------- F 订阅额度窗口卡（窗口形状厂商无关：窗口名 + 已用/总量 + 重置时间；
+// 数据源 = 网关额度探测的 limits[] 归一（/api/state accounts[].windows）；
+// 单窗口全宽卡、多窗口并排；语义色 >80% 红 / 60~80% 琥珀 / 其余绿） ----------
+const fmtResetAt = (sec) => {
+  if (!sec) return '';
+  const d = new Date(sec * 1000);
+  const now = new Date();
+  const hm = d.toTimeString().slice(0, 5);
+  if (d.toDateString() === now.toDateString()) return '今日 ' + hm;
+  return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${hm}`;
+};
+
+function planWinsHTML(windows) {
+  if (!Array.isArray(windows) || !windows.length) return '';
+  const win = (w) => {
+    const pct = Math.max(0, Math.min(100, Math.round(
+      w.pct != null ? w.pct : (w.total > 0 ? ((w.used || 0) / w.total) * 100 : 0))));
+    const cls = pct > 80 ? 'danger' : pct >= 60 ? 'warn' : 'ok';
+    const credits = w.credits || `${fmtTokens(w.used || 0)} / ${fmtTokens(w.total || 0)}`;
+    const reset = fmtResetAt(w.reset_at);
+    return `<div class="plan-win">
+      <div class="pw-top"><b>${esc(w.name || '额度窗口')}</b><span class="pct">${pct}% 已使用</span><span class="credits">${esc(credits)}</span></div>
+      <div class="bar"><span class="bar-fill ${cls}" style="width:${pct}%"></span></div>
+      ${reset ? `<div class="pw-reset">重置时间：${esc(reset)}</div>` : ''}
+    </div>`;
+  };
+  return `<div class="plan-grid">${windows.map(win).join('')}</div>`;
+}
+
 // effectiveProxy：账号 → 服务商 → 全局 → 系统（F3 继承链），标注生效层。
 function effectiveProxy(a, p, global) {
   if (a.proxy) return { v: a.proxy, src: '账号' };
@@ -978,6 +1015,7 @@ function acctRow(p, a, live, resting, global) {
     status: lv.status || a.status,
     used_tokens: lv.used_tokens ?? a.used_tokens,
     quota_tokens_day: lv.quota_tokens_day ?? a.quota_tokens_day,
+    windows: lv.windows || [],
   };
   const eff = effectiveProxy(a, p, global);
   const nameBadges = a.auth === 'oauth'
@@ -988,18 +1026,27 @@ function acctRow(p, a, live, resting, global) {
     : `<code>${esc(a.api_key || '（未设置）')}</code>`;
   const liveParts = [];
   if (restUntil) liveParts.push(`休眠至 ${esc(restUntil.replace('T', ' '))}`);
+  if (lv.probe_err) {
+    // 探测失败不再静默（此前原因只在 serve 日志）：行内直接给出原因
+    liveParts.push(`<span class="pill prefail" title="最近一次余额/窗口探测失败：${esc(lv.probe_err)}">探测失败 · ${esc(lv.probe_err)}</span>`);
+  }
   if (lv.window_status === 'restricted' && (lv.window_reset_at || 0) * 1000 > Date.now()) {
     liveParts.push(`窗口限频 · 重置 ${esc(new Date(lv.window_reset_at * 1000).toLocaleTimeString())}`);
   }
   if (lv.balance_at) liveParts.push(`余额 ¥${Number(lv.balance).toFixed(2)}`);
   if (lv.inflight) liveParts.push(`在途 ${esc(lv.inflight)}`);
   const sub = [credSub, `代理 <code>${esc(eff.v)}</code>（${eff.src}层）`, ...liveParts].join(' · ');
+  // 订阅窗口卡（F）优先于按量条：订阅/配额/按量三类一眼可分
+  const wins = planWinsHTML(view_.windows);
+  const usage = !wins && (view_.quota_tokens_day > 0 || (view_.used_tokens || 0) > 0)
+    ? `<div class="acct-usage">${usageBar(view_)}</div>` : '';
   return `<div class="row acct">
     <div class="who">
       <div class="name">${esc(a.name)} ${nameBadges}${statusBadge(view_.status)}</div>
       <div class="sub">${sub}</div>
+      ${wins}
     </div>
-    <div class="acct-usage">${usageBar(view_)}</div>
+    ${usage}
     <div class="row-acts">
       <button type="button" class="text um-btn" data-p="${esc(p.id)}" data-a="${esc(a.name)}" title="该账号近 7 天按模型用量（成本报告同源）">明细</button>
       <button type="button" class="text quota-btn" data-p="${esc(p.id)}" data-a="${esc(a.name)}">额度</button>
@@ -1010,17 +1057,25 @@ function acctRow(p, a, live, resting, global) {
 
 // accFolds：展开状态的 provider id 集合（重绘间保留交互态）。
 const accFolds = new Set();
+const modelOpens = new Set(); // 「模型清单」details 展开态（重绘后保持）
 const ACC_VISIBLE = 3; // 超过此数折叠，其余入「展开其余 N 个账号」
 
 function provCard(p, live, resting, global) {
   const accs = p.accounts || [];
+  // 行头对齐「厂商 → 服务类型」心智：预设内显示 厂商色瓦片 + 厂商·类型徽章，
+  // 预设外回退 协议 pill（自定义中转/自建网关）
+  const vb = provVendorBadge(p);
   const head = `<div class="row prov-head ${p.disabled ? 'is-off' : ''}">
-    <span class="tile" aria-hidden="true">${esc(initials(p.name || p.id))}</span>
+    <span class="vtile v${vb ? vtClass(vb.vendor.key) : vtClass(p.id)}" aria-hidden="true">${esc(initials(vb ? vb.vendor.name : (p.name || p.id)))}</span>
     <div class="who">
       <div class="name">${esc(p.name || p.id)} <code>${esc(p.id)}</code>
-        <span class="pill">${esc(p.protocol)}</span>
+        ${vb ? `<span class="pill soft" title="${esc(vb.full)}">${esc(vb.vendor.name)} · ${esc(vb.short)}</span>` : `<span class="pill">${esc(p.protocol)}</span>`}
         ${p.disabled ? '<span class="pill disabled">已停用</span>' : ''}</div>
       <div class="sub">${accs.length} 个账号${p.proxy ? ` · 服务商代理 <code>${esc(p.proxy)}</code>` : ''}</div>
+    </div>
+    <div class="row-acts">
+      <button type="button" class="text edit-pv" data-pv="${esc(p.id)}" title="编辑显示名 / 代理设置（复用添加表单的网络的口径）">编辑</button>
+      <button type="button" class="text probe-pv" data-pv="${esc(p.id)}" title="逐账号探测余额 / 订阅额度窗口（POST /api/quota/probe）">探测余额</button>
     </div>
   </div>`;
   const folded = accs.length > ACC_VISIBLE && !accFolds.has(p.id);
@@ -1040,12 +1095,22 @@ function provCard(p, live, resting, global) {
       <svg class="chev" viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="m4.5 6.5 3.5 3 3.5-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </button>`;
   }
-  const models = (p.models && p.models.length) ? `
-    <details class="models-row">
+  const mlist = p.models || [];
+  const modelChips = mlist.length
+    ? `<div class="chips">${mlist.map((m) => `<code>${esc(m.id)}</code>`).join(' ')}</div>`
+    : '<div class="models-empty">暂无模型——点「重新检测」拉取上游清单，或在下方手动添加</div>';
+  const models = `
+    <details class="models-row" data-mrow="${esc(p.id)}" ${modelOpens.has(p.id) ? 'open' : ''}>
       <summary><svg class="chev" viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="m6.5 4.5 3 3.5-3 3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        模型清单（${p.models.length} 个）</summary>
-      <div class="models-body"><div class="chips">${p.models.map((m) => `<code>${esc(m.id)}</code>`).join(' ')}</div></div>
-    </details>` : '';
+        模型清单（${mlist.length} 个）</summary>
+      <div class="models-body">
+        ${modelChips}
+        <div class="models-add">
+          <button type="button" class="text add-models-btn" data-p="${esc(p.id)}" title="拉取上游模型清单，点击勾选要添加的模型">添加模型</button>
+          <button type="button" class="text reprobe-models" data-p="${esc(p.id)}" title="用已存密钥重新拉取上游清单（手动添加的不在上游清单中的模型会保留）">重新检测</button>
+        </div>
+      </div>
+    </details>`;
   return `<div class="list" style="margin:10px 0">${head}${rows}${models}</div>`;
 }
 
@@ -1125,24 +1190,105 @@ const PROTOCOL_LABEL = {
   'gemini': 'Gemini',
 };
 
-async function addProviderModal() {
+// 厂商 → 服务类型（Trae 同构：服务商下拉联动「配置方式」下拉，每个类型
+// 对应一个 provider.Presets 条目；单一事实源仍是后端预设表，这里只是
+// 分组视图与展示名。OAUTH_VENDORS：官方三家支持订阅会话（OAuth）导入。
+const VENDOR_TYPES = [
+  { key: 'zhipu', name: '智谱 GLM', types: [
+    { preset: 'glm-coding', label: 'Coding Plan（OpenAI 协议）' },
+    { preset: 'glm-coding-messages', label: 'Coding Plan（Anthropic 协议）' },
+    { preset: 'glm', label: '按量计费（OpenAI 协议）' },
+  ] },
+  { key: 'zai', name: 'Z.ai', types: [
+    { preset: 'zai-coding', label: 'Coding Plan（OpenAI 协议）' },
+    { preset: 'zai-coding-messages', label: 'Coding Plan（Anthropic 协议）' },
+    { preset: 'zai', label: '按量计费（OpenAI 协议）' },
+  ] },
+  { key: 'deepseek', name: 'DeepSeek', types: [
+    { preset: 'deepseek', label: 'OpenAI 协议' },
+    { preset: 'deepseek-messages', label: 'Anthropic 协议' },
+  ] },
+  { key: 'kimi', name: 'Kimi / Moonshot', types: [
+    { preset: 'kimi', label: 'OpenAI 协议' },
+    { preset: 'kimi-messages', label: 'Anthropic 协议' },
+  ] },
+  { key: 'siliconflow', name: 'SiliconFlow 硅基流动', types: [
+    { preset: 'siliconflow', label: '标准 API（OpenAI 协议）' },
+  ] },
+  { key: 'anthropic', name: 'Anthropic 官方', types: [{ preset: 'anthropic', label: '官方 API' }] },
+  { key: 'openai', name: 'OpenAI 官方', types: [{ preset: 'openai', label: '官方 API' }] },
+  { key: 'gemini', name: 'Google Gemini 官方', types: [{ preset: 'gemini', label: '官方 API' }] },
+];
+const OAUTH_VENDORS = ['anthropic', 'openai', 'gemini'];
+
+// 厂商反查：provider id（= 预设 id）→ 所属厂商 key / 瓦片形状。
+// 同厂商的多个服务类型（glm-coding / glm-coding-messages / glm）由此
+// 共享同一厂商色相；预设外的自定义服务商回退按自身 id 散列。
+function vendorKeyOf(pid) {
+  for (const v of VENDOR_TYPES) {
+    if (v.types.some((t) => t.preset === pid)) return v.key;
+  }
+  return pid;
+}
+function vendorTileOf(pid) {
+  for (const v of VENDOR_TYPES) {
+    if (v.types.some((t) => t.preset === pid)) return { cls: vtClass(v.key), txt: vtText(v.name) };
+  }
+  return { cls: vtClass(pid), txt: vtText(pid) };
+}
+// 服务商行头徽章：厂商 · 服务类型（短标签）；未命中预设返回 null（回退协议 pill）
+function provVendorBadge(p) {
+  for (const v of VENDOR_TYPES) {
+    const t = v.types.find((t) => t.preset === p.id);
+    if (t) return { vendor: v, short: t.label.replace(/（[^）]*）$/, ''), full: t.label };
+  }
+  return null;
+}
+
+// 两段式添加（Trae 同构）：第一步 = 厂商瓦片墙入口；第二步 = 服务商下拉
+// 联动「配置方式」下拉（厂商服务类型 → 套用预设），官方三家含订阅账号
+// （OAuth）引导项；网络/技术字段收进高级选项。
+async function addProviderModal(editID) {
+  // 编辑态（2026-11-13）：editID 传入时复用同一两段式表单直进第二步——
+  // 预填全部字段、API Key 留空保留（脱敏提示）、模型清单以勾选态预载、
+  // ID 锁定；「添加」与「编辑」同构单一心智。
+  const editing = editID ? (cache.providers?.providers || []).find((p) => p.id === editID) : null;
   const presets = (await loadPresets()).filter((p) => p.kind !== 'oauth');
-  const tiles = presets.map((p) =>
-    `<button type="button" class="tile-p" data-preset="${esc(p.id)}">
-      <b>${esc(p.name)}</b>
-      <span>${esc(PROTOCOL_LABEL[p.protocol] || p.protocol)}${p.note ? ` · ${esc(p.note)}` : ''}</span>
-    </button>`).join('');
+  const byId = Object.fromEntries(presets.map((p) => [p.id, p]));
+  const vendors = VENDOR_TYPES
+    .map((v) => ({ ...v, types: v.types.filter((t) => byId[t.preset]) }))
+    .filter((v) => v.types.length);
+  const chev = '<svg class="chev" viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 4 4 4-4 4"/></svg>';
+  const tile = (v) => {
+    const kinds = [...new Set(v.types.map((t) => t.label.replace(/（[^）]*）$/, '')))].join(' · ');
+    return `<button type="button" class="ap-tile" data-vendor="${esc(v.key)}">
+      <span class="vtile v${vtClass(v.key)}">${esc(vtText(v.name))}</span>
+      <span class="ap-tile-txt"><b>${esc(v.name)}</b><span>${esc(kinds)}</span></span>
+      ${chev}</button>`;
+  };
   const body =
-    `<div class="ap-subhint"><span>Claude / Codex / Gemini 订阅的适配由社区插件提供：先到「插件」页启用对应订阅适配，并在那里添加账号。此处只添加 API Key 类服务商。</span>` +
-    `<button type="button" class="text add" data-act-go-plugins>去插件页</button></div>` +
-    `<div class="tiles" id="ap-tiles">${tiles}</div>` +
-    `<div class="after-list" style="margin:0 2px 8px"><button type="button" class="text add" id="ap-custom">手动接入（预设外的中转 / 自建网关）</button></div>` +
-    `<div class="ap-note" id="ap-note">选一个预设 → 粘贴 API Key → 检测 → 勾选要启用的模型 → 添加；预设外的上游用「手动接入」。</div>` +
+    `<div id="ap-step1">` +
+    `<button type="button" class="ap-tile custom" id="ap-custom">` +
+    `<span class="vtile v7">＋</span><span class="ap-tile-txt"><b>自定义服务商</b><span>预设外的中转 / 自建网关，手填协议与 Base URL</span></span>${chev}</button>` +
+    `<div class="ap-grid">${vendors.map(tile).join('')}</div>` +
+    `<p class="ap-note">选厂商进入表单：选服务类型（配置方式）→ 粘贴 API Key → 检测 → 勾选模型 → 添加。订阅账号在「配置方式」里切换为 OAuth。</p>` +
+    `</div>` +
+    `<div id="ap-step2" hidden>` +
+    `<div class="ap-backrow"><button type="button" class="text" id="ap-back">‹ 返回</button><b id="ap-step-title"></b></div>` +
+    frow('服务商', `<select class="field" id="ap-vendor">` +
+      vendors.map((v) => `<option value="${esc(v.key)}">${esc(v.name)}</option>`).join('') +
+      `<option value="custom">自定义服务商…</option></select>`) +
+    frow('配置方式', `<select class="field" id="ap-type"></select>`,
+      '按厂商服务类型预填协议与端点；官方三家可选订阅账号（OAuth · CLI 导入）') +
+    `<div id="ap-api-fields">` +
     `<div id="ap-keywrap">` +
     frow('API Key', `<div class="key-probe"><input class="field mono" name="api_key" type="password" autocomplete="new-password" placeholder="sk-…（仅存本机 providers.json）" required>` +
       `<button type="button" class="text add" id="ap-probe">检测并获取模型</button></div>`) +
     `</div>` +
     `<div class="ap-models" id="ap-models" hidden></div>` +
+    `<details class="ap-adv" id="ap-adv" hidden><summary>` +
+    `<svg class="chev" viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="m6.5 4.5 3 3.5-3 3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>` +
+    `高级选项（网络 / 技术字段，预设已自动填写，一般无需改动）</summary><div class="ap-adv-body">` +
     `<div id="ap-netwrap">` +
     frow('网络', `<div class="net-pick"><select class="field" name="netmode">` +
       `<option value="inherit">跟随全局代理</option>` +
@@ -1151,9 +1297,6 @@ async function addProviderModal() {
       `<input class="field mono" name="neturl" placeholder="http(s)/socks5(h)://…" hidden></div>`,
       '全局代理在「总览 → 设置」配置一次；这里只选是否走它') +
     `</div>` +
-    `<details class="ap-adv" id="ap-adv" hidden><summary>` +
-    `<svg class="chev" viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="m6.5 4.5 3 3.5-3 3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>` +
-    `高级选项（预设已自动填写，一般无需改动）</summary><div class="ap-adv-body">` +
     frow('服务商 ID', `<input class="field mono" name="id" placeholder="如 deepseek" required>`) +
     frow('显示名', `<input class="field" name="name" placeholder="默认同 ID">`) +
     frow('协议', `<select class="field" name="protocol">` +
@@ -1162,12 +1305,68 @@ async function addProviderModal() {
     frow('Base URL', `<input class="field mono" name="base_url" placeholder="https://api.example.com/v1" required>`, '上游完整前缀；网关按协议追加 /chat/completions、/v1/messages 等') +
     frow('账号名', `<input class="field mono" name="account" value="main" required>`) +
     frow('最大并发', `<input class="field" name="max_concurrent" type="number" min="0" step="1" placeholder="0 = 不限">`) +
-    `</div></details>`;
+    `</div></details>` +
+    `</div>` +
+    `<div id="ap-oauth-fields" hidden>` +
+    `<div class="ap-oauth-card"><b>订阅账号（OAuth）由社区插件适配导入</b>` +
+    `<p>Claude / Codex / Gemini 的已登录会话凭证加密存储、到期自动续期；控制台不代登录，导入走 CLI 一次：</p>` +
+    `<pre class="snip">yardmaster provider add-oauth anthropic -from claude-code
+yardmaster provider add-oauth openai    -from codex
+yardmaster provider add-oauth gemini    -from gemini-cli</pre>` +
+    `<div class="gact"><button type="button" class="text add" id="ap-go-plugins">去插件页安装适配</button></div></div>` +
+    `</div>` +
+    `<div class="ap-note" id="ap-note"></div>` +
+    `</div>`;
   const dlg = openDialog({
-    title: '添加服务商',
+    title: editing ? `编辑服务商 · ${editing.name || editing.id}` : '添加服务商',
     body,
     yes: '添加',
     onSubmit: async (form) => {
+      if (!q('#ap-oauth-fields').hidden) {
+        throw new Error('订阅账号经插件适配导入：按上方引导走 CLI（provider add-oauth），不走本表单');
+      }
+      // ---- 编辑分支：同表单写回现服务商（API Key 留空=保留；勾选即清单） ----
+      if (editing) {
+        const v = formVals(form);
+        const key = v.api_key.trim();
+        const baseURL = v.base_url.trim();
+        if (!baseURL) throw new Error('Base URL 不能为空');
+        if (parseInt(v.max_concurrent, 10) < 0) throw new Error('最大并发不能为负');
+        let proxy = '';
+        if (v.netmode === 'direct') proxy = 'direct';
+        else if (v.netmode === 'custom') {
+          proxy = (v.neturl || '').trim();
+          if (!proxy) throw new Error('选择自定义代理时需填写代理地址');
+        }
+        const box = q('#ap-models');
+        await putProvidersDoc((cur) => {
+          const t = (cur.providers || []).find((x) => x.id === editing.id);
+          if (!t) throw new Error(`服务商 ${editing.id} 不存在`);
+          if (v.name.trim()) t.name = v.name.trim();
+          t.protocol = v.protocol;
+          t.base_url = baseURL;
+          if (proxy) t.proxy = proxy; else delete t.proxy;
+          // 单账号：换 Key / 并发（Key 脱敏形或留空 = 保留现值，透传 fresh GET 的脱敏形）
+          if ((editing.accounts || []).length === 1 && (t.accounts || [])[0]) {
+            const acc = t.accounts[0];
+            if (key && !key.startsWith('***')) acc.api_key = key;
+            const mc = parseInt(v.max_concurrent, 10);
+            if (mc > 0) acc.max_concurrent = mc; else delete acc.max_concurrent;
+          }
+          // 模型：以勾选为准（保留清单顺序，新增追加；清单区未渲染=不动）
+          if (!box.hidden && box.querySelector('input[name=apmodel]')) {
+            const chosen = [...box.querySelectorAll('input[name=apmodel]:checked')].map((x) => x.value);
+            const have = new Set(chosen);
+            const old = (t.models || []).map((m) => m.id);
+            t.models = [...old.filter((id) => have.has(id)), ...chosen.filter((id) => !old.includes(id))]
+              .map((id) => ({ id }));
+          }
+          return cur;
+        });
+        status(`服务商 ${editing.id} 已更新（热生效，写前备份已留底）`, 'ok');
+        afterWrite();
+        return;
+      }
       const v = formVals(form);
       const id = v.id.trim();
       const accName = v.account.trim() || 'main';
@@ -1220,28 +1419,57 @@ async function addProviderModal() {
   });
   dlg.catch(() => {}); // 取消/关闭不算错误（吞掉未处理 rejection）
   const root = q('#modal-root .dialog:last-child');
-  const tilesEl = root.querySelector('#ap-tiles');
   const form = root.querySelector('form');
+  const step1 = root.querySelector('#ap-step1');
+  const step2 = root.querySelector('#ap-step2');
+  const bar = root.querySelector('.dlg-bar');
   const probeBtn = root.querySelector('#ap-probe');
   const noteEl = root.querySelector('#ap-note');
   const adv = root.querySelector('#ap-adv');
+  const titleEl = root.querySelector('#ap-step-title');
   const set = (name, val) => { form.elements[name].value = val; };
-  // 「去插件页」：关弹窗并切视图
-  root.querySelector('[data-act-go-plugins]').addEventListener('click', () => {
-    root.closest('.modal-back')?.remove();
-    show('plugins');
-  });
-  // 预设点选 → 预填（CLI add -preset 同语义：显式改动不被覆盖）
-  tilesEl.addEventListener('click', (e) => {
-    const t = e.target.closest('.tile-p');
-    if (!t) return;
-    tilesEl.querySelectorAll('.tile-p.on').forEach((x) => x.classList.remove('on'));
-    t.classList.add('on');
-    const p = presets.find((x) => x.id === t.dataset.preset);
+  const vendorSel = root.querySelector('#ap-vendor');
+  const typeSel = root.querySelector('#ap-type');
+  const setMode = (mode) => {
+    root.querySelector('#ap-api-fields').hidden = mode !== 'api';
+    root.querySelector('#ap-oauth-fields').hidden = mode !== 'oauth';
+    const yesBtn = root.querySelector('button[type=submit]');
+    if (yesBtn) yesBtn.hidden = mode === 'oauth'; // OAuth 无表单可提交：引导取代动作
+  };
+  const showStep = (n) => {
+    step1.hidden = n !== 1;
+    step2.hidden = n !== 2;
+    bar.hidden = n !== 2; // 第一步是入口选择，无「添加」动作
+  };
+  const resetProbe = () => {
     const box = root.querySelector('#ap-models');
     box.hidden = true; box.innerHTML = '';
     probeBtn.disabled = false; probeBtn.textContent = '检测并获取模型';
+  };
+  // 配置方式 → 套用预设 / OAuth 引导 / 自定义手填（Trae 同构的联动核心）
+  const applyType = (val) => {
+    resetProbe();
+    if (val === 'oauth') {
+      setMode('oauth');
+      const v = VENDOR_TYPES.find((x) => x.key === vendorSel.value);
+      titleEl.textContent = v ? `${v.name} · 订阅账号（OAuth）` : '订阅账号（OAuth）';
+      noteEl.textContent = '订阅账号由社区插件适配导入（CLI 一次），凭证加密存储、到期自动续期；导入后回服务商页管理。';
+      return;
+    }
+    setMode('api');
+    if (val === 'custom') {
+      set('id', ''); set('name', ''); set('base_url', '');
+      adv.hidden = false; adv.open = true;
+      noteEl.textContent = '手动接入：展开高级选项填写协议与 Base URL，粘贴 Key 后检测模型（任意 OpenAI 兼容上游均可）。';
+      titleEl.textContent = '自定义服务商接入';
+      form.elements.id.focus();
+      return;
+    }
+    const p = byId[val];
+    if (!p) return;
     set('id', p.id); set('name', p.name); set('protocol', p.protocol); set('base_url', p.base_url);
+    const v = VENDOR_TYPES.find((x) => x.key === vendorSel.value);
+    titleEl.textContent = v ? `通过服务商添加 · ${v.name}` : '通过服务商添加';
     const ex = (cache.providers?.providers || []).find((x) => x.id === p.id);
     if (ex) {
       // 预设命中已有服务商：追加备用 Key，账号名可编辑
@@ -1250,20 +1478,42 @@ async function addProviderModal() {
       noteEl.textContent = `${p.name} 已存在：将向其追加备用 Key，可改账号名后检测添加。`;
     } else {
       adv.hidden = true; adv.open = false; // 纯 Key 预设：技术字段全部自动，不展示
-      noteEl.textContent = `已选预设 ${p.name}：粘贴 API Key → 检测 → 勾选模型 → 添加。`;
+      noteEl.textContent = `已选 ${p.name}：粘贴 API Key → 检测 → 勾选模型 → 添加。`;
     }
-    form.elements.api_key.focus();
+  };
+  // 服务商 → 重建「配置方式」选项并套用首个类型（官方三家追加 OAuth 项）
+  const fillTypes = () => {
+    const vk = vendorSel.value;
+    if (vk === 'custom') {
+      typeSel.innerHTML = '<option value="custom">手动接入（自填协议与 Base URL）</option>';
+      applyType('custom');
+      return;
+    }
+    const v = VENDOR_TYPES.find((x) => x.key === vk);
+    if (!v) { typeSel.innerHTML = '<option value="custom">手动接入（自填协议与 Base URL）</option>'; applyType('custom'); return; }
+    typeSel.innerHTML = v.types.map((t) => `<option value="${esc(t.preset)}">${esc(t.label)}</option>`).join('') +
+      (OAUTH_VENDORS.includes(vk) ? `<option value="oauth">订阅账号（OAuth · CLI 导入）</option>` : '');
+    applyType(typeSel.value);
+  };
+  // 厂商瓦片点选 → 进入第二步（下拉联动填充）
+  const enterStep2 = (vendorKey) => {
+    showStep(2);
+    vendorSel.value = VENDOR_TYPES.some((v) => v.key === vendorKey) ? vendorKey : 'custom';
+    fillTypes();
+  };
+  step1.addEventListener('click', (e) => {
+    if (e.target.closest('#ap-custom')) { enterStep2('custom'); return; }
+    const t = e.target.closest('.ap-tile');
+    if (!t) return;
+    enterStep2(t.dataset.vendor);
   });
-  // 手动接入：清空预填 + 展开高级选项
-  root.querySelector('#ap-custom').addEventListener('click', () => {
-    tilesEl.querySelectorAll('.tile-p.on').forEach((x) => x.classList.remove('on'));
-    const box = root.querySelector('#ap-models');
-    box.hidden = true; box.innerHTML = '';
-    probeBtn.disabled = false; probeBtn.textContent = '检测并获取模型';
-    set('id', ''); set('name', ''); set('base_url', '');
-    adv.hidden = false; adv.open = true;
-    noteEl.textContent = '手动接入：填写协议与 Base URL，粘贴 Key 后检测模型（任意 OpenAI 兼容上游均可）。';
-    form.elements.id.focus();
+  root.querySelector('#ap-back').addEventListener('click', () => showStep(1));
+  vendorSel.addEventListener('change', fillTypes);
+  typeSel.addEventListener('change', () => applyType(typeSel.value));
+  // OAuth 引导：去插件页（关弹窗并切视图）
+  root.querySelector('#ap-go-plugins').addEventListener('click', () => {
+    root.closest('.modal-back')?.remove();
+    show('plugins');
   });
   // 网络：选「自定义代理」时出现 URL 输入
   const netmode = form.elements.netmode, neturl = form.elements.neturl;
@@ -1271,12 +1521,21 @@ async function addProviderModal() {
     neturl.hidden = netmode.value !== 'custom';
     if (!neturl.hidden) neturl.focus();
   });
-  // 检测：验证凭证并拉取模型清单（POST /api/provider/probe）
+  // 检测：验证凭证并拉取模型清单（POST /api/provider/probe；会发一次真实请求）。
+  // 编辑态：Key 留空 → provider_id 复测（服务端复用已存密钥）；输入新 Key → 显式检测。
   probeBtn.addEventListener('click', async () => {
     const errEl = root.querySelector('.modal-err');
     if (errEl) errEl.textContent = '';
     const key = form.elements.api_key.value.trim();
-    if (!key) { if (errEl) errEl.textContent = '先粘贴 API Key 再检测'; form.elements.api_key.focus(); return; }
+    let probeBody;
+    if (editing) {
+      probeBody = key
+        ? { protocol: form.elements.protocol.value, base_url: form.elements.base_url.value.trim(), api_key: key }
+        : { provider_id: editing.id };
+    } else {
+      if (!key) { if (errEl) errEl.textContent = '先粘贴 API Key 再检测'; form.elements.api_key.focus(); return; }
+      probeBody = { protocol: form.elements.protocol.value, base_url: form.elements.base_url.value.trim(), api_key: key };
+    }
     probeBtn.disabled = true; probeBtn.textContent = '检测中…';
     const box = root.querySelector('#ap-models');
     box.hidden = false;
@@ -1284,18 +1543,26 @@ async function addProviderModal() {
     try {
       const r = await api('/api/provider/probe', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ protocol: form.elements.protocol.value, base_url: form.elements.base_url.value.trim(), api_key: key }),
+        body: JSON.stringify(probeBody),
       });
       const list = r.models || [];
-      if (!list.length) {
+      // 编辑态：上游清单 ∪ 当前清单（手动添加的不在上游清单中的模型保留）；
+      // 默认只勾选当前清单已有的模型——上游全量不默认吸入（用户主动勾选才加）。
+      const merged = editing
+        ? [...new Set([...list, ...(editing.models || []).map((m) => m.id)])]
+        : list;
+      const prev = editing ? new Set((editing.models || []).map((m) => m.id)) : new Set();
+      if (!merged.length) {
         box.innerHTML = '<div class="ap-probing">上游未返回模型清单（可跳过检测直接添加，模型稍后经「路由」使用时再确认）。</div>';
       } else {
         box.innerHTML =
-          '<div class="ap-models-head"><span>支持的模型（' + list.length + '）</span>' +
+          '<div class="ap-models-head"><span>支持的模型（' + merged.length + '）</span>' +
           '<button type="button" class="text" data-sel="all">全选</button>' +
           '<button type="button" class="text" data-sel="none">清空</button></div>' +
-          list.map((m) => '<label class="ap-model"><input type="checkbox" name="apmodel" value="' + esc(m) + '" checked><code>' + esc(m) + '</code></label>').join('');
-        noteEl.textContent = '凭证有效，已拉取 ' + list.length + ' 个模型——勾选要启用的模型（默认全选），点「添加」完成。';
+          merged.map((m) => '<label class="ap-model"><input type="checkbox" name="apmodel" value="' + esc(m) + '"' + (prev.has(m) ? ' checked' : '') + '><code>' + esc(m) + '</code></label>').join('');
+        noteEl.textContent = editing
+          ? '凭证有效，已拉取 ' + list.length + ' 个模型（含手动添加保留 ' + (merged.length - list.length) + ' 个）——默认只勾选当前清单，按需勾选后点「保存」。'
+          : '凭证有效，已拉取 ' + list.length + ' 个模型——勾选要启用的模型，点「添加」完成。';
       }
       probeBtn.disabled = false; probeBtn.textContent = '重新检测';
     } catch (e) {
@@ -1310,6 +1577,60 @@ async function addProviderModal() {
     if (!b) return;
     root.querySelectorAll('#ap-models input[name=apmodel]').forEach((x) => { x.checked = b.dataset.sel === 'all'; });
   });
+  // ---- 编辑态初始化：直进第二步，预填 + 模型清单勾选态预载 ----
+  const patchForEdit = () => {
+    const accs = editing.accounts || [];
+    const acc = accs.length === 1 ? accs[0] : null;
+    set('id', editing.id);
+    form.elements.id.readOnly = true;
+    set('name', editing.name || editing.id);
+    set('protocol', editing.protocol);
+    set('base_url', editing.base_url);
+    if (acc) {
+      form.elements.account.readOnly = true;
+      set('account', acc.name);
+      set('max_concurrent', String(acc.max_concurrent || 0));
+    } else {
+      form.elements.account.readOnly = true;
+      set('account', `${accs.length} 个账号（各自在账号行管理）`);
+      set('max_concurrent', '0');
+    }
+    const kEl = form.elements.api_key;
+    kEl.value = '';
+    kEl.required = false; // 编辑态 Key 可留空（保留现值）——否则 HTML5 约束验证拦截提交且无提示
+    kEl.placeholder = (acc && acc.api_key)
+      ? `已存密钥 ${acc.api_key} · 留空保留，输入新值即更换`
+      : '已存密钥（OAuth 凭证型）· 留空保留';
+    const pm = !editing.proxy ? 'inherit' : editing.proxy === 'direct' ? 'direct' : 'custom';
+    netmode.value = pm;
+    neturl.hidden = pm !== 'custom';
+    if (pm === 'custom') set('neturl', editing.proxy);
+    // 模型清单：当前清单全勾选（取消勾选 = 移除；重新检测可刷新合并）
+    const box = root.querySelector('#ap-models');
+    const ids = (editing.models || []).map((m) => m.id);
+    box.hidden = !ids.length;
+    box.innerHTML = ids.length
+      ? '<div class="ap-models-head"><span>当前清单（' + ids.length + '）· 取消勾选即移除</span>' +
+        '<button type="button" class="text" data-sel="all">全选</button>' +
+        '<button type="button" class="text" data-sel="none">清空</button></div>' +
+        ids.map((m) => '<label class="ap-model"><input type="checkbox" name="apmodel" value="' + esc(m) + '" checked><code>' + esc(m) + '</code></label>').join('')
+      : '';
+    probeBtn.textContent = '检测并获取模型';
+    noteEl.textContent = '编辑模式：API Key 留空保留现值（输入新值即更换）；ID 与账号名不可改。';
+    titleEl.textContent = `编辑服务商 · ${editing.name || editing.id}`;
+    root.querySelector('button[type=submit]').textContent = '保存';
+  };
+  if (editing) {
+    showStep(2);
+    root.querySelector('#ap-back').hidden = true; // 编辑态没有第一步可回
+    const vt = VENDOR_TYPES.find((v) => v.types.some((t) => t.preset === editing.id));
+    vendorSel.value = vt ? vt.key : 'custom';
+    fillTypes();
+    if (vt) { typeSel.value = editing.id; applyType(typeSel.value); }
+    patchForEdit();
+    return;
+  }
+  showStep(1);
 }
 
 async function removeAccount(provID, accName) {
@@ -1333,36 +1654,77 @@ async function removeAccount(provID, accName) {
 // 规则引用；兜底 = 无条件规则 → chain-fallback。CLI 的 groups/rules 完整
 // 契约保留；UI 之外的既有规则不受影响（编辑仅改 target）。
 
+// 链徽章策略名与编辑链策略卡（STRATEGIES）同词——同一策略不出现两套叫法
 const STRATEGY_LABEL = {
-  order: '固定顺序', rotate: '每请求轮换', smart: '按剩余额度',
-  usage: '当日用量均衡', weight: '平滑加权',
-};
-const STRATEGY_OPTION = {
-  smart: '按剩余额度分配（推荐）', order: '顺序用尽再换',
-  rotate: '每次请求轮换', usage: '当日用量均衡',
+  smart: '智能', order: '顺序', rotate: '轮询',
+  usage: '用量均衡', weight: '加权', agent: 'Agent 分配',
 };
 const ORDER_HINTS = {
   order: '成员顺序即调用顺序：1 号优先，额度用尽或故障才落到下一个',
   smart: '按各账号剩余额度自动分配，勾选顺序不影响分配',
   rotate: '每次请求轮流使用各成员，顺序仅作起始次序',
   usage: '按当日用量均衡分配，谁用得少谁上；顺序不生效',
+  weight: '按权重比例分流：权重越高派发越多（缺省 1）；顺序不生效',
+  agent: '由 Agent 插件按请求语境自主挑候选（链顺序仅作回落）；需装 Agent 类插件',
 };
 
 // 内置意图定义（前端写死，随版本发布；关键词/正则/优先级在网关侧）。
+// icon 与预览稿对齐（意图行名前图标；插件/自定义意图无 icon 自然降级）。
 // long-context / vision 的网关判定随后续版本落地，先开放配置——提前配
 // 链，判定就绪即生效。
 const INTENT_DEFS = [
-  { id: 'coding', label: '编程', desc: '写代码、改代码、评审、测试等开发任务',
+  { id: 'coding', icon: '⌨', label: '编程', desc: '写代码、改代码、评审、测试等开发任务',
     rec: '建议配 2~3 个模型的调用链：多模型自动容灾，额度不会卡死在一个账号上' },
-  { id: 'qa', label: '问答', desc: '知识问答、解释、查资料等轻任务',
+  { id: 'qa', icon: '💬', label: '问答', desc: '知识问答、解释、查资料等轻任务',
     rec: '便宜快速的模型就够；用量大时配一条低价链更省额度' },
-  { id: 'writing', label: '写作', desc: '文案、文档、润色等长文任务',
+  { id: 'writing', icon: '✍️', label: '写作', desc: '文案、文档、润色等长文任务',
     rec: '选输出质量好的模型；写作量大时同样建议配链' },
-  { id: 'long-context', label: '长上下文', desc: '超长文件 / 仓库级分析，优先大窗口模型',
+  { id: 'long-context', icon: '📚', label: '长上下文', desc: '超长文件 / 仓库级分析，优先大窗口模型',
     rec: '选上下文窗口最大的模型；单一模型即可' },
-  { id: 'vision', label: '图片理解', desc: '带截图或图片输入的任务',
+  { id: 'vision', icon: '🖼', label: '图片理解', desc: '带截图或图片输入的任务',
     rec: '必须选支持图片输入的模型——纯文本模型会让请求失败' },
+  { id: 'agent', icon: '🤖', label: '智能代理', desc: '语义开放或跨域的请求——由智能代理（Agent 插件）按语境自主选厂商模型处理',
+    rec: '链策略配「Agent 分配」；适合不确定该走哪条固定链的请求（需装 Agent 类插件）' },
 ];
+
+// 意图试算（路由页输入框）：输入一句话 → POST /api/intent/preview 走真实
+// 判定链（L0 → L1 → Agent 插件，经用户设定的分类脑）→ 预览意图与分配。
+const INTENT_META = Object.fromEntries(INTENT_DEFS.map((d) => [d.id, d]));
+
+async function intentTry() {
+  const inp = $('intent-try-input');
+  const box = $('intent-try-result');
+  const text = inp.value.trim();
+  if (!text) { status('先输入要试算的意图描述', '', 4000); return; }
+  box.hidden = false;
+  box.innerHTML = '<div class="row"><div class="who"><div class="name muted2">智能代理分析中…（经分类脑，最长约 1.5s）</div></div></div>';
+  try {
+    const r = await api('/api/intent/preview', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    const meta = INTENT_META[r.intent];
+    const title = meta ? `${meta.icon} ${meta.label}` : r.intent ? `❔ ${esc(r.intent)}` : '未判定';
+    let detail;
+    if (r.intent && (r.members || []).length) {
+      // 已配置调用链：展示分配到的成员链 + 命中的规则
+      detail = `<div style="margin-top:7px">${chainHTML(r.members, '')}` +
+        (r.rule ? `<span class="pill soft" style="margin-left:6px">规则 ${esc(r.rule)}</span>` : '') + `</div>` +
+        `<div class="sub" style="margin-top:6px">将按此链分配${r.intent === 'agent' ? '；链策略为 Agent 分配时由智能代理自主挑模型' : ''}</div>`;
+    } else if (r.intent) {
+      detail = `<div class="sub" style="margin-top:6px">意图「${esc(r.intent)}」尚未配置调用链——实际请求将走兜底；点上方「一键分配」补齐</div>`;
+    } else {
+      detail = `<div class="sub" style="margin-top:6px">未能判定意图——实际请求将走兜底链</div>`;
+    }
+    box.innerHTML = `<div class="row"><div class="who">
+      <div class="name">${title}<span class="pill soft">试算结果</span></div>${detail}
+    </div></div>`;
+  } catch (e) {
+    box.innerHTML = `<div class="row"><div class="who"><div class="name muted2">试算失败: ${esc(e.message)}</div></div></div>`;
+  }
+}
+$('btn-intent-try').addEventListener('click', intentTry);
+$('intent-try-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') intentTry(); });
 
 // 成员显示名：'glm/glm-4.6@main' → 'glm-4.6@main'；'deepseek' → 'deepseek'
 function memberLabel(m) {
@@ -1371,6 +1733,41 @@ function memberLabel(m) {
   const slash = head.indexOf('/');
   const body = slash >= 0 ? head.slice(slash + 1) : head;
   return at >= 0 ? body + '@' + m.slice(at + 1) : body;
+}
+
+// ---------- D 链路可视化（节点 = 迷你厂商 tile + 模型 + 席位；箭头串联；策略徽章独立） ----------
+
+// 厂商 tile 色相：provider id 稳定散列到 c1..c7（同一厂商恒定同色）
+function vtClass(pid) {
+  let h = 0;
+  const s = String(pid || '');
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return (h % 7) + 1;
+}
+const vtText = (pid) => (String(pid || '?').replace(/[^A-Za-z0-9]/g, '').slice(0, 2) || '?').toUpperCase();
+
+// 链节点：'glm-coding/glm-5.3-flash@main' → [GL][glm-5.3-flash][@main]；
+// 'group/prog' → 组引用节点（⛓ tile，不展开成员）。
+function chainNodeHTML(m) {
+  if ((m || '').startsWith('group/')) {
+    return `<span class="node" title="${esc(m)}"><span class="vt v7">⛓</span><span class="m">${esc(m.slice(6))}</span></span>`;
+  }
+  const slash = (m || '').indexOf('/');
+  const pid = slash >= 0 ? m.slice(0, slash) : m;
+  const tail = slash >= 0 ? m.slice(slash + 1) : '';
+  const at = tail.indexOf('@');
+  const model = at >= 0 ? tail.slice(0, at) : tail;
+  const acc = at >= 0 ? tail.slice(at) : '';
+  const vt = vendorTileOf(pid);
+  return `<span class="node" title="${esc(m)}"><span class="vt v${vt.cls}">${esc(vt.txt)}</span><span class="m">${esc(model || pid)}</span>${acc ? `<span class="o">${esc(acc)}</span>` : ''}</span>`;
+}
+const CHAIN_ARR = '<svg class="arr" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 8h9m-3.5-3.5L13 8l-4.5 3.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+function chainHTML(members, strategy) {
+  const nodes = (members || []).map((m, i) =>
+    chainNodeHTML(m) + (i < members.length - 1 ? CHAIN_ARR : '')).join('');
+  const badge = strategy
+    ? `<span class="strategy" title="组内候选的分配方式">⚙ ${esc(STRATEGY_LABEL[strategy] || strategy)}</span>` : '';
+  return `<span class="chain">${nodes}${badge}</span>`;
 }
 
 // 行内有效性标注（与后端 validateMember 同规）。
@@ -1426,13 +1823,33 @@ async function loadRouting() {
       .flatMap((p) => p.intents.map((i) => ({ ...i, via: p.id })));
     const customDefs = (intents.intents || []).map((d) => ({ id: d.id, label: d.label || d.id, desc: '用户自定义意图（CLI / intents.json 维护）', via: 'custom' }));
 
-    const rows = INTENT_DEFS.map((d) => chainRow(d, chainOf[d.id], provs, groupIDs));
+    // Agent 插件就绪态：enabled + granted classify.intent + running。
+    // 未就绪时「智能代理」意图行整体不显示（判定与分配都依赖插件，
+    // 显示一个不可用的入口只会造成困惑）。
+    cache.agentReady = (plugViews.plugins || []).some((p) =>
+      p.enabled && p.status === 'running' && (p.granted || []).includes('classify.intent'));
+    const intentDefs = INTENT_DEFS.filter((d) => d.id !== 'agent' || cache.agentReady);
+
+    const rows = intentDefs.map((d) => chainRow(d, chainOf[d.id], provs, groupIDs));
     for (const d of pluginDefs) rows.push(chainRow(d, chainOf[d.id], provs, groupIDs, '插件'));
     for (const d of customDefs) rows.push(chainRow(d, chainOf[d.id], provs, groupIDs, '自定义'));
     rows.push(chainRow(
-      { id: 'fallback', label: '兜底', desc: '未命中任何意图的请求走这里' },
+      { id: 'fallback', icon: '🫥', label: '兜底', desc: '未命中任何意图的请求走这里' },
       chainOf.fallback, provs, groupIDs));
     $('list-intents').innerHTML = rows.join('');
+    // 一键分配（Agent 分类插件装好后按意图自动路由的最后一环）：收集
+    // 未配置意图，显示批量入口；行内单键在 chainRow 里渲染。
+    const unconfigured = [];
+    const collect = (d, ch) => {
+      const ms = ch?.group ? ch.group.members : (ch?.members || []);
+      if (!ms.length) unconfigured.push({ id: d.id, label: d.label || d.id });
+    };
+    for (const d of intentDefs) collect(d, chainOf[d.id]);
+    for (const d of pluginDefs) collect(d, chainOf[d.id]);
+    for (const d of customDefs) collect(d, chainOf[d.id]);
+    collect({ id: 'fallback', label: '兜底' }, chainOf.fallback);
+    cache.pendingIntents = unconfigured;
+    $('btn-quick-alloc').hidden = !(unconfigured.length && recMember(provs));
   } catch (e) {
     status('路由页加载失败: ' + e.message, 'err');
     if (!$('list-intents').innerHTML) $('list-intents').innerHTML = errBox('加载失败: ' + e.message, 'routing');
@@ -1444,18 +1861,20 @@ function chainRow(d, chain, provs, groupIDs, viaBadge) {
   const strategy = chain?.group ? chain.group.strategy : '';
   const has = members.length > 0;
   const hits = (chain?.rule || {}).hits || 0;
+  const rec = recMember(provs);
   const via = viaBadge
     ? `<span class="pill oauth" title="${viaBadge === '插件' ? '由插件 ' + esc(d.via) + ' 声明（classify.intent）' : '用户自定义意图（intents.json）'}">${esc(viaBadge)}</span>` : '';
-  return `<div class="row"><div class="who">
-    <div class="name">${esc(d.label)} <code>${esc(d.id)}</code>${via}</div>
-    <div class="sub">${esc(d.desc || '')}${d.via && viaBadge === '插件' ? ' · 由插件 ' + esc(d.via) + ' 提供分类' : ''}</div></div>` +
-    (has
-      ? `<div class="chain-preview"><span class="pill">${esc(STRATEGY_LABEL[strategy] || strategy || '—')}</span>` +
-        members.map((m, i) => `<span class="ord-chip mini" title="${esc(m)}"><b>${i + 1}</b><code>${esc(memberLabel(m))}</code></span>${memberValid(m, provs, groupIDs)}`).join('') +
-        `</div>`
-      : `<span class="muted2" style="flex:none">未配置</span>`) +
-    (hits ? `<span class="muted2" title="命中次数">${hits} 次</span>` : '') +
+  // 行内有效性标注：节点流之外集中呈现，不打断链路可读性
+  const invalid = has ? members.map((m) => memberValid(m, provs, groupIDs)).join('') : '';
+  // 意图描述：规则里保存的自定义描述（智能代理弹窗输入）优先于内置文案
+  const subDesc = (chain?.rule?.desc || d.desc || '');
+  return `<div class="row intent-row"><div class="who">
+    <div class="name">${d.icon ? `${esc(d.icon)} ` : ''}${esc(d.label)} <code>${esc(d.id)}</code>${via}${hits ? `<span class="pill soft">${hits} 次/今日</span>` : ''}</div>
+    <div class="sub">${esc(subDesc)}${d.via && viaBadge === '插件' ? ' · 由插件 ' + esc(d.via) + ' 提供分类' : ''}</div>
+    ${has ? `<div style="margin-top:7px">${chainHTML(members, strategy)}${invalid}</div>` : ''}</div>` +
+    (!has ? `<span class="muted2" style="flex:none">未配置</span>` : '') +
     `<div class="row-acts" style="opacity:1">
+      ${!has && rec ? `<button type="button" class="text add" data-quick="${esc(d.id)}" data-label="${esc(d.label || d.id)}" title="用推荐模型立即创建调用链（smart 策略，装 Agent 分类插件后即可按意图自动路由；可随时编辑链）">一键分配</button>` : ''}
       <button type="button" class="text add" data-chain="${esc(d.id)}" data-label="${esc(d.label || d.id)}" data-rec="${esc(d.rec || d.desc || '')}">${has ? '编辑链' : '＋ 配置调用链'}</button>
     </div></div>`;
 }
@@ -1474,6 +1893,84 @@ async function putProvidersDoc(mutator) {
   });
   cache.providers = null; // 强制重拉（含脱敏密钥的新文件态）
   return r;
+}
+
+// 添加模型（2026-11-13）：复用添加服务商的「检测 → 勾选」交互（.ap-model
+// checkbox chips + 全选/清空）——零手输；上游清单经 provider_id 复测拉取，
+// 已在清单中的模型勾选禁用并标记「已添加」。
+async function addModelsModal(pid) {
+  const p = (cache.providers?.providers || []).find((x) => x.id === pid);
+  const dlg = openDialog({
+    title: `添加模型 · ${p?.name || pid}`,
+    body: '<div class="ap-models" id="am-box"><div class="ap-probing">正在用已存密钥拉取上游模型清单…</div></div>',
+    yes: '添加所选',
+    footNote: '勾选要加入的模型；已在清单中的不可再选',
+    onSubmit: async (form) => {
+      const sel = [...form.querySelectorAll('input[name=ammodel]:checked:not(:disabled)')].map((x) => x.value);
+      if (!sel.length) throw new Error('未勾选任何新模型');
+      await putProvidersDoc((cur) => {
+        const t = (cur.providers || []).find((x) => x.id === pid);
+        if (!t) throw new Error(`服务商 ${pid} 不存在`);
+        const have = new Set((t.models || []).map((m) => m.id));
+        t.models = [...(t.models || []), ...sel.filter((m) => !have.has(m)).map((m) => ({ id: m }))];
+        return cur;
+      });
+      status(`已添加 ${sel.length} 个模型到 ${pid}（热生效）`, 'ok');
+      await afterWrite();
+    },
+  });
+  dlg.catch(() => {}); // 取消/关闭不算错误
+  const root = q('#modal-root .dialog:last-child');
+  const box = root.querySelector('#am-box');
+  try {
+    const r = await api('/api/provider/probe', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider_id: pid }),
+    });
+    const up = r.models || [];
+    const have = new Set((p?.models || []).map((m) => m.id));
+    box.innerHTML = up.length
+      ? `<div class="ap-models-head"><span>上游清单 ${up.length} 个</span>` +
+        '<button type="button" class="text" data-sel="all">全选</button>' +
+        '<button type="button" class="text" data-sel="none">清空</button></div>' +
+        up.map((m) => {
+          const exists = have.has(m);
+          return `<label class="ap-model"><input type="checkbox" name="ammodel" value="${esc(m)}"${exists ? ' checked disabled' : ''}><code>${esc(m)}</code>${exists ? '<span class="pill soft">已添加</span>' : ''}</label>`;
+        }).join('')
+      : '<div class="ap-probing">上游未返回模型清单——该端点不支持 /models，无法拉取勾选。</div>';
+    root.querySelectorAll('#am-box [data-sel]').forEach((b) => {
+      b.onclick = () => root.querySelectorAll('#am-box input[name=ammodel]:not(:disabled)')
+        .forEach((x) => { x.checked = b.dataset.sel === 'all'; });
+    });
+  } catch (e) {
+    box.innerHTML = `<div class="ap-probing">拉取失败：${esc(e.message)}</div>`;
+  }
+}
+
+// 重新检测模型清单（2026-11-13）：POST /api/provider/probe 带 provider_id
+// ——服务端按 id 复用已存密钥（前端只有脱敏形）。上游清单 + 保留手动
+// 添加的不在上游清单中的模型（与 CLI provider probe 同语义）。
+async function reprobeModels(pid) {
+  status('正在用已存密钥拉取上游模型清单…（发一次真实请求）');
+  try {
+    const r = await api('/api/provider/probe', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider_id: pid }),
+    });
+    const up = r.models || [];
+    let added = 0, kept = 0;
+    await putProvidersDoc((doc) => {
+      const p = (doc.providers || []).find((x) => x.id === pid);
+      if (!p) throw new Error(`服务商 ${pid} 不存在`);
+      const manual = (p.models || []).filter((m) => !up.includes(m.id));
+      kept = manual.length;
+      added = up.filter((id) => !(p.models || []).some((m) => m.id === id)).length;
+      p.models = up.map((id) => ({ id })).concat(manual);
+      return doc;
+    });
+    status(`模型清单已刷新：上游 ${up.length} 个（新增 ${added}）${kept ? `，保留手动添加 ${kept} 个` : ''}`, 'ok', 8000);
+    await afterWrite();
+  } catch (e) { status('重新检测失败: ' + e.message, 'err', 8000); }
 }
 
 async function afterWrite() {
@@ -1508,16 +2005,6 @@ function memberClientCheck(m, provs, otherGroupIDs) {
 const frow = (label, field, hint) =>
   `<div class="frow"><span>${label}</span>${field}${hint ? `<div class="hint">${hint}</div>` : ''}</div>`;
 
-// 服务商的 Key/账号归属摘要（选择器里让用户看清「谁在服务」）
-function provMetaText(p, state) {
-  const n = (p.accounts || []).length;
-  let s = n ? `${n} 个账号` : '无账号';
-  const resting = Object.keys(state.resting || {}).filter((k) => k.startsWith(p.id + '/')).length +
-    (state.exhausted || []).filter((k) => k.startsWith(p.id + '/')).length;
-  if (resting) s += ` · ${resting} 个休眠中`;
-  return s;
-}
-
 // 推荐成员（前端启发式）：第一个有模型清单的服务商的第一个模型
 function recMember(provs) {
   const p = (provs || []).find((x) => (x.models || []).length);
@@ -1527,15 +2014,119 @@ function recMember(provs) {
 // 隐式组 ID（UI 生成的链组统一 chain- 前缀；用户同名组直接复用）
 const chainGroupID = (intentId) => 'chain-' + intentId;
 
-// 调用链编辑器（融合后唯一的分配交互）：策略 + 有序成员（模型@账号
-// 席位，勾选先后即优先级；分组头「全选」勾齐该商全部席位、半选态可见）。
+// 策略选项卡（G：中文名 + 一句话说明；weight/agent 对齐网关策略枚举）。
+// agent：Agent 插件按请求语境自主选模型（route.pick），不可用回落智能。
+const STRATEGIES = [
+  { k: 'smart', n: '智能', d: '按剩余额度 / 成功率自动选优（推荐）' },
+  { k: 'agent', n: 'Agent 分配', d: '由 Agent 插件按请求语境自主选厂商模型；插件不可用回落智能（需装 Agent 类插件）' },
+  { k: 'order', n: '顺序', d: '主备优先——按链顺序调用，失败才切下一个' },
+  { k: 'rotate', n: '轮询', d: '候选依次轮换，均摊用量' },
+  { k: 'usage', n: '用量均衡', d: '优先派给当日用量最少的候选' },
+  { k: 'weight', n: '加权', d: '按权重比例分流（缺省权重 1）' },
+];
+
+// 调用链编辑器（G 重皮：席位池分组勾选 + 序号化链行 + 策略卡 + 实时链预览；
+// 交互语义不变——模型@账号席位，分组头全选/半选，保存 = 隐式组 + 规则双写）。
+// 智能代理专属配置弹窗（2026-11-13 二版）：与其他意图不同——无席位池/
+// 排序/策略选择。核心是「意图试算」交互：输入一句话 → Agent 分类脑分析
+// 意图并预览分配（同首页试算框，POST /api/intent/preview）；候选模型始终
+// 与服务商页配置的清单同步（保存时全量重建 chain-agent 成员，运行时由
+// Agent 插件按请求语境自主挑选），服务商页增删模型后重新保存即同步。
+function agentChainModal(label) {
+  const provs = cache.providers?.providers || [];
+  const members = provs.flatMap((p) => (p.models || []).map((m) => `${p.id}/${m.id}`));
+  const accTotal = provs.reduce((n, p) => n + (p.accounts || []).length, 0);
+  const dlg = openDialog({
+    title: `智能代理 · 意图配置`,
+    body:
+      `<div class="pick-hint"><span>与其他意图不同：无需挑选模型——候选始终与服务商清单同步，运行时由智能代理（Agent 插件）按请求语境自主挑选最合适的模型</span></div>` +
+      `<div class="label"><span class="tick"></span><b>意图试算</b><span class="note">输入一句话，Agent 用你设定的分类脑分析意图并预览分配</span></div>` +
+      `<div class="intent-try" style="margin:4px 0 2px"><div class="search">` +
+      `<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.5 10.5 3 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>` +
+      `<input type="text" name="agent_try" spellcheck="false" autocomplete="off" placeholder="输入一句话，预览 Agent 的判定与分配（如：帮我把这段话润色成公文）" aria-label="意图试算输入"></div>` +
+      `<button type="button" class="btn-primary" id="agent-analyze">分析</button></div>` +
+      `<div id="agent-try-result" hidden></div>` +
+      `<div class="label" style="margin-top:12px"><span class="tick"></span><b>候选模型（与服务商清单同步）</b><span class="note">${members.length} 个模型 · ${accTotal} 个账号；服务商页增删模型后重新保存即同步</span></div>` +
+      `<div class="chips" style="padding:2px 0 4px">${members.map((m) => `<code>${esc(m)}</code>`).join(' ') || '<span class="muted2" style="font-size:12px">清单为空——先在「服务商」页添加并检测模型</span>'}</div>`,
+    yes: '保存',
+    footNote: '保存 = 候选与服务商清单全量同步（chain-agent 组 · agent 策略 · 热生效）',
+    onSubmit: async () => {
+      if (!members.length) throw new Error('没有可用模型——先在「服务商」页添加并检测出模型清单');
+      // 组：候选全量同步（strategy=agent；成员不含账号席位=自动展开全部账号）
+      await putProvidersDoc((cur) => {
+        const groups = cur.groups || [];
+        const g = { id: 'chain-agent', strategy: 'agent', members };
+        const idx = groups.findIndex((x) => x.id === 'chain-agent');
+        if (idx >= 0) groups[idx] = g; else groups.push(g);
+        return { ...cur, groups };
+      });
+      // 规则：指向组（已存在则只刷新指向，不碰用户其他字段）
+      const cur = await api('/api/config/rules');
+      const rules = cur.rules || [];
+      let rule = rules.find((r) => r.intent === 'agent');
+      if (!rule) rule = { id: 'intent-agent', intent: 'agent' };
+      rule.target = 'group/chain-agent';
+      const idx = rules.findIndex((r) => r.id === rule.id);
+      if (idx >= 0) rules[idx] = rule;
+      else {
+        const fb = rules.findIndex((r) => !r.intent && !r.regex && !r.max_tokens && !r.caller_key);
+        if (fb >= 0) rules.splice(fb, 0, rule); else rules.push(rule);
+      }
+      await api('/api/config/rules', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rules }),
+      });
+      status(`智能代理已保存：候选与服务商清单同步（${members.length} 个模型）（热生效，写前备份已留底）`, 'ok');
+      afterWrite();
+    },
+  });
+  dlg.catch(() => {}); // 取消/关闭不算错误
+  // 弹窗内意图试算（与首页 intentTry 同端点同渲染语义）
+  const root = q('#modal-root .dialog:last-child');
+  const analyze = async () => {
+    const inp = root.querySelector('input[name=agent_try]');
+    const box = root.querySelector('#agent-try-result');
+    const text = inp.value.trim();
+    if (!text) { box.hidden = false; box.innerHTML = '<div class="ap-probing">先输入一句话再分析</div>'; return; }
+    box.hidden = false;
+    box.innerHTML = '<div class="ap-probing">智能代理分析中…（经分类脑，最长约 1.5s）</div>';
+    try {
+      const r = await api('/api/intent/preview', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      const meta = INTENT_META[r.intent];
+      const title = meta ? `${meta.icon} ${meta.label}` : r.intent ? `❔ ${esc(r.intent)}` : '未判定';
+      let detail;
+      if (r.intent && (r.members || []).length) {
+        detail = `<div style="margin-top:7px">${chainHTML(r.members, '')}` +
+          (r.rule ? `<span class="pill soft" style="margin-left:6px">规则 ${esc(r.rule)}</span>` : '') + `</div>` +
+          `<div class="sub" style="margin-top:6px">将按此链分配${r.intent === 'agent' ? '；链策略为 Agent 分配时由智能代理自主挑模型' : ''}</div>`;
+      } else if (r.intent) {
+        detail = `<div class="sub" style="margin-top:6px">意图「${esc(r.intent)}」尚未配置调用链——实际请求将走兜底</div>`;
+      } else {
+        detail = `<div class="sub" style="margin-top:6px">未能判定意图——实际请求将走兜底链</div>`;
+      }
+      box.innerHTML = `<div class="row"><div class="who"><div class="name">${title}<span class="pill soft">试算结果</span></div>${detail}</div></div>`;
+    } catch (e) {
+      box.innerHTML = `<div class="ap-probing">试算失败: ${esc(e.message)}</div>`;
+    }
+  };
+  root.querySelector('#agent-analyze').addEventListener('click', analyze);
+  root.querySelector('input[name=agent_try]').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); analyze(); }
+  });
+}
+
 function intentChainModal(intentId, label, recHint) {
+  if (intentId === 'agent') { agentChainModal(label); return; } // 智能代理走专属形态
   const provs = cache.providers?.providers || [];
   const chain = (cache.chainOf || {})[intentId] || {};
   const curStrategy = chain.group?.strategy || 'smart';
   const curMembers = chain.group?.members || chain.members || [];
   // 直连目标（provider/model）进编辑器后转为链成员；group/ 引用不进编辑
   let picked = curMembers.filter((m) => !m.startsWith('group/'));
+  let strategy = STRATEGIES.some((s) => s.k === curStrategy) ? curStrategy : 'smart';
   const rec = recMember(provs);
   const dlg = openDialog({
     title: `调用链 · ${label}`,
@@ -1543,17 +2134,18 @@ function intentChainModal(intentId, label, recHint) {
       `<div class="pick-hint"><span>${esc(recHint || '未命中任何意图的请求走这里；建议配最稳的模型或链')}</span>` +
       (rec && !picked.includes(rec) ? `<button type="button" class="text add" id="pick-rec">一键加入推荐 ${esc(memberLabel(rec))}</button>` : '') +
       `</div>` +
-      frow('分配策略', `<select class="field" name="strategy">` +
-        Object.entries(STRATEGY_OPTION).map(([v, l]) =>
-          `<option value="${v}"${curStrategy === v ? ' selected' : ''}>${l}</option>`).join('') +
-        `</select>`) +
-      `<div class="frow"><span>成员与顺序</span><div class="pick-order" id="pick-order"></div>` +
-      `<div class="hint" id="pick-order-hint"></div>` +
+      `<div class="label"><span class="tick"></span><b>席位池</b><span class="note">勾选加入调用链；分组头全选 / 半选</span></div>` +
       `<div class="pick-provs" id="pick-provs"></div>` +
-      `<div class="hint">成员精确到「模型@账号」——哪个模型、走哪把 Key，一目了然；勾「全选」= 该商全部席位（此后新增的模型不自动加入）。休眠/耗尽的席位自动跳过，勾选先后即优先级；清空保存 = 该意图走兜底。</div></div>`,
+      `<div class="label"><span class="tick"></span><b>当前链</b><span class="note">按序调用；候选失败自动休眠至重置并切下一候选</span></div>` +
+      `<div class="ord-list" id="pick-order"></div>` +
+      `<div class="hint" id="pick-order-hint"></div>` +
+      `<div class="label"><span class="tick"></span><b>策略</b><span class="note">组内候选的分配方式；编辑后新会话生效，进行中请求保持不变</span></div>` +
+      `<div class="strategy-grid" id="pick-strategy"></div>` +
+      `<div class="label"><span class="tick"></span><b>链预览</b></div>` +
+      `<div class="chain-box" id="chain-preview"></div>`,
     yes: '保存',
-    onSubmit: async (form) => {
-      const v = formVals(form);
+    footNote: '保存 = 隐式组 chain-' + esc(intentId) + ' + 规则双写（备份 + 审计 + 热生效）',
+    onSubmit: async () => {
       // 整商成员吸收该商细选席位；保持已选顺序；空 = 走兜底
       const wholes = picked.filter((m) => !m.includes('/') && !m.includes('@'));
       const members = picked.filter((m) => !(m.includes('/') && !m.includes('@') && wholes.includes(m.split('/')[0])));
@@ -1561,47 +2153,58 @@ function intentChainModal(intentId, label, recHint) {
         const err = memberClientCheck(m, provs, new Set());
         if (err) throw new Error(err);
       }
-      await saveIntentChain(intentId, v.strategy, members);
+      await saveIntentChain(intentId, strategy, members);
     },
   });
   dlg.catch(() => {});
   const root = q('#modal-root .dialog:last-child');
-  const state = cache.state || {};
 
   function renderCandidates() {
     root.querySelector('#pick-provs').innerHTML = provs.map((p) => {
       const accs = (p.accounts || []).length ? p.accounts : [{ name: '' }];
-      const chips = accs.map((a) => (p.models || []).map((m) => {
+      const vals = accs.flatMap((a) => (p.models || []).map((m) => a.name ? `${p.id}/${m.id}@${a.name}` : `${p.id}/${m.id}`));
+      const on = vals.filter((v) => picked.includes(v)).length;
+      const rows = accs.map((a) => (p.models || []).map((m) => {
         const val = a.name ? `${p.id}/${m.id}@${a.name}` : `${p.id}/${m.id}`;
-        return `<label class="pick-chip"><input type="checkbox" value="${esc(val)}"${picked.includes(val) ? ' checked' : ''}><code>${esc(m.id)}${a.name ? `<i class="at">@${esc(a.name)}</i>` : ''}</code></label>`;
+        const vt = vendorTileOf(p.id);
+        return `<label class="pick-row"><input type="checkbox" value="${esc(val)}"${picked.includes(val) ? ' checked' : ''}><span class="vtile inl v${vt.cls}">${esc(vt.txt)}</span><code>${esc(m.id)}${a.name ? `<i class="at">@${esc(a.name)}</i>` : ''}</code></label>`;
       }).join('')).join('');
-      return `<div class="pick-prov"><b>${esc(p.name || p.id)}<span class="pick-meta">${esc(provMetaText(p, state))}</span></b>` +
-        `<label class="pick-chip whole"><input type="checkbox" data-selall="${esc(p.id)}">全选</label>` +
-        `<div class="chips">${chips || '<span class="muted2">清单为空（检测后生成）</span>'}</div></div>`;
+      const ht = vendorTileOf(p.id);
+      return `<div class="pick-group">
+        <label class="pick-head"><input type="checkbox" data-selall="${esc(p.id)}"><span class="vtile inl v${ht.cls}">${esc(ht.txt)}</span>${esc(p.name || p.id)}<span class="pill soft">${on}/${vals.length}</span></label>
+        ${rows || '<div class="pick-row muted2">清单为空（检测后生成）</div>'}
+      </div>`;
     }).join('');
-    syncSelAll(root, picked);
     root.querySelectorAll('#pick-provs input[type=checkbox]:not([data-selall])').forEach((inp) => {
       inp.checked = picked.includes(inp.value);
     });
+    syncSelAll(root, picked);
   }
-  function updateHint() {
-    root.querySelector('#pick-order-hint').textContent =
-      ORDER_HINTS[root.querySelector('select[name=strategy]').value] || '';
+  function renderStrategy() {
+    root.querySelector('#pick-strategy').innerHTML = STRATEGIES.map((s) =>
+      `<button type="button" class="strategy-opt${strategy === s.k ? ' on' : ''}" data-st="${s.k}">
+        <span class="st"><b>${s.n}</b><span class="en">${s.k}</span></span><p>${s.d}</p>
+      </button>`).join('');
   }
   function renderPicked() {
     const box = root.querySelector('#pick-order');
     box.innerHTML = picked.length
-      ? picked.map((m, i) =>
-        `<span class="ord-chip"><b>${i + 1}</b><code>${esc(memberLabel(m))}</code>` +
-        `<button type="button" class="ord-mv" data-i="${i}" data-d="-1"${i === 0 ? ' disabled' : ''} aria-label="上移">↑</button>` +
-        `<button type="button" class="ord-mv" data-i="${i}" data-d="1"${i === picked.length - 1 ? ' disabled' : ''} aria-label="下移">↓</button>` +
-        `<button type="button" class="ord-x" data-i="${i}" aria-label="移除">×</button></span>`).join('')
-      : `<span class="muted2">尚未选择成员——在下方勾选（留空保存 = 走兜底）</span>`;
+      ? picked.map((m, i) => `<div class="ord-item">
+          <span class="ord-n">${i + 1}</span>${chainNodeHTML(m)}<span style="flex:1"></span>
+          <button type="button" class="icon" data-i="${i}" data-d="-1"${i === 0 ? ' disabled' : ''} aria-label="上移"><svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 12V4M4.5 7.5 8 4l3.5 3.5"/></svg></button>
+          <button type="button" class="icon" data-i="${i}" data-d="1"${i === picked.length - 1 ? ' disabled' : ''} aria-label="下移"><svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 4v8M4.5 8.5 8 12l3.5-3.5"/></svg></button>
+          <button type="button" class="icon" data-x="${i}" aria-label="移出" style="color:var(--red)"><svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
+        </div>`).join('')
+      : '<div class="muted2" style="font-size:12px;padding:6px 2px">链为空——保存后该意图回退走兜底</div>';
+    root.querySelector('#pick-order-hint').textContent = ORDER_HINTS[strategy] || '';
     root.querySelectorAll('#pick-provs input[type=checkbox]:not([data-selall])').forEach((inp) => {
       inp.checked = picked.includes(inp.value);
     });
     syncSelAll(root, picked);
-    updateHint();
+    renderStrategy();
+    root.querySelector('#chain-preview').innerHTML = picked.length
+      ? chainHTML(picked, strategy)
+      : '<span class="muted2" style="font-size:12px">（空）</span>';
   }
   root.querySelector('#pick-provs').addEventListener('change', (e) => {
     const inp = e.target;
@@ -1624,16 +2227,19 @@ function intentChainModal(intentId, label, recHint) {
   root.querySelector('#pick-order').addEventListener('click', (e) => {
     const b = e.target.closest('button');
     if (!b) return;
+    if (b.dataset.x != null) { picked.splice(Number(b.dataset.x), 1); renderPicked(); return; }
     const i = Number(b.dataset.i);
-    if (b.classList.contains('ord-x')) picked.splice(i, 1);
-    else if (b.classList.contains('ord-mv')) {
-      const j = i + Number(b.dataset.d);
-      if (j < 0 || j >= picked.length) return;
-      [picked[i], picked[j]] = [picked[j], picked[i]];
-    } else return;
+    const j = i + Number(b.dataset.d);
+    if (j < 0 || j >= picked.length) return;
+    [picked[i], picked[j]] = [picked[j], picked[i]];
     renderPicked();
   });
-  root.querySelector('select[name=strategy]').addEventListener('change', updateHint);
+  root.querySelector('#pick-strategy').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-st]');
+    if (!b) return;
+    strategy = b.dataset.st;
+    renderPicked();
+  });
   root.querySelector('#pick-rec')?.addEventListener('click', () => {
     if (!rec || picked.includes(rec)) return;
     picked.push(rec);
@@ -1785,13 +2391,53 @@ function quotaModal(provID, accName) {
   });
 }
 
-// 路由页操作列事件委托（编辑链）+ 服务商页额度入口
+// 一键分配：用推荐模型为意图立即创建调用链——Agent 分类插件装好后
+// 「分类 → 按意图路由」的最后一环。写路径同编辑链（隐式组 + 规则双写，
+// 备份 + 审计 + 热生效）。Agent 意图的链默认即 agent 策略（Agent 自主挑模型）。
+async function quickAllocate(ids) {
+  const provs = cache.providers?.providers || [];
+  const rec = recMember(provs);
+  if (!rec) throw new Error('没有可用模型——先在「服务商」页添加并检测出模型清单');
+  for (const it of ids) {
+    await saveIntentChain(it.id, it.id === 'agent' ? 'agent' : 'smart', [rec]);
+  }
+  status(`已分配 ${ids.length} 条调用链（${memberLabel(rec)}）：${ids.map((i) => i.label).join('、')}`, 'ok', 6000);
+  afterWrite();
+}
+
+// 路由页操作列事件委托（编辑链 / 一键分配）+ 服务商页额度入口
 $('list-intents').addEventListener('click', (e) => {
+  const quick = e.target.closest('[data-quick]');
+  if (quick) {
+    quickAllocate([{ id: quick.dataset.quick, label: quick.dataset.label }])
+      .catch((err) => status('一键分配失败: ' + err.message, 'err', 8000));
+    return;
+  }
   const btn = e.target.closest('[data-chain]');
   if (!btn) return;
   intentChainModal(btn.dataset.chain, btn.dataset.label, btn.dataset.rec);
 });
+// 批量一键分配（页头按钮：为全部未配置意图创建推荐链）
+$('btn-quick-alloc').addEventListener('click', async () => {
+  const list = cache.pendingIntents || [];
+  if (!list.length) return;
+  const rec = recMember(cache.providers?.providers || []);
+  if (!rec) { status('没有可用模型——先在「服务商」页添加并检测出模型清单', 'err', 8000); return; }
+  const ok = await confirmModal('一键分配推荐链',
+    `将为 ${list.length} 个未配置意图各创建一条调用链（${memberLabel(rec)} · smart 策略，可随时编辑链调整）：\n${list.map((i) => i.label).join('、')}`,
+    { yes: '分配', danger: false });
+  if (!ok) return;
+  try { await quickAllocate(list); } catch (e) { status('一键分配失败: ' + e.message, 'err', 8000); }
+});
 $('prov-list').addEventListener('click', (e) => {
+  const probeBtn = e.target.closest('.probe-pv');
+  if (probeBtn) { probeBalanceModal(probeBtn.dataset.pv); return; }
+  const ep = e.target.closest('.edit-pv');
+  if (ep) { addProviderModal(ep.dataset.pv); return; } // 编辑 = 同一表单的编辑态（复用两段式 UI）
+  const rp = e.target.closest('.reprobe-models');
+  if (rp) { reprobeModels(rp.dataset.p); return; }
+  const amb = e.target.closest('.add-models-btn');
+  if (amb) { addModelsModal(amb.dataset.p); return; }
   const btn = e.target.closest('.quota-btn');
   if (btn) { quotaModal(btn.dataset.p, btn.dataset.a); return; }
   const um = e.target.closest('.um-btn');
@@ -1810,6 +2456,12 @@ $('prov-list').addEventListener('click', (e) => {
     else accFolds.delete(more.dataset.fold);
   }
 });
+// 模型清单展开态（toggle 不冒泡，捕获段接住）
+$('prov-list').addEventListener('toggle', (e) => {
+  const d = e.target.closest('details[data-mrow]');
+  if (!d) return;
+  if (d.open) modelOpens.add(d.dataset.mrow); else modelOpens.delete(d.dataset.mrow);
+}, true);
 $('btn-add-provider').addEventListener('click', addProviderModal);
 
 // ---------- 观测：决策追溯（行卡片 + 展开详情） ----------
@@ -2074,7 +2726,7 @@ $('btn-price-sync').addEventListener('click', async () => {
   }
 });
 
-// ---------- 插件（2026-11 定稿：订阅适配走社区插件 + 商店索引 + 信息分层） ----------
+// ---------- 插件（订阅适配=商店普通条目 + 商店索引 + 信息分层） ----------
 
 function pluginBadge(st) {
   const cls = { running: 'ok', starting: 'resting', backoff: 'resting', failed: 'prefail', stopped: 'disabled' }[st] || '';
@@ -2090,14 +2742,6 @@ const PLUGIN_CATS = {
   'vendor.verdict': '厂商判定',
 };
 
-// 订阅适配注册表（展示元数据）：适配本体在社区插件，主程序无厂商代
-// 码；安装走 /api/plugin-store/{id}/install（后端内置索引），授权走
-// CLI add-oauth。
-const SUB_ADAPTERS = [
-  { id: 'claude-auth', pkg: '@ym-community/claude-auth', vendor: 'Claude 订阅', src: 'claude-code' },
-  { id: 'codex-auth', pkg: '@ym-community/codex-auth', vendor: 'Codex 订阅', src: 'codex' },
-  { id: 'gemini-auth', pkg: '@ym-community/gemini-auth', vendor: 'Gemini 订阅', src: 'gemini-cli' },
-];
 let storeCache = null;
 let storeFilter = ''; // 商店分类筛选（''=全部）
 
@@ -2112,6 +2756,15 @@ async function loadStore() {
   return storeCache;
 }
 
+// 侧栏插件入口徽章（E：已装插件计数）
+function renderPlugBadge(views) {
+  const b = $('nav-plug-badge');
+  if (!b) return;
+  const n = (views || []).length;
+  b.hidden = !n;
+  b.textContent = n || '';
+}
+
 async function loadPlugins() {
   let views = [];
   try {
@@ -2120,31 +2773,10 @@ async function loadPlugins() {
   } catch (e) {
     $('list-plugins').innerHTML = errBox('插件清单加载失败: ' + e.message, 'plugins');
   }
+  renderPlugBadge(views);
   const store = await loadStore();
-  renderSubAdapters(views, store);
   renderStore(views, store);
   renderPluginsList(views);
-}
-
-function renderSubAdapters(views, store) {
-  $('list-subadapters').innerHTML = SUB_ADAPTERS.map((a) => {
-    const plug = views.find((x) => x.id === a.id);
-    const on = !!(plug && plug.enabled);
-    const state = on ? '<span class="pill ok">已启用</span>'
-      : plug ? '<span class="pill disabled">已停用</span>'
-      : '<span class="pill disabled">未安装</span>';
-    const entry = (store || []).find((x) => x.id === a.id);
-    const acts = !plug
-      ? `<button type="button" class="text add" data-subact="install" data-s="${esc(a.id)}" ${entry && !entry.download_url ? 'title="安装包暂未发布，可先手动接入 plugins.json".' : ''}>安装</button>`
-      : '<button type="button" class="text add" data-subact="goacct">去添加账号</button>';
-    return '<div class="row"><div class="who">' +
-      '<div class="name">' + esc(a.vendor) + ' <code>' + esc(a.pkg) + '</code></div>' +
-      '<div class="sub">授权走 CLI：<code>yardmaster provider add-oauth ' + esc(a.src) + '</code> · 多账号轮换</div></div>' +
-      state +
-      (plug ? '<button type="button" class="lib-switch ' + (on ? 'on' : '') + '" data-subtoggle="' + esc(a.id) + '" role="switch" aria-checked="' + on + '" aria-label="启停 ' + esc(a.id) + '"><i></i></button>' : '') +
-      '<div class="row-acts" style="opacity:1">' + acts + '</div>' +
-      '</div>';
-  }).join('');
 }
 
 function renderStore(views, store) {
@@ -2152,9 +2784,7 @@ function renderStore(views, store) {
   $('store-chips').innerHTML = chips.map((c) =>
     '<button type="button" class="cat-chip' + (storeFilter === c ? ' on' : '') + '" data-cat="' + esc(c) + '">' + esc(c || '全部') + '</button>').join('');
   const installed = new Set(views.map((p) => p.id));
-  // 订阅适配在上方专区展示，商店列表不重复
-  const list = (store || []).filter((s) => s.cap !== 'provider.oauth')
-    .filter((s) => !installed.has(s.id) && (!storeFilter || PLUGIN_CATS[s.cap] === storeFilter));
+  const list = (store || []).filter((s) => !installed.has(s.id) && (!storeFilter || PLUGIN_CATS[s.cap] === storeFilter));
   $('list-store').innerHTML = list.map((s) => {
     const unpublished = !s.download_url;
     return '<div class="row"><div class="who">' +
@@ -2170,12 +2800,17 @@ function renderStore(views, store) {
 // 一键安装（真端点）：POST /api/plugin-store/{id}/install——服务端下载
 // zip 校验落盘注册热生效；失败错误内联在状态行（未发布包如实提示）。
 async function installFromStore(id) {
-  const btn = document.querySelector(`[data-store-install="${CSS.escape(id)}"]`) ||
-    document.querySelector(`[data-subact="install"][data-s="${CSS.escape(id)}"]`);
+  const btn = document.querySelector(`[data-store-install="${CSS.escape(id)}"]`);
   busy(btn, true, '安装中…');
   try {
     await api(`/api/plugin-store/${encodeURIComponent(id)}/install`, { method: 'POST' });
-    status(`已安装并启用 ${id}（热生效）`, 'ok');
+    const entry = (storeCache || []).find((s) => s.id === id);
+    if (entry?.cap === 'classify.intent') {
+      // 分类类插件装好后的闭环引导：去路由页把意图分配到调用链
+      status(`已安装并启用 ${id}（热生效）——去「路由」页为各意图一键分配调用链，即可按意图自动路由`, 'ok', 10000);
+    } else {
+      status(`已安装并启用 ${id}（热生效）`, 'ok');
+    }
     storeCache = null;
     await loadPlugins();
   } catch (e) {
@@ -2206,26 +2841,6 @@ function renderPluginsList(views) {
   }).join('') || listEmpty('未配置插件（plugins.json）');
 }
 
-$('list-subadapters').addEventListener('click', async (e) => {
-  const act = e.target.closest('[data-subact]');
-  if (act) {
-    if (act.dataset.subact === 'install') { installFromStore(act.dataset.s); return; }
-    if (act.dataset.subact === 'goacct') { show('providers'); return; }
-  }
-  const sw = e.target.closest('[data-subtoggle]');
-  if (!sw) return;
-  const id = sw.dataset.subtoggle;
-  const wasOn = sw.classList.contains('on');
-  sw.disabled = true;
-  try {
-    await api(`/api/plugins/${encodeURIComponent(id)}/${wasOn ? 'disable' : 'enable'}`, { method: 'POST' });
-    status(wasOn ? '已停用（订阅适配下线后其服务商账号不可用）' : '已启用（热生效）', 'ok');
-    await loadPlugins();
-  } catch (err) {
-    status('操作失败: ' + err.message, 'err');
-    sw.disabled = false;
-  }
-});
 $('store-chips').addEventListener('click', (e) => {
   const chip = e.target.closest('[data-cat]');
   if (!chip) return;
@@ -2277,9 +2892,6 @@ document.addEventListener('click', (e) => {
   (RETRY_MAP[btn.dataset.retry] || (() => {}))();
 });
 
-// ---------- 命令面板（A1：Ctrl+K；Magpie .pop 构造裁剪版） ----------
-// 视图跳转 + 高频动作；↑↓ 选择 / Enter 执行 / Esc 关闭。零新增 API 面
-// （动作全部复用既有处理器）。
 async function probeQuotas() {
   status('余额探测中…');
   try {
@@ -2296,6 +2908,72 @@ async function probeQuotas() {
   }
 }
 
+// ---------- H1 探测余额弹窗（逐账号「检测中 → 结果」行内更新） ----------
+// 订阅账号展示双窗口额度、按量账号展示余额；弹窗标注端点与「纯 API ·
+// 无需登录」语义；未配置 quota_probe 端点时给引导空态。
+function probeResultHTML(hit) {
+  if (!hit) return '<span class="pill warn">无结果</span>';
+  if (hit.error) return `<span class="pill err">失败</span> ${esc(hit.error)}`;
+  if ((hit.windows || []).length) {
+    return hit.windows.map((w) => {
+      const pct = w.pct != null ? Math.round(w.pct)
+        : (w.total > 0 ? Math.round(((w.used || 0) / w.total) * 100) : null);
+      return `<code>${esc(w.name || '额度窗口')}</code>${pct != null ? ` ${pct}%` : ''}` +
+        `（${esc(fmtTokens(w.used))} / ${esc(fmtTokens(w.total))}）` +
+        (w.reset_at ? ` · 重置 ${esc(fmtResetAt(w.reset_at))}` : '');
+    }).join('<br>');
+  }
+  if (hit.balance != null) return `余额 <code>¥${Number(hit.balance).toFixed(2)}</code>`;
+  return '<span class="pill ok">可达</span>';
+}
+
+async function probeBalanceModal(provID) {
+  const p = (cache.providers?.providers || []).find((x) => x.id === provID);
+  if (!p) return;
+  const openGuide = () => openDialog({
+    title: `探测余额 · ${p.name || p.id}`,
+    body: `<div class="empty-state" style="padding:26px"><b>未配置探测端点</b>在该服务商高级配置里填写 QuotaProbe URL（如 GLM Coding Plan 的 <code>GET /api/monitor/usage/quota/limit</code>），保存后即可一键探测余额与订阅窗口。</div>`,
+    yes: '知道了', onSubmit: async () => {},
+  }).catch(() => {});
+  if (!p.quota_probe?.url) { openGuide(); return; }
+  const accs = p.accounts || [];
+  if (!accs.length) { openGuide(); return; }
+  openDialog({
+    title: `探测余额 · ${p.name || p.id}`,
+    body: `<p class="ap-note" style="margin-top:0">端点 <code class="num">${esc(p.quota_probe.url)}</code> · Bearer API Key · 纯 API 探测，无需账号登录；key 只进服务端内存</p>
+      <div class="list clip">${accs.map((a) => `
+        <div class="row" style="min-height:46px">
+          <div class="who">
+            <div class="name" style="font-size:12.5px">${esc(a.name)}${a.auth === 'oauth' ? ' <span class="pill oauth">OAuth</span>' : ''}</div>
+            <div class="sub probe-res" data-acc="${esc(a.name)}">检测中…</div>
+          </div>
+          <span class="sk-bone" style="width:96px"></span>
+        </div>`).join('')}</div>`,
+    yes: '完成', onSubmit: async () => {},
+  }).catch(() => {});
+  try {
+    const r = await api('/api/quota/probe', { method: 'POST' });
+    const ps = r.probes || [];
+    // 弹窗可能已被用户关掉：以 DOM 为准逐行更新（找不到行就静默）
+    q('#modal-root').querySelectorAll('.probe-res[data-acc]').forEach((el) => {
+      const hit = ps.find((x) => x.provider === provID && x.account === el.dataset.acc);
+      el.innerHTML = probeResultHTML(hit);
+      el.closest('.row')?.querySelector('.sk-bone')?.remove();
+    });
+    const okN = ps.filter((x) => x.provider === provID && !x.error).length;
+    status(`余额探测完成：${okN}/${accs.length} 个账号`, okN ? 'ok' : 'warn', 6000);
+    if (!q('#page-overview').hidden) loadOverview();
+  } catch (e) {
+    q('#modal-root').querySelectorAll('.probe-res[data-acc]').forEach((el) => {
+      el.innerHTML = `<span class="pill err">探测失败</span> ${esc(e.message)}`;
+      el.closest('.row')?.querySelector('.sk-bone')?.remove();
+    });
+  }
+}
+
+// ---------- 命令面板（A1：Ctrl+K；Magpie .pop 构造裁剪版） ----------
+// 视图跳转 + 高频动作；↑↓ 选择 / Enter 执行 / Esc 关闭。零新增 API 面
+// （动作全部复用既有处理器）。
 const cmdk = { open: false, items: [], filtered: [], active: 0, back: null, cleanup: null };
 
 function cmdkRegistry() {

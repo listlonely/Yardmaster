@@ -145,6 +145,31 @@ func TestConfigPutRejectsUnknownFieldAndLeavesFileUntouched(t *testing.T) {
 	}
 }
 
+func TestConfigPutSettingsPreservesL1Fields(t *testing.T) {
+	// 控制台设置页已移除 L1 表单行（2026-11-13）：PUT 不带 l1 字段时
+	// 必须保留现值（CLI settings set l1 维护），不得静默清零。
+	s, srv := newConfigServer(t, nil)
+	settingsPath := filepath.Join(s.AppDir, "settings.json")
+	if err := os.WriteFile(settingsPath,
+		[]byte(`{"l1_classifier":"prov/small","l1_timeout_ms":500}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, body := doPut(t, srv.URL, "/api/config/settings", `{"global_proxy":"http://p:1"}`)
+	if st != http.StatusOK {
+		t.Fatalf("PUT settings: HTTP %d: %s", st, body)
+	}
+	var cur store.Settings
+	if err := store.LoadJSON(settingsPath, &cur); err != nil {
+		t.Fatal(err)
+	}
+	if cur.L1Classifier != "prov/small" || cur.L1TimeoutMS != 500 {
+		t.Fatalf("L1 配置应保留现值: %+v", cur)
+	}
+	if cur.GlobalProxy != "http://p:1" {
+		t.Fatalf("显式字段应采纳: %+v", cur)
+	}
+}
+
 func TestConfigPutSettingsWritesBackupAndFile(t *testing.T) {
 	s, srv := newConfigServer(t, nil)
 	settingsPath := filepath.Join(s.AppDir, "settings.json")

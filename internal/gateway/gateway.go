@@ -106,8 +106,13 @@ type Server struct {
 	// 用于即时落地需进程外生效的偏好（开机自启动注册表 Run 键），网关
 	// 核心不感知注册表实现。
 	OnSettingsChange func(store.Settings)
-	oauth           oauthRuntime // OAuth 运行态（token 缓存/single-flight）
-	started         time.Time
+	// AgentPick（2026-11-13）：route.pick 钩子——Agent 插件按请求语境从
+	// 候选中选模型（payload {message,intent,candidates}，响应 {pick:序号}）。
+	// AttachPlugins 装配（经 Registry，自带 3 失败冷却 5 分钟）；nil=未挂
+	// 插件（agent 策略回落 smart 基线）。
+	AgentPick func(ctx context.Context, payload map[string]any) (json.RawMessage, error)
+	oauth     oauthRuntime // OAuth 运行态（token 缓存/single-flight）
+	started   time.Time
 }
 
 // Handler 返回网关路由表。
@@ -143,6 +148,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/cost", s.handleCost)
 	mux.HandleFunc("POST /api/pricing/sync", s.handlePricingSync)        // M7-W1：models.dev 单价同步
 	mux.HandleFunc("POST /api/quota/probe", s.handleQuotaProbe)          // M9-W3：手动触发余额轮询
+	mux.HandleFunc("POST /api/intent/preview", s.handleIntentPreview)    // 2026-11-13：意图试算（只读 dry-run）
 	mux.HandleFunc("GET /api/provider-presets", s.handleProviderPresets) // M9：前端「添加 Provider」预填数据源（只读）
 	mux.HandleFunc("POST /api/provider/probe", s.handleProviderProbe)    // 添加服务商「检测并获取模型」（凭证验证 + 上游清单）
 	mux.HandleFunc("POST /api/tokens", s.handleTokenCreate)              // 命名令牌：生成（plain 仅本次返回）
@@ -427,11 +433,14 @@ func (s *Server) handleInference(client ClientProto) http.HandlerFunc {
 		tr.RequestModel = model // 解析后以正式值为准（无 rewrite 时与预提取等价）
 
 		// 路由判定。内部 L1 分类调用（带标记头）跳过分类与规则，
-		// 防止「分类调用再次触发分类」的递归。
+		// 防止「分类调用再次触发分类」的递归；此时 intent/lastMsg 保持
+		// 空串——agent 策略的 Agent 分配同样跳过（防递归）。
 		target := model
+		intent, lastMsg := "", ""
 		if r.Header.Get(L1SelfHeader) != L1SelfValue {
-			lastMsg, estTokens := inputStats(clientReq)
-			intent := s.Intents.Classify(lastMsg)
+			var estTokens int
+			lastMsg, estTokens = inputStats(clientReq)
+			intent = s.Intents.Classify(lastMsg)
 			tr.Intent = intent
 			if s.Rules != nil {
 				if hit, ok := s.Rules.Match(caller, intent, lastMsg, estTokens); ok {
@@ -477,8 +486,67 @@ func (s *Server) handleInference(client ClientProto) http.HandlerFunc {
 			recordFail(http.StatusServiceUnavailable)
 			return
 		}
+		cands = s.agentPickReorder(cands, target, intent, lastMsg)
 		s.serveWithFailover(w, r, client, clientReq, body, stream, cands, sticky, &tr, start)
 	}
+}
+
+// agentPickReorder（2026-11-13，策略 agent）：目标组策略为 agent 且 Agent
+// 插件可用时，把 {message,intent,candidates} 交给插件自主选模型——选中
+// 候选提到队首（其余保持基线顺序作为故障转移后备）。任何失败（未挂插件/
+// 冷却/超时/序号非法）都原样返回基线排序，绝不因分配而失败。
+func (s *Server) agentPickReorder(cands []Candidate, target, intent, message string) []Candidate {
+	if s.AgentPick == nil || message == "" || !strings.HasPrefix(target, "group/") {
+		return cands
+	}
+	g := s.Planner.groupByID(strings.TrimPrefix(target, "group/"))
+	if g == nil || g.Strategy != provider.StrategyAgent {
+		return cands
+	}
+	type pickCand struct {
+		Index   int    `json:"index"`
+		Member  string `json:"member"`
+		Model   string `json:"model"`
+		Account string `json:"account"`
+		Status  string `json:"status"`
+	}
+	// Member 形如 provider/model@account（与编辑链成员一致）；状态段=resting/exhausted
+	memberOf := func(c Candidate) string {
+		m := c.Provider.ID + "/" + c.UpstreamModel
+		if c.Account.Name != "" {
+			m += "@" + c.Account.Name
+		}
+		return m
+	}
+	candsPayload := make([]pickCand, len(cands))
+	for i, c := range cands {
+		st := "available"
+		if c.Account.RestingUntil > 0 || accountSpent(c.Account, time.Now()) {
+			st = "resting" // 末段候选：Agent 仍可见，但选中需自担风险
+		}
+		candsPayload[i] = pickCand{Index: i, Member: memberOf(c), Model: c.UpstreamModel,
+			Account: c.Provider.ID + "/" + c.Account.Name, Status: st}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 1200*time.Millisecond)
+	defer cancel()
+	raw, err := s.AgentPick(ctx, map[string]any{
+		"message": message, "intent": intent, "candidates": candsPayload,
+	})
+	if err != nil {
+		slog.Debug("Agent 分配未生效（回落基线）", "err", err)
+		return cands
+	}
+	var resp struct {
+		Pick int `json:"pick"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil || resp.Pick < 0 || resp.Pick >= len(cands) {
+		slog.Debug("Agent 分配输出非法（回落基线）")
+		return cands
+	}
+	picked := cands[resp.Pick]
+	out := append([]Candidate{picked}, append(cands[:resp.Pick:resp.Pick], cands[resp.Pick+1:]...)...)
+	slog.Info("Agent 分配", "picked", memberOf(picked), "intent", intent)
+	return out
 }
 
 // rewriteModel 把请求体 JSON 的 model 字段改写为上游真实模型名。

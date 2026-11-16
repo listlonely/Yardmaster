@@ -9,12 +9,15 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"yardmaster/internal/plugin"
 )
 
-func writeIntents(t *testing.T, json string) string {
+// writeIntents 落一份空 intents.json（本文件全部用例同形状，去参数化）
+func writeIntents(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "intents.json")
-	if err := os.WriteFile(path, []byte(json), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"intents":[]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return path
@@ -46,7 +49,7 @@ func TestIntentChainCustomIntentsHotReload(t *testing.T) {
 }
 
 func TestIntentChainL1CacheAndCooldown(t *testing.T) {
-	path := writeIntents(t, `{"intents":[]}`)
+	path := writeIntents(t)
 	calls := 0
 	c := NewIntentChain(path, "prov/small", 0, func(ctx context.Context, prompt string) (string, error) {
 		calls++
@@ -106,7 +109,7 @@ func TestIntentChainL1CacheAndCooldown(t *testing.T) {
 }
 
 func TestIntentChainL1InvalidOutputNotVerdict(t *testing.T) {
-	path := writeIntents(t, `{"intents":[]}`)
+	path := writeIntents(t)
 	c := NewIntentChain(path, "prov/small", 0, func(ctx context.Context, prompt string) (string, error) {
 		return "我不知道", nil
 	})
@@ -116,7 +119,7 @@ func TestIntentChainL1InvalidOutputNotVerdict(t *testing.T) {
 }
 
 func TestIntentChainL1Timeout(t *testing.T) {
-	path := writeIntents(t, `{"intents":[]}`)
+	path := writeIntents(t)
 	c := NewIntentChain(path, "prov/small", 30*time.Millisecond, func(ctx context.Context, prompt string) (string, error) {
 		select {
 		case <-ctx.Done():
@@ -134,5 +137,72 @@ func TestIntentChainNilSafe(t *testing.T) {
 	var c *IntentChain
 	if got := c.Classify("anything"); got != "" {
 		t.Fatalf("nil 链应返回空, got %q", got)
+	}
+}
+
+// 插件分类兜底（2026-11-13 接线 docs §四·三）：L1 未配置时插件分类生效；
+// 输出须命中词表（内置+自定义+插件声明），词表外/失败回落空；L1 成功时
+// 不调插件（插件只在 L1 不可用/冷却/失败时兜底）。payload 携带插件声明
+// 词表供 Agent 分类器构造提示词。
+func TestPluginClassifyFallback(t *testing.T) {
+	pluginIntents := []plugin.IntentRef{{ID: "sre/oncall"}, {ID: "sre/postmortem"}}
+	newChain := func(calls *int, reply func(string) string) *IntentChain {
+		c := NewIntentChain(writeIntents(t), "", 0, nil) // L1 未配置
+		c.WithPluginIntents(func() []plugin.IntentRef { return pluginIntents })
+		c.WithPluginClassify(func(ctx context.Context, text string, vocab []string) (string, error) {
+			(*calls)++
+			found := false
+			for _, v := range vocab {
+				if v == "sre/oncall" {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("payload 应携带插件声明词表: %v", vocab)
+			}
+			return reply(text), nil
+		})
+		return c
+	}
+
+	// 1) L1 未配置 → 插件分类生效（词表内输出采纳）
+	calls := 0
+	c := newChain(&calls, func(string) string { return "sre/oncall" })
+	if got := c.Classify("线上告警响了，帮我看下值班手册"); got != "sre/oncall" {
+		t.Fatalf("插件分类应采纳: %q", got)
+	}
+	// 2) 缓存：同一消息不再调用插件
+	if got := c.Classify("线上告警响了，帮我看下值班手册"); got != "sre/oncall" || calls != 1 {
+		t.Fatalf("应命中缓存（calls=%d）: %q", calls, got)
+	}
+	// 3) 词表外输出 → 视同未命中（缓存）
+	calls = 0
+	c2 := newChain(&calls, func(string) string { return "不在词表里的东西" })
+	if got := c2.Classify("完全无特征的话术样例"); got != "" || calls != 1 {
+		t.Fatalf("词表外应回落空: %q (calls=%d)", got, calls)
+	}
+	// 4) 插件失败 → 回落空（不缓存瞬时错误）
+	calls = 0
+	c3 := NewIntentChain(writeIntents(t), "", 0, nil)
+	c3.WithPluginClassify(func(context.Context, string, []string) (string, error) {
+		calls++
+		return "", errors.New("插件崩了")
+	})
+	if got := c3.Classify("无特征消息"); got != "" || calls != 1 {
+		t.Fatalf("插件失败应回落空: %q (calls=%d)", got, calls)
+	}
+	if got := c3.Classify("无特征消息"); got != "" || calls != 2 {
+		t.Fatalf("瞬时错误不应缓存（calls=%d）: %q", calls, got)
+	}
+	// 5) L1 成功 → 插件不被调用（文档语义：L1 不可用/冷却才兜底）
+	c4 := NewIntentChain(writeIntents(t), "mock/small", time.Second,
+		func(ctx context.Context, prompt string) (string, error) { return "qa", nil })
+	pluginCalls := 0
+	c4.WithPluginClassify(func(context.Context, string, []string) (string, error) {
+		pluginCalls++
+		return "sre/oncall", nil
+	})
+	if got := c4.Classify("帮我修个 bug"); got != "coding" || pluginCalls != 0 {
+		t.Fatalf("L1 成功时不得调插件: %q (calls=%d)", got, pluginCalls)
 	}
 }

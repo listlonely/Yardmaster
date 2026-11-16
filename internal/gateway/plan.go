@@ -60,6 +60,7 @@ type usageEntry struct {
 
 // NewPlanner 构建计划器。
 func NewPlanner(providers []provider.Provider, groups []provider.Group) *Planner {
+	applyPresetQuotaDefaults(providers)
 	return &Planner{
 		providers: providers,
 		groups:    groups,
@@ -70,6 +71,21 @@ func NewPlanner(providers []provider.Provider, groups []provider.Group) *Planner
 		usage:     map[string]usageEntry{},
 		inflight:  map[string]int{},
 		now:       time.Now,
+	}
+}
+
+// applyPresetQuotaDefaults 给未配置 quota_probe 的预设厂商补默认探测端点
+// （运行态，不落盘）：2026-11-13 预设表补齐 Coding Plan 用量端点与
+// SiliconFlow user/info 后，存量 provider 升级重启即得余额/窗口探测，
+// 无需重配；显式配置（含 {"url":""} 禁用探测）优先，绝不覆盖。
+func applyPresetQuotaDefaults(providers []provider.Provider) {
+	for i := range providers {
+		if providers[i].QuotaProbe == nil {
+			if ps, ok := provider.PresetByID(providers[i].ID); ok && ps.QuotaProbe != nil {
+				pp := *ps.QuotaProbe
+				providers[i].QuotaProbe = &pp
+			}
+		}
 	}
 }
 
@@ -287,7 +303,9 @@ func (p *Planner) applyStrategy(strategy provider.Strategy, stratKey string,
 	switch strategy {
 	case provider.StrategyRotate:
 		return p.rotateLocked(stratKey, awake)
-	case provider.StrategySmart:
+	case provider.StrategySmart, provider.StrategyAgent:
+		// agent（Agent 插件自主选模型）：Plan 内与 smart 同基线——转发前
+		// 由网关经 route.pick 钩子让插件重排候选（失败回落本排序）。
 		if hasUsageData(awake) {
 			sort.SliceStable(awake, func(i, j int) bool {
 				return remainingRatio(awake[i].Account) > remainingRatio(awake[j].Account)
@@ -672,6 +690,8 @@ type StateAccount struct {
 	BalanceAt   int64   `json:"balance_at,omitempty"`      // 余额更新时刻
 	WindowState string  `json:"window_status,omitempty"`   // 订阅窗口状态（M3-W5）
 	WindowReset int64   `json:"window_reset_at,omitempty"` // 窗口重置时刻
+	Windows     []provider.PlanWindow `json:"windows,omitempty"` // 订阅额度窗口归一（M10-F）
+	ProbeErr    string  `json:"probe_err,omitempty"`       // 最近探测失败原因（M10-F，控制台显示）
 }
 
 // StateGroup 是 /api/state 用的路由组投影。
@@ -705,6 +725,8 @@ func (p *Planner) StateSnapshot() (providers []map[string]any, accounts []StateA
 				BalanceAt:   acc.BalanceAt,
 				WindowState: acc.WindowStatus,
 				WindowReset: acc.WindowResetAt,
+				Windows:     acc.Windows,
+				ProbeErr:    acc.ProbeErr,
 			})
 		}
 	}
@@ -780,5 +802,7 @@ func (p *Planner) Reload(providers []provider.Provider, groups []provider.Group)
 			delete(p.affinity, k)
 		}
 	}
+	// 预设默认探测端点（运行态补齐，不落盘）：热重载同启动口径
+	applyPresetQuotaDefaults(providers)
 	p.providers, p.groups = providers, groups
 }

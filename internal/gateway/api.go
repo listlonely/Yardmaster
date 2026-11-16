@@ -185,6 +185,15 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, name st
 		if f.FxUsdCNY <= 0 {
 			f.FxUsdCNY = cur.FxUsdCNY
 		}
+		// L1 分类器两字段（2026-11-13 控制台设置页移除该表单行）——空值/0
+		// 保留现值（CLI settings set l1 / l1-timeout 维护），否则每次控制台
+		// 保存都会抹掉 CLI 配置的 L1 分类设置。
+		if f.L1Classifier == "" {
+			f.L1Classifier = cur.L1Classifier
+		}
+		if f.L1TimeoutMS <= 0 {
+			f.L1TimeoutMS = cur.L1TimeoutMS
+		}
 		if f.GeminiClientSecret == "" {
 			f.GeminiClientSecret = cur.GeminiClientSecret
 		}
@@ -342,6 +351,53 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, name st
 	}
 }
 
+// handleIntentPreview 意图试算（2026-11-13）：输入一句话 → 走真实判定链
+// （自定义 L0 → 内置 L0 → L1 → Agent 分类插件）→ 返回判定的意图与将命中
+// 的分配（规则 / 目标 / 成员清单）。只读 dry-run：不改任何状态；Agent
+// 插件分类的往返预算由判定链自带（≤1.5s）。规则按 caller 为空口径匹配
+// （带 caller_key 的规则在试算中不命中——实际路由以真实调用方为准）。
+func (s *Server) handleIntentPreview(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeAPIErr(w, badRequest(err))
+		return
+	}
+	text := strings.TrimSpace(req.Text)
+	if text == "" {
+		writeAPIErr(w, badRequest(errors.New("text 不能为空")))
+		return
+	}
+	intent := s.Intents.Classify(text) // nil 接收者安全
+	resp := map[string]any{"intent": intent}
+	if s.Rules != nil {
+		if hit, ok := s.Rules.Match("", intent, text, 0); ok {
+			resp["rule"] = hit.ID
+			resp["target"] = hit.Target
+			if members, ok := s.targetMembers(hit.Target); ok {
+				resp["members"] = members
+			}
+		}
+	}
+	writeJSON(w, resp)
+}
+
+// targetMembers 解析目标的成员清单：group/<id> → 组成员声明序；直连
+// provider/model[/@account] → 该成员本身；default/空 → 未解析（false）。
+func (s *Server) targetMembers(target string) ([]string, bool) {
+	if t, ok := strings.CutPrefix(target, "group/"); ok {
+		if g := s.Planner.groupByID(t); g != nil {
+			return g.Members, true
+		}
+		return nil, false
+	}
+	if target == "" || target == "default" {
+		return nil, false
+	}
+	return []string{target}, true
+}
+
 // handleQuotaProbe 手动触发一次余额轮询（M9-W3）：与后台 30 分钟
 // ticker 同一 pollQuotas 路径，返回各账号探测结果（余额/错误逐账号
 // 留痕）+ 写后 state（账号 Balance/BalanceAt 已刷新）。非配置写路径：
@@ -385,15 +441,54 @@ func (s *Server) handleProviderPresets(w http.ResponseWriter, _ *http.Request) {
 // 代理（F3 链），错误片段经 netproxy.Snippet 截断。
 func (s *Server) handleProviderProbe(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Protocol  string `json:"protocol"`
-		BaseURL   string `json:"base_url"`
-		APIKey    string `json:"api_key"`
-		Proxy     string `json:"proxy,omitempty"`
-		AuthStyle string `json:"auth_style,omitempty"` // messages 协议认证头；""=x-api-key，"bearer"=Bearer
+		ProviderID string `json:"provider_id,omitempty"` // 已存服务商复测：留空凭证字段时复用其已存配置与密钥
+		Protocol   string `json:"protocol"`
+		BaseURL    string `json:"base_url"`
+		APIKey     string `json:"api_key"`
+		Proxy      string `json:"proxy,omitempty"`
+		AuthStyle  string `json:"auth_style,omitempty"` // messages 协议认证头；""=x-api-key，"bearer"=Bearer
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
 		writeAPIErr(w, badRequest(fmt.Errorf("请求体解析失败: %w", err)))
 		return
+	}
+	// provider_id 复测（2026-11-13）：已存服务商从控制台「重新检测」时，
+	// 前端只有脱敏密钥——按 id 读盘复用真实凭证（显式 api_key 仍优先，
+	// 添加服务商的检测流程不受影响）。
+	if id := strings.TrimSpace(req.ProviderID); id != "" {
+		f, err := store.LoadProvidersFile(s.ProvidersPath)
+		if err != nil {
+			writeAPIErr(w, badRequest(fmt.Errorf("读取服务商配置失败: %w", err)))
+			return
+		}
+		var found *provider.Provider
+		for i := range f.Providers {
+			if f.Providers[i].ID == id {
+				found = &f.Providers[i]
+				break
+			}
+		}
+		if found == nil {
+			writeAPIErr(w, badRequest(fmt.Errorf("服务商 %q 不存在", id)))
+			return
+		}
+		if req.Protocol == "" {
+			req.Protocol = string(found.Protocol)
+		}
+		if req.BaseURL == "" {
+			req.BaseURL = found.BaseURL
+		}
+		if req.Proxy == "" {
+			req.Proxy = string(found.Proxy)
+		}
+		if req.APIKey == "" || strings.HasPrefix(req.APIKey, "***") {
+			for _, a := range found.Accounts {
+				if a.APIKey != "" {
+					req.APIKey = a.APIKey
+					break
+				}
+			}
+		}
 	}
 	req.BaseURL = strings.TrimSpace(req.BaseURL)
 	req.APIKey = strings.TrimSpace(req.APIKey)
@@ -646,7 +741,7 @@ func validateProviders(f store.ProvidersFile) error {
 		seenGroup[g.ID] = true
 		switch g.Strategy {
 		case provider.StrategyOrder, provider.StrategyRotate, provider.StrategySmart,
-			provider.StrategyUsage, provider.StrategyWeight:
+			provider.StrategyUsage, provider.StrategyWeight, provider.StrategyAgent:
 		default:
 			return fmt.Errorf("路由组 %s 策略非法: %q（order | rotate | smart | usage | weight）", g.ID, g.Strategy)
 		}
