@@ -644,6 +644,15 @@ func sameSpec(a, b Spec) bool {
 			return false
 		}
 	}
+	// Intents 也参与变更判定：声明词表变化须重建实例（spec 不可变纪律），
+	// 否则新增/修改的意图声明永不生效（词表并入读的是实例持有的旧 spec）。
+	if len(a.Intents) != 0 || len(b.Intents) != 0 {
+		ai, _ := json.Marshal(a.Intents)
+		bi, _ := json.Marshal(b.Intents)
+		if !bytes.Equal(ai, bi) {
+			return false
+		}
+	}
 	return a.Enabled == b.Enabled && a.TimeoutMS == b.TimeoutMS &&
 		strings.Join(a.Command, "\x00") == strings.Join(b.Command, "\x00") &&
 		strings.Join(a.Capabilities, "\x00") == strings.Join(b.Capabilities, "\x00") &&

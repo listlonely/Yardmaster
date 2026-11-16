@@ -37,9 +37,12 @@ const (
 	l1MaxOutputRunes  = 64   // 分类输出只需一个意图 id
 	// pluginClassifyTimeout 是插件分类兜底的往返预算（§四·三）。文档基线
 	// 300ms 面向词表型插件；LLM 驱动的 Agent 分类器（examples/agent-
-	// classifier）需要真实模型往返，取 1.5s——超限回落默认组，Registry
-	// 自带连续 3 次失败冷却 5 分钟，不拖垮热路径。
-	pluginClassifyTimeout = 1500 * time.Millisecond
+	// classifier）需要真实模型往返——2026-11-16 真机实测分类脑往返
+	// DeepSeek-V4.1-Flash ≈2.4s / glm-5.3-flash ≈1.9s，1.5s 硬顶下
+	// agent 等无种子意图结构性超时（词表判不出→恒落 fallback），故取
+	// 3s。超限回落默认组；Registry 连续 3 次失败冷却 5 分钟，熔断期间
+	// 零等待直达后续层，不拖垮热路径。
+	pluginClassifyTimeout = 3 * time.Second
 )
 
 // IntentChain 是意图判定链。

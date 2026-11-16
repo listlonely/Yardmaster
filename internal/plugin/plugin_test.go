@@ -263,4 +263,28 @@ func TestRegistryReloadToggle(t *testing.T) {
 	waitFor(t, "重新启用后 running", func() bool { return reg.Views()[0].Status == StatusRunning })
 }
 
+// sameSpec：意图声明（增删改）须判不一致触发实例重建，否则新增词表
+// 永不生效（词表并入读的是实例持有的旧 spec；2026-11-16 真机实证）。
+func TestSameSpecIntents(t *testing.T) {
+	base := Spec{ID: "ac", Command: []string{"node", "x.mjs"}, Enabled: true,
+		Capabilities: []string{CapClassify}}
+	withIntents := base
+	withIntents.Intents = []IntentRef{{ID: "vision", Label: "图像理解"}}
+	if sameSpec(base, withIntents) {
+		t.Fatal("新增意图声明应判不一致（须重建实例）")
+	}
+	if !sameSpec(withIntents, withIntents) {
+		t.Fatal("相同意图声明应判一致")
+	}
+	relabeled := withIntents
+	relabeled.Intents = []IntentRef{{ID: "vision", Label: "视觉"}}
+	if sameSpec(withIntents, relabeled) {
+		t.Fatal("意图 Label 变化应判不一致")
+	}
+	if !sameSpec(base, Spec{ID: base.ID, Command: base.Command, Enabled: true,
+		Capabilities: base.Capabilities}) {
+		t.Fatal("双方均无意图声明不应误报差异")
+	}
+}
+
 var _ = io.Discard
