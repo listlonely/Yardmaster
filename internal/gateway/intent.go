@@ -16,6 +16,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"yardmaster/internal/classify"
@@ -50,6 +51,8 @@ type IntentChain struct {
 
 	pluginIntents   func() []plugin.IntentRef                     // 启用插件声明的意图（nil=无插件注入）
 	pluginClassify  func(ctx context.Context, text string, vocabulary []string) (string, error) // 插件分类兜底（nil=未接线）
+
+	takeover atomic.Bool // 智能路由接管：分类脑先行（SetAgentTakeover 热切换）
 
 	mu            sync.Mutex
 	intentsStamp  time.Time // intents.json mtime（热生效）
@@ -93,9 +96,15 @@ func (c *IntentChain) WithPluginClassify(fn func(ctx context.Context, text strin
 	c.pluginClassify = fn
 }
 
+// SetAgentTakeover 热切换智能路由接管（启动装配与 settings 写钩子调用）：
+// true=分类脑先行判定意图（自定义 L0 仍最优先），false=默认链。
+func (c *IntentChain) SetAgentTakeover(on bool) { c.takeover.Store(on) }
+
 // Classify 返回消息意图 id（内置或自定义词表）；无法判定返回空串。
 // 判定链：自定义 L0 → 内置 L0 → L1 → 插件分类兜底（§四·三：L1 未配置/
-// 冷却/失败时才落到插件）。nil 接收者安全（网关未装配判定链时静默跳过）。
+// 冷却/失败时才落到插件）。智能路由接管开启时为：自定义 L0 → 插件
+//（分类脑）→ 失败回落 内置 L0 → L1（不二次请求插件，Registry 冷却兜底）。
+// nil 接收者安全（网关未装配判定链时静默跳过）。
 func (c *IntentChain) Classify(message string) string {
 	if c == nil {
 		return ""
@@ -106,6 +115,18 @@ func (c *IntentChain) Classify(message string) string {
 	if v, ok := strategy.EvaluateL0(message); ok {
 		slog.Debug("意图判定", "source", "custom-l0", "intent", v.Intent)
 		return v.Intent
+	}
+	if c.takeover.Load() {
+		// 智能路由接管：跳过内置 L0/L1 关键词/小模型层，由分类脑按语境
+		// 判意图（词表校验同规——词表外/失败视同未命中）。
+		if intent := c.classifyPluginLocked(strategy, message); intent != "" {
+			return intent
+		}
+		if v, ok := classify.L0(message); ok {
+			slog.Debug("意图判定", "source", "l0-takeover-fallback", "intent", v.Intent)
+			return v.Intent
+		}
+		return c.classifyL1Locked(strategy, message)
 	}
 	if v, ok := classify.L0(message); ok {
 		slog.Debug("意图判定", "source", "l0", "intent", v.Intent)

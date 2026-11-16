@@ -408,3 +408,46 @@ func TestPluginOptionsAPI(t *testing.T) {
 		r.Body.Close()
 	}
 }
+
+// 智能路由接管开启前置（2026-11-16）：无启用 classify 插件或分类脑
+//（options.model）未配置时，PUT settings agent_takeover=true 拒 400 不
+// 落盘；配置后放行落盘；false/缺省无前置。还原旧代码（无前置校验）即失败。
+func TestSettingsAgentTakeoverGate(t *testing.T) {
+	s, srv := newConfigServer(t, nil)
+
+	// 未装插件：true 拒 400
+	if st, _ := doPut(t, srv.URL, "/api/config/settings", `{"agent_takeover":true}`); st != http.StatusBadRequest {
+		t.Fatalf("无 classify 插件应拒 400: %d", st)
+	}
+	// 插件启用但分类脑为空：仍拒
+	spec := helperSpec("brainp", []string{plugin.CapClassify})
+	if err := plugin.Save(filepath.Join(s.AppDir, "plugins.json"), plugin.File{Plugins: []plugin.Spec{spec}}); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := doPut(t, srv.URL, "/api/config/settings", `{"agent_takeover":true}`); st != http.StatusBadRequest {
+		t.Fatalf("分类脑未配置应拒 400: %d", st)
+	}
+	// 配置分类脑：放行落盘
+	spec.Options = map[string]any{"model": "glm-coding/glm-4.7-air"}
+	if err := plugin.Save(filepath.Join(s.AppDir, "plugins.json"), plugin.File{Plugins: []plugin.Spec{spec}}); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := doPut(t, srv.URL, "/api/config/settings", `{"agent_takeover":true}`); st != http.StatusOK {
+		t.Fatalf("分类脑已配置应放行: %d", st)
+	}
+	cur, err := store.LoadSettings(store.Paths{AppDir: s.AppDir})
+	if err != nil || !cur.AgentTakeoverEnabled() {
+		t.Fatalf("落盘: %v %+v", err, cur)
+	}
+	// 显式关闭随时放行；nil（缺省）保留现值
+	if st, _ := doPut(t, srv.URL, "/api/config/settings", `{"agent_takeover":false}`); st != http.StatusOK {
+		t.Fatalf("关闭应放行: %d", st)
+	}
+	if st, _ := doPut(t, srv.URL, "/api/config/settings", `{}`); st != http.StatusOK {
+		t.Fatalf("nil 保留现值应放行: %d", st)
+	}
+	cur2, _ := store.LoadSettings(store.Paths{AppDir: s.AppDir})
+	if cur2.AgentTakeoverEnabled() {
+		t.Fatalf("false + nil 后应为关闭: %+v", cur2)
+	}
+}

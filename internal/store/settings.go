@@ -61,6 +61,13 @@ type Settings struct {
 	// 属用户显式选择；迁移自启动文件夹快捷方式的场景由交付方显式置
 	// true）。非 Windows 平台为 no-op（壳层 build tag 隔离）。
 	Autostart *bool `json:"autostart,omitempty"`
+
+	// 智能路由接管（2026-11-16）：true=意图判定由智能代理分类脑先行
+	//（自定义 L0 关键词仍最优先，其后跳过内置 L0/L1 直达插件分类，
+	// 失败回落内置链）；nil/false=默认意图链（内置 L0 → L1 → 插件
+	// 兜底）。开启前置：启用中的 classify 插件且分类脑（options.model）
+	// 已配置——settings 写入口校验，插件失败由判定链自然降级。
+	AgentTakeover *bool `json:"agent_takeover,omitempty"`
 }
 
 // TokenEntry 是一枚命名访问令牌（多令牌，按客户端隔离）：生成时返回
@@ -140,6 +147,12 @@ func (s Settings) NotifyEnabled() bool {
 // 用户显式选择，缺省不悄悄注册开机项）。
 func (s Settings) AutostartEnabled() bool {
 	return s.Autostart != nil && *s.Autostart
+}
+
+// AgentTakeoverEnabled 返回智能路由接管是否开启（nil=缺省关闭——把
+// 全量请求交给分类脑判定属用户显式选择，且开启前置受写入口校验）。
+func (s Settings) AgentTakeoverEnabled() bool {
+	return s.AgentTakeover != nil && *s.AgentTakeover
 }
 
 // 窗口关闭行为取值。

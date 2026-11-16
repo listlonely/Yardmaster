@@ -10,9 +10,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"yardmaster/internal/plugin"
+	"yardmaster/internal/store"
 )
 
 // AttachPlugins 装配插件注册表，并把决策 trace 链入插件事件扇出
@@ -95,6 +97,16 @@ func (s *Server) handlePluginToggle(w http.ResponseWriter, id, action string) {
 	for i := range f.Plugins {
 		if f.Plugins[i].ID == id {
 			found = true
+			// 智能路由接管开启时禁止停用分类脑插件（接管必须配脑——
+			// 先关开关再停用）。
+			if action == "disable" && s.settingsTakeoverOn() {
+				for _, c := range f.Plugins[i].Capabilities {
+					if c == plugin.CapClassify {
+						writeAPIErr(w, badRequest(errors.New("智能路由接管开启中，不能停用分类脑插件——先在「路由 › 智能路由」关闭接管")))
+						return
+					}
+				}
+			}
 			f.Plugins[i].Enabled = action == "enable"
 		}
 	}
@@ -112,6 +124,48 @@ func (s *Server) handlePluginToggle(w http.ResponseWriter, id, action string) {
 	}
 	s.Plugins.Reload(f)
 	writeJSON(w, map[string]any{"ok": true, "effect": effectImmediate, "id": id, "enabled": action == "enable"})
+}
+
+// agentBrainReady 报告分类脑是否就绪：启用中的 classify 插件存在且其
+// options.model（provider/model）已配置。智能路由接管的开启前置校验用
+//（读盘不读运行态，与写路径同源；插件进程状态由判定链自然降级兜底）。
+func (s *Server) agentBrainReady() bool {
+	var f plugin.File
+	if err := s.loadCurrent(s.pluginsPath(), &f); err != nil {
+		return false
+	}
+	for _, p := range f.Plugins {
+		if !p.Enabled {
+			continue
+		}
+		hasClassify := false
+		for _, c := range p.Capabilities {
+			if c == plugin.CapClassify {
+				hasClassify = true
+				break
+			}
+		}
+		if !hasClassify {
+			continue
+		}
+		if m, _ := p.Options["model"].(string); strings.TrimSpace(m) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// settingsTakeoverOn 读盘判断智能路由接管是否开启（解析失败按关——
+// 与「读不懂=未知」铁律同规，绝不因配置损坏误拦用户操作）。
+func (s *Server) settingsTakeoverOn() bool {
+	st, err := store.LoadSettings(store.Paths{AppDir: s.AppDir})
+	return err == nil && st.AgentTakeoverEnabled()
+}
+
+// optsHasModel 报告 options 是否带非空 model（分类脑形态）。
+func optsHasModel(opts map[string]any) bool {
+	m, _ := opts["model"].(string)
+	return strings.TrimSpace(m) != ""
 }
 
 // handlePluginOptions 整体替换插件静态配置（PUT /api/plugins/{id}/options，
@@ -142,6 +196,11 @@ func (s *Server) handlePluginOptions(w http.ResponseWriter, r *http.Request, id 
 	}
 	if !found {
 		writeAPIErr(w, errNotFound("插件 "+id))
+		return
+	}
+	// 智能路由接管开启时禁止清空分类脑（接管必须配脑——先关开关再改）。
+	if s.settingsTakeoverOn() && !optsHasModel(opts) {
+		writeAPIErr(w, badRequest(errors.New("智能路由接管开启中，不能清空分类脑——先在「路由 › 智能路由」关闭接管")))
 		return
 	}
 	if err := plugin.Validate(f); err != nil {

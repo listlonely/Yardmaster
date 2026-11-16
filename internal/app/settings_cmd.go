@@ -90,6 +90,11 @@ func runSettings(args []string, stdout, stderr io.Writer) error {
 		} else {
 			fmt.Fprintln(stdout, "autostart = off（不自启动，缺省）")
 		}
+		if s.AgentTakeoverEnabled() {
+			fmt.Fprintln(stdout, "agent-takeover = on（智能路由接管：分类脑先行判定意图，自定义关键词仍最优先）")
+		} else {
+			fmt.Fprintln(stdout, "agent-takeover = off（默认意图链：L0 → L1 → 插件兜底，缺省）")
+		}
 		return nil
 	case "set":
 		fs := flag.NewFlagSet("settings set", flag.ContinueOnError)
@@ -165,8 +170,15 @@ func runSettings(args []string, stdout, stderr io.Writer) error {
 				return ErrUsage
 			}
 			s.Autostart = &v
+		case "agent-takeover", "agent_takeover":
+			v, perr := parseOnOff(val)
+			if perr != nil {
+				fmt.Fprintln(stderr, "agent-takeover 须为 on / off（on=智能路由接管：分类脑先行判定意图，需已配置分类脑；off=默认意图链（缺省））")
+				return ErrUsage
+			}
+			s.AgentTakeover = &v
 		default:
-			fmt.Fprintf(stderr, "不支持的设置键 %q；当前支持：global_proxy、l1_classifier、l1_timeout_ms、listen、token、gemini_client_secret、fx-usd-cny、update、close-action、autostart\n", key)
+			fmt.Fprintf(stderr, "不支持的设置键 %q；当前支持：global_proxy、l1_classifier、l1_timeout_ms、listen、token、gemini_client_secret、fx-usd-cny、update、close-action、autostart、agent-takeover\n", key)
 			return ErrUsage
 		}
 		// 安全基线（F10）：非回环监听必须带令牌（M2-W5，serve 拒启的

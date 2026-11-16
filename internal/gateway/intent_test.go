@@ -206,3 +206,45 @@ func TestPluginClassifyFallback(t *testing.T) {
 		t.Fatalf("L1 成功时不得调插件: %q (calls=%d)", got, pluginCalls)
 	}
 }
+
+// 智能路由接管（2026-11-16）：自定义 L0 仍最优先（未变）；其后的请求
+// 跳过内置 L0/L1 由分类脑先行判定（词表校验同规）；分类脑失败/未命中
+// 回落 内置 L0 → L1，服务不因接管而降级到兜底。还原旧代码（接管不
+// 改变判定顺序）即失败。
+func TestIntentChainAgentTakeover(t *testing.T) {
+	path := writeIntents(t)
+	// 分类脑把明显 coding 的消息判成 writing——接管态证明内置 L0 被跳过
+	c := NewIntentChain(path, "", 0, nil) // L1 关闭
+	c.WithPluginClassify(func(_ context.Context, _ string, _ []string) (string, error) {
+		return "writing", nil
+	})
+	// 默认链：内置 L0 先命中 coding
+	if got := c.Classify("帮我修个 bug"); got != "coding" {
+		t.Fatalf("默认链应内置 L0 命中 coding, got %q", got)
+	}
+	// 接管：分类脑先行 → writing
+	c.SetAgentTakeover(true)
+	if got := c.Classify("帮我修个 bug"); got != "writing" {
+		t.Fatalf("接管应分类脑先行, got %q", got)
+	}
+
+	// 分类脑失败：回落 内置 L0 → L1（不二次请求插件）
+	l1Calls := 0
+	c2 := NewIntentChain(path, "prov/small", 0,
+		func(context.Context, string) (string, error) { l1Calls++; return "qa", nil })
+	pluginErrs := 0
+	c2.WithPluginClassify(func(context.Context, string, []string) (string, error) {
+		pluginErrs++
+		return "", errors.New("分类脑不可用")
+	})
+	c2.SetAgentTakeover(true)
+	if got := c2.Classify("帮我修个 bug"); got != "coding" {
+		t.Fatalf("分类脑失败应回落内置 L0 coding, got %q", got)
+	}
+	if got := c2.Classify("完全无特征的独特话术样本"); got != "qa" {
+		t.Fatalf("L0 未命中应回落 L1 qa, got %q", got)
+	}
+	if pluginErrs != 2 {
+		t.Fatalf("接管态每次判定至多请求插件一次 (errs=%d)", pluginErrs)
+	}
+}

@@ -210,6 +210,15 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, name st
 		if f.Autostart == nil {
 			f.Autostart = cur.Autostart
 		}
+		// 智能路由接管（2026-11-16）：指针 nil=表单未提供，保留现值；
+		// 显式 true 校验前置——启用中的 classify 插件且分类脑已配置
+		//（关闭无前置，随时可退回默认意图链）。
+		if f.AgentTakeover == nil {
+			f.AgentTakeover = cur.AgentTakeover
+		} else if *f.AgentTakeover && !s.agentBrainReady() {
+			writeAPIErr(w, badRequest(errors.New("智能路由接管需先配置分类脑：在「路由 › 智能代理」弹窗选择决策模型（启用中的 classify 插件 + options.model）")))
+			return
+		}
 		// 自动更新三态（M11-W2）：空值保留现值（表单未提供）；显式值
 		// 必须合法（off/check/auto），读不懂=拒绝落盘。
 		if f.Update == "" {

@@ -212,6 +212,9 @@
       </div>
       <div class="list clip" id="intent-try-result" hidden></div>
       <div class="list" id="list-intents"></div>
+      <!-- 智能路由（2026-11-16）：智能代理与其余意图分开管理——分类脑接管开关 -->
+      <div class="label" id="sec-agent-label" hidden><span class="tick"></span><b>智能路由</b><span class="note">开启接管后由分类脑先行判定意图（自定义关键词规则仍最优先）</span></div>
+      <div class="list" id="agent-section" hidden></div>
       <p class="foot-note">选型建议：编程 / 兜底 → 配 2~3 个模型的链（自动容灾）；问答 → 便宜快速的模型；长上下文 / 图片理解 → 具备对应能力的模型。改动即时热生效（写前备份 + 审计）。</p>
     </section>
 

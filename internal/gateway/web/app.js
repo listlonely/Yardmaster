@@ -1792,13 +1792,15 @@ function memberValid(m, provs, groups) {
 
 async function loadRouting() {
   try {
-    const [state, rules, intents, plugViews, provCfg] = await Promise.all([
+    const [state, rules, intents, plugViews, provCfg, settings] = await Promise.all([
       api('/api/state'), api('/api/config/rules'), api('/api/config/intents'),
       api('/api/plugins').catch(() => ({ plugins: [] })),
       cache.providers ? Promise.resolve(cache.providers) : api('/api/config/providers'),
+      api('/api/config/settings'),
     ]);
     cache.providers = provCfg;
     cache.rules = rules;
+    cache.settings = settings;
     const provs = provCfg.providers || [];
     const groupIDs = new Set((state.groups || []).map((g) => g.id));
 
@@ -1824,11 +1826,12 @@ async function loadRouting() {
     const customDefs = (intents.intents || []).map((d) => ({ id: d.id, label: d.label || d.id, desc: '用户自定义意图（CLI / intents.json 维护）', via: 'custom' }));
 
     // Agent 插件就绪态：enabled + granted classify.intent + running。
-    // 未就绪时「智能代理」意图行整体不显示（判定与分配都依赖插件，
-    // 显示一个不可用的入口只会造成困惑）。
+    // 未就绪时「智能路由」区块整体不显示（判定与分配都依赖插件，
+    // 显示一个不可用的入口只会造成困惑）。智能代理与其余意图分开：
+    // 主意图列表恒不含 agent——独立区块渲染（含接管开关）。
     cache.agentReady = (plugViews.plugins || []).some((p) =>
       p.enabled && p.status === 'running' && (p.granted || []).includes('classify.intent'));
-    const intentDefs = INTENT_DEFS.filter((d) => d.id !== 'agent' || cache.agentReady);
+    const intentDefs = INTENT_DEFS.filter((d) => d.id !== 'agent');
 
     const rows = intentDefs.map((d) => chainRow(d, chainOf[d.id], provs, groupIDs));
     for (const d of pluginDefs) rows.push(chainRow(d, chainOf[d.id], provs, groupIDs, '插件'));
@@ -1837,6 +1840,7 @@ async function loadRouting() {
       { id: 'fallback', icon: '🫥', label: '兜底', desc: '未命中任何意图的请求走这里' },
       chainOf.fallback, provs, groupIDs));
     $('list-intents').innerHTML = rows.join('');
+    renderAgentSection(chainOf.agent, plugViews.plugins);
     // 一键分配（Agent 分类插件装好后按意图自动路由的最后一环）：收集
     // 未配置意图，显示批量入口；行内单键在 chainRow 里渲染。
     const unconfigured = [];
@@ -1878,6 +1882,64 @@ function chainRow(d, chain, provs, groupIDs, viaBadge) {
       <button type="button" class="text add" data-chain="${esc(d.id)}" data-label="${esc(d.label || d.id)}" data-rec="${esc(d.rec || d.desc || '')}">${has ? '编辑链' : '＋ 配置调用链'}</button>
     </div></div>`;
 }
+
+// ---------- 智能路由区块（2026-11-16）：智能代理与其余意图分开管理 ----------
+// 接管开关（settings.agent_takeover）+ 分类脑就绪态 + 智能代理链配置。
+// 开启前置：分类脑已配置（服务端同规校验；未配置时开关禁用并引导）。
+
+// 分类脑当前值：优先启用+授权的 classify 插件视图里的 options.model
+function agentBrainOf(views) {
+  for (const p of views || []) {
+    if (!p.enabled || !(p.granted || []).includes('classify.intent')) continue;
+    const m = String((p.options || {}).model || '').trim();
+    if (m) return { plug: p.id, model: m };
+  }
+  return null;
+}
+
+function renderAgentSection(chain, views) {
+  const sec = $('agent-section'), lbl = $('sec-agent-label');
+  if (!cache.agentReady) { sec.hidden = lbl.hidden = true; sec.innerHTML = ''; return; }
+  lbl.hidden = sec.hidden = false;
+  const takeover = !!(cache.settings && cache.settings.agent_takeover);
+  const brain = agentBrainOf(views);
+  const members = chain?.group ? chain.group.members : (chain?.members || []);
+  const has = members.length > 0;
+  const strategy = chain?.group ? chain.group.strategy : '';
+  const hits = (chain?.rule || {}).hits || 0;
+  const d = INTENT_META.agent;
+  sec.innerHTML = `<div class="row intent-row"><div class="who">
+    <div class="name">${d.icon} ${esc(d.label)} <code>agent</code><span class="pill ${takeover ? 'ok' : 'soft'}">${takeover ? '接管中' : '默认意图链'}</span>${hits ? `<span class="pill soft">${hits} 次/今日</span>` : ''}</div>
+    <div class="sub">${esc(d.desc)}${brain ? `；分类脑 <code>${esc(brain.model)}</code>` : '；未配置分类脑——点「编辑链」选择决策模型后可开启接管'}</div>
+    ${has ? `<div style="margin-top:7px">${chainHTML(members, strategy)}</div>` : ''}</div>` +
+    (!has ? `<span class="muted2" style="flex:none">未配置</span>` : '') +
+    `<label class="switch-line" style="flex:none" title="${brain ? '开启后由分类脑先行判定意图，失败自动回落内置规则' : '需先配置分类脑（点「编辑链」）'}"><button type="button" class="lib-switch${takeover ? ' on' : ''}" id="agent-takeover" role="switch" aria-checked="${takeover}"${brain ? '' : ' disabled'} aria-label="智能路由接管"><i></i></button><span>接管意图判定</span></label>` +
+    `<div class="row-acts" style="opacity:1">
+      <button type="button" class="text add" data-chain="agent" data-label="${esc(d.label)}">${has ? '编辑链' : '＋ 配置调用链'}</button>
+    </div></div>`;
+}
+
+// 接管开关 + 区块内编辑链委托（区块 innerHTML 重绘不重复绑定）
+$('agent-section').addEventListener('click', async (e) => {
+  const edit = e.target.closest('[data-chain]');
+  if (edit) { intentChainModal('agent', edit.dataset.label || '智能代理'); return; }
+  const sw = e.target.closest('#agent-takeover');
+  if (!sw || sw.disabled) return;
+  const next = !sw.classList.contains('on');
+  sw.disabled = true;
+  try {
+    await api('/api/config/settings', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent_takeover: next }),
+    });
+    if (cache.settings) cache.settings.agent_takeover = next;
+    status(next ? '智能路由接管已开启：分类脑先行判定意图（自定义关键词仍最优先，失败自动回落）' : '已切回默认意图链（内置规则判定）', 'ok');
+    loadRouting(); // 重渲染区块（接管中/默认意图链 pill）
+  } catch (err) {
+    status('切换失败: ' + err.message, 'err');
+    sw.disabled = false;
+  }
+});
 
 // ---------- 写路径（M2-W3 契约不变）：fresh GET → 修改 → PUT ----------
 

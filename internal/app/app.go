@@ -138,6 +138,8 @@ func setupGateway() (*serveSetup, error) {
 	// 命名令牌（2026-11 批2）：启动时装载 hash 集（生成/轮换/删除经
 	// 管理 API 后即时热替换，不依赖重启）。
 	srv.SetTokenHashes(gateway.TokenHashesOf(settings.Tokens))
+	// 智能路由接管（2026-11-16）：启动装载（settings 写钩子热切换）。
+	srv.Intents.SetAgentTakeover(settings.AgentTakeoverEnabled())
 
 	return &serveSetup{srv: srv, planner: planner, paths: paths, settings: settings, listen: listen}, nil
 }
@@ -146,6 +148,7 @@ func setupGateway() (*serveSetup, error) {
 // 偏好（开机自启动注册表 Run 键）即时落地；serve/app 两入口共用装配。
 func (st *serveSetup) wireSettingsHook() {
 	st.srv.OnSettingsChange = func(s store.Settings) {
+		st.srv.Intents.SetAgentTakeover(s.AgentTakeoverEnabled()) // 智能路由接管热切换
 		applyAutostart(s.AutostartEnabled())
 	}
 }
