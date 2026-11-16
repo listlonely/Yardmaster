@@ -17,7 +17,9 @@
 //      路由/故障转移/代理，并自带 X-Gw-Internal 防递归头（分类调用
 //      不再触发分类）。
 //
-// plugins.json 配置示例：
+// 配置入口（推荐）：控制台「路由 › 智能代理」弹窗选择分类脑——保存走
+// PUT /api/plugins/{id}/options 写回 plugins.json（备份+审计+热生效，
+// 实例重建经握手透传新 options）。手写 plugins.json 示例（等价）：
 //
 //   {
 //     "plugins": [{
@@ -35,9 +37,9 @@
 //   }
 //
 // model 是「分类脑」（provider/model，经网关路由受额度管理）；建议选
-// 便宜快速的模型。token 也可经 env 传（plugins.json "env":["YM_GATEWAY_TOKEN=…"]，
-// 凭证语义的 env 不进管理面回显）；env 兜底：YM_CLASSIFIER_MODEL /
-// YM_GATEWAY_URL / YM_GATEWAY_TOKEN。
+// 便宜快速的模型；留空 = 仅关键词快路径。token 也可经 env 传
+// （plugins.json "env":["YM_GATEWAY_TOKEN=…"]，凭证语义的 env 不进管理
+// 面回显）；env 兜底：YM_CLASSIFIER_MODEL / YM_GATEWAY_URL / YM_GATEWAY_TOKEN。
 // L1 关系：不配 `settings set l1` 时本插件即分类主力（取代 L1）；两者
 // 同配时 L1 先行、本插件兜底。
 

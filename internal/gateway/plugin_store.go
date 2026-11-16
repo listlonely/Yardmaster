@@ -61,16 +61,17 @@ var PluginStoreIndex = []storeEntry{
 			{ID: "sre/oncall", Label: "值班响应", Desc: "值班期间告警与快速处置"},
 			{ID: "sre/postmortem", Label: "复盘分析", Desc: "事故复盘与改进项跟踪"},
 		}},
-	// agent-classifier（2026-11-13）：智能意图代理——LLM 驱动的意图分类
-	//（关键词快路径 + 分类脑兜底，取代/兜底 L1）+ agent 策略的模型自主
-	// 分配（route.pick）。安装包发布在仓库 examples/plugin-packs/（包内
-	// manifest 自带默认 options：model 留空=仅关键词快路径，用户填
-	// 分类脑 provider/model 后启用 LLM 分类与自主分配）。示例本体在
-	// examples/agent-classifier.mjs。
-	{ID: "agent-classifier", Ver: "0.1.0", Author: "@ym-community", Cap: plugin.CapClassify,
+	// agent-classifier（2026-11-13；0.1.1 文案改指 UI 入口）：智能意图
+	// 代理——LLM 驱动的意图分类（关键词快路径 + 分类脑兜底，取代/兜底
+	// L1）+ agent 策略的模型自主分配（route.pick）。安装包发布在仓库
+	// examples/plugin-packs/（包内 manifest 自带默认 options：model 留空
+	// =仅关键词快路径）。分类脑在「路由 › 智能代理」弹窗选择——PUT
+	// /api/plugins/{id}/options 写回（备份+审计+热生效，实例重建握手
+	// 透传）。示例本体在 examples/agent-classifier.mjs。
+	{ID: "agent-classifier", Ver: "0.1.1", Author: "@ym-community", Cap: plugin.CapClassify,
 		DownloadURL: "https://raw.githubusercontent.com/listlonely/Yardmaster/main/examples/plugin-packs/agent-classifier.zip",
-		SHA256:      "7d968db9d7beafa5fbb4d63dc8238be8f1dd56319798fac2c02bbe2d126b3657",
-		Desc:        "智能意图代理：用你设定的分类脑分析用户意图并按意图分配模型；支持 agent 策略自主选厂商模型"},
+		SHA256:      "121c174e0a25c1ff115cdcf94ab3d1adcca482472cde967d852b1112a099b66b",
+		Desc:        "智能意图代理：用分类脑分析用户意图并按意图分配模型；支持 agent 策略自主选厂商模型。分类脑在「路由 › 智能代理」弹窗选择（未配置时仅内置关键词规则）"},
 	{ID: "cost-alert", Ver: "0.2.1", Author: "@ym-community", Cap: plugin.CapEvents,
 		Desc: "按账号/意图设成本阈值，超额触发系统通知"},
 	{ID: "otel-exporter", Ver: "0.1.9", Author: "@ym-community", Cap: plugin.CapEvents,
