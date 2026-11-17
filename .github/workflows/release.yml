@@ -39,11 +39,38 @@ jobs:
           CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
             go build -trimpath -ldflags "-s -w -H=windowsgui -X yardmaster/internal/app.Version=$ver -X yardmaster/internal/app.guiSubsystem=1" \
             -o "pack/yardmaster-windows-app.exe" ./cmd/yardmaster-app
+          # 便携包（2026-11-17）：exe 同级 data\ 目录自检测便携模式
+          #（store.portableDir）——预置空 data 即标记，解压双击即用，
+          # 数据全在包内（本地 bin\portable 同构）。
+          port="pack-portable/Yardmaster-portable"
+          mkdir -p "$port/data"
+          cp pack/yardmaster-windows-amd64.exe "$port/yardmaster.exe"
+          cp pack/yardmaster-windows-app.exe   "$port/yardmaster-app.exe"
+          cat > "$port/说明.txt" <<EOF
+          Yardmaster 便携版（v$ver）
+          ==========================
+
+          【启动】双击 yardmaster-app.exe——exe 检测同级 data\ 目录自动
+          进入便携模式，数据全部落在本包 data\ 内（不读写用户主目录，
+          无需任何参数）。
+
+          【首次使用】启动后控制台 http://127.0.0.1:8317 添加厂商与
+          API Key（存 data\providers.json）；拷走整个文件夹即完成迁移。
+
+          【两个 exe】
+            yardmaster-app.exe  桌面应用（日常使用）
+            yardmaster.exe      命令行版（serve/CLI，同样自动便携）
+
+          【注意】data\ 内含 API Key 明文（本机信任态设计），妥善保管；
+          与安装版互不干扰；升级=新包 exe 覆盖，data\ 原样保留。
+EOF
+          (cd pack-portable && zip -r "../pack/Yardmaster-portable-$ver-win64.zip" Yardmaster-portable)
       - name: Checksums
         shell: bash
         run: |
+          ver="${GITHUB_REF_NAME#v}"
           cd pack
-          sha256sum yardmaster-* > SHA256SUMS
+          sha256sum yardmaster-* "Yardmaster-portable-$ver-win64.zip" > SHA256SUMS
           ls -l
       # 重发同号 tag（删 tag 重推）时删掉该 tag 名下的既有 Release，
       # 避免 action-gh-release 追加产物导致新旧资产混挂。
@@ -68,6 +95,7 @@ jobs:
             pack/yardmaster-linux-arm64
             pack/yardmaster-windows-amd64.exe
             pack/yardmaster-windows-app.exe
+            pack/Yardmaster-portable-*-win64.zip
             pack/SHA256SUMS
             scripts/install.sh
             scripts/install.ps1
