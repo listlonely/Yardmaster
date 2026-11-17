@@ -49,6 +49,40 @@ func TestDefaultPathsDataDirEnv(t *testing.T) {
 	}
 }
 
+// portableDir 便携模式检测（2026-11-17）：exe 同级存在 data 目录 → 便携；
+// 不存在（含空路径/是文件不是目录）→ 空串（回退默认链）。
+func TestPortableDir(t *testing.T) {
+	base := t.TempDir()
+	exe := filepath.Join(base, "yardmaster.exe")
+	mustWrite(t, exe, "bin")
+	if d := portableDir(exe); d != "" {
+		t.Fatalf("无 data 目录不应便携: %q", d)
+	}
+	if d := portableDir(""); d != "" {
+		t.Fatalf("空路径应返回空串: %q", d)
+	}
+	data := filepath.Join(base, "data")
+	if err := os.MkdirAll(data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if d := portableDir(exe); d != data {
+		t.Fatalf("有 data 目录应便携 = %q, want %q", d, data)
+	}
+	// data 是文件而非目录 → 不触发。
+	os.Remove(data)
+	mustWrite(t, data, "notdir")
+	if d := portableDir(exe); d != "" {
+		t.Fatalf("data 是文件不应便携: %q", d)
+	}
+}
+
+func mustWrite(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSaveLoadRoundtrip(t *testing.T) {
 	p := Paths{AppDir: filepath.Join(t.TempDir(), ".yardmaster")}
 	if err := SaveJSON(p.SettingsPath(), conf{Port: 8317}); err != nil {

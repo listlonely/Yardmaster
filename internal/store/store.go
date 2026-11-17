@@ -23,14 +23,35 @@ type Paths struct{ AppDir string }
 // 各配置 LoadXxx 对空目录按「首次安装」语义处理，无需迁移。
 const DataDirEnv = "YM_DATA_DIR"
 
-// DefaultPaths 返回数据目录：YM_DATA_DIR 环境变量（含 --data-dir 经
-// 入口提升的值）优先，否则 <用户目录>/.yardmaster。
+// portableDir 返回 exe 同级 data 目录（存在即便携模式）；不存在返回
+// 空串。exePath 由调用方注入（os.Executable；测试传假路径）。zip 便携
+// 包预置空 data\ 目录，用户解压双击 exe 即便携——数据全在包内，无需
+// --data-dir 参数（显式 flag/env 仍优先于此检测）。
+func portableDir(exePath string) string {
+	if exePath == "" {
+		return ""
+	}
+	d := filepath.Join(filepath.Dir(exePath), "data")
+	if fi, err := os.Stat(d); err == nil && fi.IsDir() {
+		return d
+	}
+	return ""
+}
+
+// DefaultPaths 返回数据目录，优先级：YM_DATA_DIR 环境变量（含
+// --data-dir 经入口提升的值）> exe 同级 data 目录（便携模式检测）>
+// <用户目录>/.yardmaster。
 func DefaultPaths() (Paths, error) {
 	if v := os.Getenv(DataDirEnv); v != "" {
 		if err := os.MkdirAll(v, 0o755); err != nil {
 			return Paths{}, fmt.Errorf("创建数据目录 %s: %w", v, err)
 		}
 		return Paths{AppDir: v}, nil
+	}
+	if exe, err := os.Executable(); err == nil {
+		if d := portableDir(exe); d != "" {
+			return Paths{AppDir: d}, nil
+		}
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
