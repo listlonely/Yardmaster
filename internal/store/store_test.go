@@ -14,6 +14,41 @@ type conf struct {
 	Port int `json:"port"`
 }
 
+// DefaultPaths 数据目录可配（2026-11-17）：YM_DATA_DIR 覆盖默认
+// ~/.yardmaster（--data-dir 经入口提升为同名 env，同一机制）；自定义
+// 目录不存在自动创建；空值回退默认。
+func TestDefaultPathsDataDirEnv(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(DataDirEnv, "")
+	def, err := DefaultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(home, ".yardmaster"); def.AppDir != want {
+		t.Fatalf("默认目录 = %q, want %q", def.AppDir, want)
+	}
+
+	custom := filepath.Join(t.TempDir(), "portable", "data")
+	t.Setenv(DataDirEnv, custom)
+	got, err := DefaultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AppDir != custom {
+		t.Fatalf("env 覆盖 = %q, want %q", got.AppDir, custom)
+	}
+	if fi, err := os.Stat(custom); err != nil || !fi.IsDir() {
+		t.Fatalf("自定义目录应自动创建: %v", err)
+	}
+	// 同目录再次解析稳定（幂等创建）。
+	if _, err := DefaultPaths(); err != nil {
+		t.Fatalf("幂等: %v", err)
+	}
+}
+
 func TestSaveLoadRoundtrip(t *testing.T) {
 	p := Paths{AppDir: filepath.Join(t.TempDir(), ".yardmaster")}
 	if err := SaveJSON(p.SettingsPath(), conf{Port: 8317}); err != nil {

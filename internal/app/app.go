@@ -403,8 +403,16 @@ func serveUpdatePath(st *serveSetup, relay relayState, stop context.CancelFunc) 
 func runServe(args []string, stdout io.Writer, relay relayState) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	tray := fs.Bool("tray", false, "启用系统托盘常驻（打开控制台/退出）")
+	dataDir := fs.String("data-dir", "", "数据目录（默认 ~/.yardmaster；等价 YM_DATA_DIR，便携版/多实例用）")
 	if err := fs.Parse(args); err != nil {
 		return ErrUsage
+	}
+	// --data-dir 提升为 YM_DATA_DIR：DefaultPaths 全调用点（含插件注入）
+	// 一处机制生效；须在任何配置读取之前。
+	if *dataDir != "" {
+		if err := os.Setenv(store.DataDirEnv, *dataDir); err != nil {
+			return fmt.Errorf("设置数据目录环境变量: %w", err)
+		}
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -448,8 +456,15 @@ func runApp(args []string, stdout io.Writer, relay relayState) error {
 	fs := flag.NewFlagSet("app", flag.ContinueOnError)
 	noTray := fs.Bool("no-tray", false, "不启动系统托盘（窗口关闭后 Ctrl-C 退出）")
 	noWindow := fs.Bool("no-window", false, "不打开应用窗口（等同 serve -tray）")
+	dataDir := fs.String("data-dir", "", "数据目录（默认 ~/.yardmaster；等价 YM_DATA_DIR，便携版/多实例用）")
 	if err := fs.Parse(args); err != nil {
 		return ErrUsage
+	}
+	// --data-dir 提升为 YM_DATA_DIR（见 runServe 同款注释）。
+	if *dataDir != "" {
+		if err := os.Setenv(store.DataDirEnv, *dataDir); err != nil {
+			return fmt.Errorf("设置数据目录环境变量: %w", err)
+		}
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

@@ -16,8 +16,22 @@ import (
 // Paths 聚合本机数据目录布局。AppDir 可注入以便 testenv 沙箱。
 type Paths struct{ AppDir string }
 
-// DefaultPaths 返回当前用户的默认数据目录：<用户目录>/.yardmaster。
+// DataDirEnv 是数据目录覆盖环境变量（2026-11-17 可配化）：
+// YM_DATA_DIR 指向自定义目录（便携版/多实例隔离）。优先级
+// serve/app --data-dir 参数（实现为进程内提升设置本 env）>
+// YM_DATA_DIR > 默认 ~/.yardmaster。自定义目录不存在时自动创建；
+// 各配置 LoadXxx 对空目录按「首次安装」语义处理，无需迁移。
+const DataDirEnv = "YM_DATA_DIR"
+
+// DefaultPaths 返回数据目录：YM_DATA_DIR 环境变量（含 --data-dir 经
+// 入口提升的值）优先，否则 <用户目录>/.yardmaster。
 func DefaultPaths() (Paths, error) {
+	if v := os.Getenv(DataDirEnv); v != "" {
+		if err := os.MkdirAll(v, 0o755); err != nil {
+			return Paths{}, fmt.Errorf("创建数据目录 %s: %w", v, err)
+		}
+		return Paths{AppDir: v}, nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return Paths{}, fmt.Errorf("resolve home: %w", err)
