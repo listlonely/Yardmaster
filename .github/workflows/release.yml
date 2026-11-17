@@ -63,7 +63,7 @@ jobs:
 
           【注意】data\ 内含 API Key 明文（本机信任态设计），妥善保管；
           与安装版互不干扰；升级=新包 exe 覆盖，data\ 原样保留。
-EOF
+          EOF
           (cd pack-portable && zip -r "../pack/Yardmaster-portable-$ver-win64.zip" Yardmaster-portable)
       - name: Checksums
         shell: bash
