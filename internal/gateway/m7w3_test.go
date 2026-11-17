@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -406,6 +407,98 @@ func TestPluginOptionsAPI(t *testing.T) {
 		t.Fatalf("未挂载应 400: %d", r.StatusCode)
 	} else {
 		r.Body.Close()
+	}
+}
+
+// options 凭证脱敏（plugin_mask.go，2026-11-17）：GET 视图与 GET/PUT
+// config 回显均为 ***+末4（明文不出现，非凭证键原样）；PUT 收脱敏形
+// 还原旧值——GET 脱敏 → PUT 回传的往返不破坏真凭证（providers
+// keepProviderKeys 同款）。覆盖嵌套（summary.api_key）与全文档路径。
+func TestPluginOptionsCredMasking(t *testing.T) {
+	dir := t.TempDir()
+	spec := helperSpec("cred", []string{plugin.CapClassify})
+	spec.Options = map[string]any{
+		"model":   "p/m",
+		"summary": map[string]any{"api_key": "sk-real-123456", "endpoint": "http://x"},
+	}
+	reg, stop := startTestPlugins(t, spec)
+	t.Cleanup(stop)
+
+	s := &Server{Planner: NewPlanner(nil, nil), Version: "t", AppDir: dir}
+	s.AttachPlugins(reg)
+
+	if err := plugin.Save(filepath.Join(dir, "plugins.json"), plugin.File{Plugins: []plugin.Spec{spec}}); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(s.Handler())
+	t.Cleanup(srv.Close)
+	waitRunning(t, reg, "cred")
+
+	fetch := func(path string) string {
+		t.Helper()
+		resp, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return string(b)
+	}
+	putBody := func(url, body string) string {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodPut, url, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("PUT %s status = %d", url, resp.StatusCode)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		return string(b)
+	}
+	check := func(what, body string) {
+		t.Helper()
+		if strings.Contains(body, "sk-real-123456") {
+			t.Fatalf("%s 泄漏明文凭证: %s", what, body)
+		}
+		for _, want := range []string{`***3456`, `"model":"p/m"`, `"endpoint":"http://x"`} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("%s 缺 %q: %s", what, want, body)
+			}
+		}
+	}
+
+	// 1. GET /api/plugins：脱敏回显，非凭证键原样。
+	check("GET /api/plugins", fetch("/api/plugins"))
+	// 2. GET /api/config/plugins：同。
+	check("GET /api/config/plugins", fetch("/api/config/plugins"))
+
+	// 3. PUT options 脱敏形往返：落盘还原真值，回显脱敏。
+	check("PUT options 回显", putBody(srv.URL+"/api/plugins/cred/options",
+		`{"model":"p/m","summary":{"api_key":"***3456","endpoint":"http://x"}}`))
+	var saved plugin.File
+	if err := store.LoadJSON(filepath.Join(dir, "plugins.json"), &saved); err != nil {
+		t.Fatal(err)
+	}
+	summary, _ := saved.Plugins[0].Options["summary"].(map[string]any)
+	if summary["api_key"] != "sk-real-123456" {
+		t.Fatalf("脱敏形往返应还原真值: %+v", saved.Plugins[0].Options)
+	}
+
+	// 4. PUT config/plugins 全文档脱敏形：同还原。
+	fresh := fetch("/api/config/plugins") // 脱敏形全文档原样回传
+	check("PUT config 回显", putBody(srv.URL+"/api/config/plugins", fresh))
+	saved2 := plugin.File{}
+	if err := store.LoadJSON(filepath.Join(dir, "plugins.json"), &saved2); err != nil {
+		t.Fatal(err)
+	}
+	summary2, _ := saved2.Plugins[0].Options["summary"].(map[string]any)
+	if summary2["api_key"] != "sk-real-123456" {
+		t.Fatalf("全文档脱敏形往返应还原真值: %+v", saved2.Plugins[0].Options)
 	}
 }
 

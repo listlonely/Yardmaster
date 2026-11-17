@@ -108,6 +108,10 @@ func (s *Server) handleConfigGet(w http.ResponseWriter, name string) {
 			writeAPIErr(w, err)
 			return
 		}
+		// options 凭证脱敏（plugin_mask.go）：与 providers api_key 同规。
+		for i := range f.Plugins {
+			f.Plugins[i].Options = maskOptionsCreds(f.Plugins[i].Options)
+		}
 		writeJSON(w, f)
 	default:
 		writeAPIErr(w, errUnknownConfig{name})
@@ -342,6 +346,15 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, name st
 			writeAPIErr(w, err)
 			return
 		}
+		// options 凭证还原（plugin_mask.go）：GET 回显是 *** 形，全文档
+		// 回传不得破坏真凭证（providers keepProviderKeys 同款）。
+		for i := range f.Plugins {
+			for j := range cur.Plugins {
+				if cur.Plugins[j].ID == f.Plugins[i].ID {
+					restoreOptionsCreds(f.Plugins[i].Options, cur.Plugins[j].Options)
+				}
+			}
+		}
 		if err := plugin.Validate(f); err != nil {
 			writeAPIErr(w, badRequest(err))
 			return
@@ -353,6 +366,10 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, name st
 		// 热生效：注册表重建/停启实例（M7-W3）。
 		if s.Plugins != nil {
 			s.Plugins.Reload(f)
+		}
+		// 回显脱敏（落盘已是 restore 后真值）。
+		for i := range f.Plugins {
+			f.Plugins[i].Options = maskOptionsCreds(f.Plugins[i].Options)
 		}
 		s.writeResult(w, effectImmediate, f)
 	default:

@@ -92,6 +92,12 @@ func (s *Server) handlePluginsView(w http.ResponseWriter, _ *http.Request) {
 	if views == nil {
 		views = []plugin.StatusView{}
 	}
+	// options 凭证脱敏（plugin_mask.go）：StatusView 原样透出会把中间件
+	// 放进 options 的上游密钥（如 context-guard 的 summary.api_key）
+	// 明文回显——与 api.go「任何输出必须脱敏」基线不符。
+	for i := range views {
+		views[i].Options = maskOptionsCreds(views[i].Options)
+	}
 	writeJSON(w, map[string]any{"ok": true, "plugins": views})
 }
 
@@ -202,9 +208,14 @@ func (s *Server) handlePluginOptions(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 	found := false
+	var oldOpts map[string]any
 	for i := range f.Plugins {
 		if f.Plugins[i].ID == id {
 			found = true
+			oldOpts = f.Plugins[i].Options
+			// 脱敏形还原（plugin_mask.go）：GET 回显是 *** 形，前端原样
+			// 保存不得破坏真凭证（providers keepProviderKeys 同款）。
+			restoreOptionsCreds(opts, oldOpts)
 			f.Plugins[i].Options = opts
 		}
 	}
@@ -226,6 +237,8 @@ func (s *Server) handlePluginOptions(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 	s.Plugins.Reload(f)
-	slog.Info("插件配置已更新", "id", id, "options", opts)
-	writeJSON(w, map[string]any{"ok": true, "effect": effectImmediate, "id": id, "options": opts})
+	// 日志与回显走脱敏形（落盘已是 restore 后的真值）。
+	masked := maskOptionsCreds(opts)
+	slog.Info("插件配置已更新", "id", id, "options", masked)
+	writeJSON(w, map[string]any{"ok": true, "effect": effectImmediate, "id": id, "options": masked})
 }
