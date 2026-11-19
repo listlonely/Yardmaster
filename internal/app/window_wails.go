@@ -141,6 +141,7 @@ func runWailsShell(st *serveSetup, ctx context.Context, stop context.CancelFunc,
 	// 窗口状态记忆（M8-W3）：恢复上次尺寸/位置/最大化；初始背景色跟
 	// 系统深浅色（防主题不符闪色；运行中切换由页面自身全覆盖背景承接）。
 	state := loadWindowState(st.paths.AppDir)
+	maximise := false
 	opts := application.WebviewWindowOptions{
 		Name:      "console",
 		Title:     "Yardmaster",
@@ -158,13 +159,27 @@ func runWailsShell(st *serveSetup, ctx context.Context, stop context.CancelFunc,
 	}
 	if state != nil {
 		opts.X, opts.Y, opts.Width, opts.Height = state.X, state.Y, state.W, state.H
-		if state.Max {
-			opts.StartState = application.WindowStateMaximised
-		}
+		maximise = state.Max
 	} else {
 		opts.Width, opts.Height = 1200, 820
 	}
 	win := app.Window.NewWithOptions(opts)
+	// 最大化延后触发（2026-11-19 窄条修复）：不再走 StartState=Maximised
+	// 创建期参数——双击（explorer 父进程）启动的个别实例里，该参数在
+	// WebView2 controller 就绪前处理，bounds 同步丢失，页面视口停在初始
+	// 窄尺寸（~460px，窗口本体正常铺满）。改为轮询 hwnd 就绪后显式
+	// Maximise：WM_SIZE 必然在 WebView2 就绪后到达并同步 bounds。
+	if maximise {
+		go func() {
+			for i := 0; i < 50; i++ { // ~5s 上限（窗口 impl 在 app.Run() 才创建）
+				if win.NativeWindow() != nil {
+					win.Maximise()
+					return
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+		}()
+	}
 	snapshot := func() { saveWindowState(st.paths.AppDir, snapshotWindowBounds(win)) }
 	// 关窗行为（settings.close_action，2026-11-10）：关窗事件时实时读盘
 	//——设置保存后下次关窗即生效，无需重启。hide=隐藏到托盘（缺省，
