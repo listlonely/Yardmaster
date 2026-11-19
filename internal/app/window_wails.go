@@ -144,8 +144,8 @@ func runWailsShell(st *serveSetup, ctx context.Context, stop context.CancelFunc,
 	opts := application.WebviewWindowOptions{
 		Name:      "console",
 		Title:     "Yardmaster",
-		MinWidth:  900,
-		MinHeight: 600,
+		MinWidth:  minWindowW,
+		MinHeight: minWindowH,
 		URL:       consoleURL,
 		Windows: application.WindowsWindow{
 			EventMapping: mapping,

@@ -26,14 +26,23 @@ type windowState struct {
 	Max bool `json:"max"`
 }
 
+// minWindowW/H 是窗口最小可用尺寸（与 window_wails.go 的
+// MinWidth/MinHeight 同源单一事实）：状态记忆恢复值低于此视为坏状态
+//（fail-soft 回默认 1200×820），否则一个 <400px 的历史坏值会每次启动
+// 原样还原——MinWidth 只约束交互拖拽，不 clamp 恢复值（2026-11-19）。
+const (
+	minWindowW = 900
+	minWindowH = 600
+)
+
 func loadWindowState(dir string) *windowState {
 	b, err := os.ReadFile(filepath.Join(dir, "window-state.json"))
 	if err != nil {
 		return nil
 	}
 	var s windowState
-	if json.Unmarshal(b, &s) != nil || s.W < 400 || s.H < 300 || s.W > 20000 || s.H > 20000 {
-		return nil // 读不懂=缺省（fail-soft）
+	if json.Unmarshal(b, &s) != nil || s.W < minWindowW || s.H < minWindowH || s.W > 20000 || s.H > 20000 {
+		return nil // 读不懂/坏尺寸=缺省（fail-soft）
 	}
 	return &s
 }
