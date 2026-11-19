@@ -229,3 +229,25 @@ func TestPlanDisabledProviderYieldsEmpty(t *testing.T) {
 		t.Fatalf("停用 provider 应返回空候选而非错误: %v %v", cands, err)
 	}
 }
+
+// TestPlanSkipsDisabledAccount（2026-11-19 多账户管理）：账号级 disabled
+// 是配置态停用——候选直接剔除（非排末段），全部停用时等同无账号返回空。
+func TestPlanSkipsDisabledAccount(t *testing.T) {
+	provs := []provider.Provider{chatProvider("http://x")}
+	provs[0].Accounts[0].Name, provs[0].Accounts[1].Name = "a1", "a2"
+	provs[0].Accounts[0].Disabled = true
+	p := NewPlanner(provs, nil)
+	cands, err := p.Plan("prov/up-m", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := candKeys(cands)
+	if len(got) != 1 || got[0] != "prov/a2|up-m" {
+		t.Fatalf("停用账号应被剔除: %v", got)
+	}
+	// 全部停用 → 空候选（与停用 provider 同语义）
+	provs[0].Accounts[1].Disabled = true
+	if cands, err := p.Plan("prov/up-m", ""); err != nil || len(cands) != 0 {
+		t.Fatalf("全部账号停用应返回空候选: %v %v", cands, err)
+	}
+}

@@ -377,6 +377,9 @@ func (s *Server) pollQuotas(ctx context.Context) []probeResult {
 			continue
 		}
 		for _, acc := range prov.Accounts {
+			if acc.Disabled {
+				continue // 停用账号不参与路由，余额探测一并跳过
+			}
 			if acc.Auth == provider.AuthOAuth {
 				continue // OAuth 订阅的余额语义不同，W5 不轮询
 			}

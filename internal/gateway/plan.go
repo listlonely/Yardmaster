@@ -252,6 +252,9 @@ func (p *Planner) accountsOf(prov *provider.Provider, upstreamModel string, now 
 	today := now.Format("2006-01-02")
 	var awake, resting, exhausted []Candidate
 	for _, acc := range prov.Accounts {
+		if acc.Disabled {
+			continue // 用户停用（配置态）：路由直接跳过，与休眠/prefail 正交
+		}
 		if acc.Status == provider.AccountBadCred {
 			continue // 凭证失败：不自动重试（规则页失败分类表）
 		}

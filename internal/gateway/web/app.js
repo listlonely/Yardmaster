@@ -954,22 +954,105 @@ const oauthExpiryText = (m) => {
   return new Date(m.expires_at * 1000).toLocaleString();
 };
 
-// usageBar：当日用量进度条（无额度设置时只显示数字）。
-function usageBar(a) {
-  const used = a.used_tokens || 0;
-  const quota = a.quota_tokens_day || 0;
-  if (quota <= 0) {
-    return `<span>${fmtTokens(used)}</span><span class="muted2">未设额度</span>`;
-  }
-  const pct = Math.min(100, Math.round((used / quota) * 100));
-  const cls = pct >= 90 ? 'danger' : pct >= 70 ? 'warn' : 'ok';
-  return `<div class="bar"><div class="bar-fill ${cls}" style="width:${pct}%"></div></div>
-    <span>${fmtTokens(used)} / ${fmtTokens(quota)}（${pct}%）</span>`;
+// ---------- 多账户管理辅助（2026-11-19）：窗口紧凑行 / 行右列数字 /
+// 行首语义点 / 引用统计 / 厂商头健康摘要。数据源 = config 文档 +
+// /api/state 运行态快照，全部前端聚合，零后端新增读口。 ----------
+
+// 本机当日（与 Go 侧 UsageDay "2006-01-02" 同形，跨日自动归零）
+const todayStr = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+// 窗口已用百分比（pct 直给优先，否则 used/total 推导）
+const winPctOf = (w) => Math.max(0, Math.min(100, Math.round(
+  w.pct != null ? w.pct : (w.total > 0 ? ((w.used || 0) / w.total) * 100 : 0))));
+
+// 账号当日已用 token（usage_day 非当日视为 0，与后端 usedToday 同语义）
+const usedTodayOf = (a, lv) =>
+  ((lv && lv.usage_day) || a.usage_day) === todayStr() ? ((lv && lv.used_tokens) ?? a.used_tokens ?? 0) : 0;
+
+// winsRowsHTML：订阅窗口紧凑行（保留 planWins 语义：窗口名 + 进度 +
+// 百分比 + 已用/总量 + 重置时间；语义色 >80 红 / 60~80 琥珀 / 其余绿）
+function winsRowsHTML(windows) {
+  if (!Array.isArray(windows) || !windows.length) return '';
+  return windows.map((w) => {
+    const pct = winPctOf(w);
+    const cls = pct > 80 ? 'danger' : pct >= 60 ? 'warn' : 'ok';
+    const credits = (w.total > 0 || (w.used || 0) > 0) ? `${fmtTokens(w.used || 0)}/${fmtTokens(w.total || 0)}` : '';
+    const reset = fmtResetAt(w.reset_at);
+    return `<div class="win"><span class="wlb">${esc(w.name || '额度窗口')}</span>` +
+      `<span class="bar"><span class="bar-fill ${cls}" style="width:${pct}%"></span></span>` +
+      `<span class="wpct">${pct}%</span>` +
+      `${credits ? `<span class="wcr">${esc(credits)}</span>` : ''}` +
+      `${reset ? `<span class="wrst">${esc(reset)}</span>` : ''}</div>`;
+  }).join('');
 }
 
-// ---------- F 订阅额度窗口卡（窗口形状厂商无关：窗口名 + 已用/总量 + 重置时间；
-// 数据源 = 网关额度探测的 limits[] 归一（/api/state accounts[].windows）；
-// 单窗口全宽卡、多窗口并排；语义色 >80% 红 / 60~80% 琥珀 / 其余绿） ----------
+// acctMetric：行右列关键数字。订阅类=首个窗口 pct；按量类=余额；
+// 副行恒为当日用量（周额度/5h 窗口与今日用量双读数并存）。
+function acctMetric(a, lv) {
+  const used = usedTodayOf(a, lv);
+  const sub = `今日 ${fmtTokens(used)}`;
+  const w = ((lv && lv.windows) || [])[0];
+  if (w) return { val: `${winPctOf(w)}%`, sub };
+  if (lv && lv.balance_at) return { val: '¥' + Number(lv.balance || 0).toFixed(2), sub };
+  return { val: fmtTokens(used), sub: (a.quota_tokens_day || 0) > 0 ? `额度 ${fmtTokens(a.quota_tokens_day)}` : '今日用量' };
+}
+
+// acctDotCls：账号行首语义点。ok=可用 / warn=限频·停服·高负载 /
+// bad=探测失败·prefail·凭证失败 / rest=休眠·停用。
+function acctDotCls(a, lv, restUntil) {
+  if (a.disabled || restUntil) return 'rest';
+  if (lv.probe_err) return lv.probe_err.includes('已停服') ? 'warn' : 'bad';
+  const st = (lv && lv.status) || a.status;
+  if (st === 'bad-credential' || st === 'prefail') return 'bad';
+  if (lv.window_status === 'restricted') return 'warn';
+  return ((lv && lv.windows) || []).some((w) => winPctOf(w) > 80) ? 'warn' : 'ok';
+}
+
+// acctRefs：路由链成员对该账号的显式引用数（"provider/model@account"
+// 席位形态）；纯 provider / provider/model 引用走轮转不指向具体账号。
+function acctRefs(pid, accName, groups) {
+  let n = 0;
+  for (const g of groups || []) {
+    for (const m of g.members || []) {
+      if (m.startsWith(pid + '/') && m.endsWith('@' + accName)) n++;
+    }
+  }
+  return n;
+}
+
+// pvHealthHTML：厂商头健康摘要 = 账号数 + 状态点阵 + 分布 + 当日合计/
+// 余额合计——多账号时不必逐行扫即可判整体健康。
+function pvHealthHTML(p, accs, live, resting) {
+  let ok = 0, warn = 0, rest = 0, used = 0, bal = 0;
+  const dots = accs.map((a) => {
+    const key = `${p.id}/${a.name}`;
+    const lv = live[key] || {};
+    const cls = acctDotCls(a, lv, resting[key]);
+    if (cls === 'ok') ok++;
+    else if (cls === 'warn') warn++;
+    else rest++;
+    used += usedTodayOf(a, lv);
+    if (lv.balance_at) bal += Number(lv.balance) || 0;
+    return `<i class="${cls}"></i>`;
+  }).join('');
+  const parts = [`${accs.length} 个账号`];
+  if (accs.length) parts.push(`<span class="dots">${dots}</span>`);
+  const dist = [];
+  if (ok) dist.push(`${ok} 可用`);
+  if (warn) dist.push(`${warn} 受限`);
+  if (rest) dist.push(`${rest} 休眠/停用`);
+  if (dist.length) parts.push(`<span class="sum">${esc(dist.join(' · '))}</span>`);
+  if (used > 0) parts.push(`<span class="sum">今日合计 <b>${fmtTokens(used)}</b> tok</span>`);
+  if (bal > 0) parts.push(`<span class="sum">余额合计 <b>¥${bal.toFixed(2)}</b></span>`);
+  return parts.join(' ');
+}
+
+// 账号拖拽握把（仅握把可拖：防误拖行内按钮/文本）
+const gripSVG = '<svg class="grip" draggable="true" viewBox="0 0 10 14" width="10" height="14" aria-hidden="true"><g fill="currentColor"><circle cx="2.5" cy="2.5" r="1.4"/><circle cx="7.5" cy="2.5" r="1.4"/><circle cx="2.5" cy="7" r="1.4"/><circle cx="7.5" cy="7" r="1.4"/><circle cx="2.5" cy="11.5" r="1.4"/><circle cx="7.5" cy="11.5" r="1.4"/></g></svg>';
+
 const fmtResetAt = (sec) => {
   if (!sec) return '';
   const d = new Date(sec * 1000);
@@ -978,23 +1061,6 @@ const fmtResetAt = (sec) => {
   if (d.toDateString() === now.toDateString()) return '今日 ' + hm;
   return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${hm}`;
 };
-
-function planWinsHTML(windows) {
-  if (!Array.isArray(windows) || !windows.length) return '';
-  const win = (w) => {
-    const pct = Math.max(0, Math.min(100, Math.round(
-      w.pct != null ? w.pct : (w.total > 0 ? ((w.used || 0) / w.total) * 100 : 0))));
-    const cls = pct > 80 ? 'danger' : pct >= 60 ? 'warn' : 'ok';
-    const credits = w.credits || `${fmtTokens(w.used || 0)} / ${fmtTokens(w.total || 0)}`;
-    const reset = fmtResetAt(w.reset_at);
-    return `<div class="plan-win">
-      <div class="pw-top"><b>${esc(w.name || '额度窗口')}</b><span class="pct">${pct}% 已使用</span><span class="credits">${esc(credits)}</span></div>
-      <div class="bar"><span class="bar-fill ${cls}" style="width:${pct}%"></span></div>
-      ${reset ? `<div class="pw-reset">重置时间：${esc(reset)}</div>` : ''}
-    </div>`;
-  };
-  return `<div class="plan-grid">${windows.map(win).join('')}</div>`;
-}
 
 // effectiveProxy：账号 → 服务商 → 全局 → 系统（F3 继承链），标注生效层。
 function effectiveProxy(a, p, global) {
@@ -1006,7 +1072,11 @@ function effectiveProxy(a, p, global) {
 
 const initials = (s) => (String(s || '?').replace(/[^A-Za-z0-9\u4e00-\u9fa5]/g, '').slice(0, 2) || '?').toUpperCase();
 
-function acctRow(p, a, live, resting, global) {
+// acctRow：账号行（2026-11-19 多账户管理定稿形态）。结构 =
+// 握把(拖拽排序) + 状态点 + 身份(名称·主力·徽章·引用) + 订阅窗口紧凑行 +
+// 右列关键数字(窗口%/余额·今日用量) + 行悬停动作 + 启停开关。
+// idx=0 标「主力」——providers.json 顺序即轮转顺序，首位轮转首选。
+function acctRow(p, a, idx, live, resting, global) {
   const key = `${p.id}/${a.name}`;
   const restUntil = resting[key];
   const lv = live[key] || {};
@@ -1039,25 +1109,32 @@ function acctRow(p, a, live, resting, global) {
   if (lv.window_status === 'restricted' && (lv.window_reset_at || 0) * 1000 > Date.now()) {
     liveParts.push(`窗口限频 · 重置 ${esc(new Date(lv.window_reset_at * 1000).toLocaleTimeString())}`);
   }
-  if (lv.balance_at) liveParts.push(`余额 ¥${Number(lv.balance).toFixed(2)}`);
   if (lv.inflight) liveParts.push(`在途 ${esc(lv.inflight)}`);
   const sub = [credSub, `代理 <code>${esc(eff.v)}</code>（${eff.src}层）`, ...liveParts].join(' · ');
-  // 订阅窗口卡（F）优先于按量条：订阅/配额/按量三类一眼可分
-  const wins = planWinsHTML(view_.windows);
-  const usage = !wins && (view_.quota_tokens_day > 0 || (view_.used_tokens || 0) > 0)
-    ? `<div class="acct-usage">${usageBar(view_)}</div>` : '';
-  return `<div class="row acct">
+  // 订阅窗口紧凑行（保留周额度/5h 窗口语义）；无窗口但设了当日额度时
+  // 退回额度进度行（旧 usageBar 信息不丢）
+  const quotaPct = Math.min(100, Math.round(((view_.used_tokens || 0) / view_.quota_tokens_day) * 100));
+  const wins = winsRowsHTML(view_.windows) || ((view_.quota_tokens_day || 0) > 0
+    ? `<div class="win"><span class="wlb">当日额度</span><span class="bar"><span class="bar-fill ${quotaPct >= 90 ? 'danger' : quotaPct >= 70 ? 'warn' : 'ok'}" style="width:${quotaPct}%"></span></span><span class="wpct">${quotaPct}%</span><span class="wcr">${fmtTokens(view_.used_tokens || 0)}/${fmtTokens(view_.quota_tokens_day)}</span></div>`
+    : '');
+  const refs = acctRefs(p.id, a.name, cache.providers && cache.providers.groups);
+  const m = acctMetric(a, lv);
+  const dot = acctDotCls(a, lv, restUntil);
+  return `<div class="row acct arow${a.disabled ? ' is-off' : ''}" data-acc="${esc(a.name)}">
+    ${gripSVG}
+    <span class="adot ${dot}"></span>
     <div class="who">
-      <div class="name">${esc(a.name)} ${nameBadges}${statusBadge(view_.status)}</div>
+      <div class="name">${esc(a.name)} ${idx === 0 ? '<span class="pill main">主力</span>' : ''}${nameBadges}${a.disabled ? '<span class="pill resting">已停用</span>' : statusBadge(view_.status)}${refs ? `<span class="pill ref" title="路由链中有 ${refs} 个成员以 ${esc(p.id)}/…@${esc(a.name)} 席位形态显式引用该账号">路由 ×${refs}</span>` : ''}</div>
       <div class="sub">${sub}</div>
       ${wins}
     </div>
-    ${usage}
+    <div class="ametric"><div class="am-val">${esc(m.val)}</div><div class="am-sub">${esc(m.sub)}</div></div>
     <div class="row-acts">
       <button type="button" class="text um-btn" data-p="${esc(p.id)}" data-a="${esc(a.name)}" title="该账号近 7 天按模型用量（成本报告同源）">明细</button>
       <button type="button" class="text quota-btn" data-p="${esc(p.id)}" data-a="${esc(a.name)}">额度</button>
       <button type="button" class="text del del-acct" data-p="${esc(p.id)}" data-a="${esc(a.name)}" title="从 providers.json 移除该账号（写前备份留底）">删除</button>
     </div>
+    <button type="button" class="acc-sw${a.disabled ? '' : ' on'}" role="switch" aria-checked="${!a.disabled}" data-p="${esc(p.id)}" data-a="${esc(a.name)}" aria-label="${a.disabled ? '启用' : '停用'}账号 ${esc(a.name)}" title="${a.disabled ? '启用后重新参与路由' : '停用后路由自动跳过该账号（providers.json disabled 字段，热生效）'}"><i></i></button>
   </div>`;
 }
 
@@ -1071,13 +1148,15 @@ function provCard(p, live, resting, global) {
   // 行头对齐「厂商 → 服务类型」心智：预设内显示 厂商色瓦片 + 厂商·类型徽章，
   // 预设外回退 协议 pill（自定义中转/自建网关）
   const vb = provVendorBadge(p);
+  // 健康摘要（2026-11-19）：账号数 + 状态点阵 + 分布 + 当日合计/余额合计，
+  // 多账号时不必逐行扫即可判整体健康（数据全前端聚合）
   const head = `<div class="row prov-head ${p.disabled ? 'is-off' : ''}">
     <span class="vtile v${vb ? vtClass(vb.vendor.key) : vtClass(p.id)}" aria-hidden="true">${esc(initials(vb ? vb.vendor.name : (p.name || p.id)))}</span>
     <div class="who">
       <div class="name">${esc(p.name || p.id)} <code>${esc(p.id)}</code>
         ${vb ? `<span class="pill soft" title="${esc(vb.full)}">${esc(vb.vendor.name)} · ${esc(vb.short)}</span>` : `<span class="pill">${esc(p.protocol)}</span>`}
         ${p.disabled ? '<span class="pill disabled">已停用</span>' : ''}</div>
-      <div class="sub">${accs.length} 个账号${p.proxy ? ` · 服务商代理 <code>${esc(p.proxy)}</code>` : ''}</div>
+      <div class="sub pv-health">${pvHealthHTML(p, accs, live, resting)}${p.proxy ? ` · 服务商代理 <code>${esc(p.proxy)}</code>` : ''}</div>
     </div>
     <div class="row-acts">
       <button type="button" class="text edit-pv" data-pv="${esc(p.id)}" title="编辑显示名 / 代理设置（复用添加表单的网络的口径）">编辑</button>
@@ -1087,20 +1166,28 @@ function provCard(p, live, resting, global) {
   const folded = accs.length > ACC_VISIBLE && !accFolds.has(p.id);
   const visible = folded ? accs.slice(0, ACC_VISIBLE) : accs;
   const hidden = folded ? accs.slice(ACC_VISIBLE) : [];
-  const rowOf = (a) => acctRow(p, a, live, resting, global);
+  const rowOf = (a, i) => acctRow(p, a, i, live, resting, global);
+  // 账号区包一层导轨容器（左缩进 + 竖导轨 + 行首状态点）：归属层级可读
   let rows = visible.map(rowOf).join('');
   if (hidden.length) {
-    rows += `<div class="acc-fold"><div class="acc-fold-inner">${hidden.map(rowOf).join('')}</div></div>`;
+    rows += `<div class="acc-fold"><div class="acc-fold-inner">${hidden.map((a, i) => rowOf(a, i + ACC_VISIBLE)).join('')}</div></div>`;
   }
   if (!accs.length) {
     rows = '<div class="row acct"><div class="who"><div class="name muted2">无账号</div></div></div>';
   }
+  // 折叠按钮在导轨容器外（竖导轨不穿过按钮）
+  let more = '';
   if (accs.length > ACC_VISIBLE) {
-    rows += `<button type="button" class="acc-more" data-fold="${esc(p.id)}" aria-expanded="${!folded}">
+    more = `<button type="button" class="acc-more" data-fold="${esc(p.id)}" aria-expanded="${!folded}">
       <span>${folded ? `展开其余 ${hidden.length} 个账号` : '收起账号'}</span>
       <svg class="chev" viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="m4.5 6.5 3.5 3 3.5-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </button>`;
   }
+  // 卡内脚区（2026-11-19）：＋ 添加账号直达追加表单，免绕「添加服务商」
+  const foot = `<div class="pv-foot">
+    <button type="button" class="text add acc-add" data-p="${esc(p.id)}">＋ 添加账号</button>
+    <span class="hint">⠿ 拖动调轮转顺序 · 开关停用即跳过 · 首个为「主力」</span>
+  </div>`;
   const mlist = p.models || [];
   const modelChips = mlist.length
     ? `<div class="chips">${mlist.map((m) => `<code>${esc(m.id)}</code>`).join(' ')}</div>`
@@ -1117,7 +1204,7 @@ function provCard(p, live, resting, global) {
         </div>
       </div>
     </details>`;
-  return `<div class="list" style="margin:10px 0">${head}${rows}${models}</div>`;
+  return `<div class="list" data-pid="${esc(p.id)}" style="margin:10px 0">${head}<div class="accs">${rows}</div>${more}${foot}${models}</div>`;
 }
 
 // 客户端查找：按 provider id/名称/账号名过滤（防抖）
@@ -1652,6 +1739,82 @@ async function removeAccount(provID, accName) {
   }));
   status(`账号已删除：${provID}/${accName}（写前备份已留底）`, 'ok');
   afterWrite();
+}
+
+// 添加账号（2026-11-19 多账户管理）：卡内「＋ 添加账号」直达追加表单，
+// 免绕「添加服务商」两段式。语义与 addProviderModal 追加分支同：同名
+// 账号拒绝、api_key 经服务端 keepProviderKeys 采纳、即时热生效。
+// OAuth 订阅账号仍走插件适配 CLI 导入（本表单只管 API Key 类）。
+function addAccountModal(provID) {
+  const p = (cache.providers?.providers || []).find((x) => x.id === provID);
+  const dlg = openDialog({
+    title: `添加账号 · ${p?.name || provID}`,
+    body:
+      frow('账号名', `<input class="field mono" name="account" placeholder="如 backup / work-2" required>`,
+        'providers.json 内唯一即可；首位账号 = 主力（轮转首选），可用拖拽调整') +
+      frow('API Key', `<input class="field mono" name="api_key" type="password" autocomplete="new-password" placeholder="sk-…（仅存本机 providers.json）" required>`) +
+      frow('最大并发', `<input class="field" name="max_concurrent" type="number" min="0" step="1" placeholder="0 = 不限">`) +
+      frow('网络', `<div class="net-pick"><select class="field" name="netmode">` +
+        `<option value="inherit">跟随服务商/全局代理</option>` +
+        `<option value="direct">直连（不走代理）</option>` +
+        `<option value="custom">自定义代理…</option></select>` +
+        `<input class="field mono" name="neturl" placeholder="http(s)/socks5(h)://…" hidden></div>`,
+        '账号级代理优先于服务商与全局（F3 继承链）'),
+    yes: '添加',
+    footNote: '追加账号即时热生效（写前备份留底）；OAuth 订阅账号经插件适配 CLI 导入。',
+    onSubmit: async (form) => {
+      const v = formVals(form);
+      const name = v.account.trim();
+      const key = v.api_key.trim();
+      if (!name) throw new Error('账号名不能为空');
+      if (!key) throw new Error('API Key 不能为空');
+      const acc = { name, api_key: key };
+      const mc = parseInt(v.max_concurrent, 10);
+      if (mc > 0) acc.max_concurrent = mc;
+      if (v.netmode === 'direct') acc.proxy = 'direct';
+      else if (v.netmode === 'custom') {
+        const u = (v.neturl || '').trim();
+        if (!u) throw new Error('选择自定义代理时需填写代理地址');
+        acc.proxy = u;
+      }
+      await putProvidersDoc((cur) => {
+        const t = (cur.providers || []).find((x) => x.id === provID);
+        if (!t) throw new Error(`服务商 ${provID} 不存在`);
+        if ((t.accounts || []).some((a) => a.name === name)) {
+          throw new Error(`账号 ${provID}/${name} 已存在（换账号名，或用 CLI provider add -replace 更新凭证）`);
+        }
+        t.accounts = [...(t.accounts || []), acc];
+        return cur;
+      });
+      status(`账号已添加：${provID}/${name}（热生效，写前备份已留底）`, 'ok');
+      await afterWrite();
+    },
+  });
+  dlg.catch(() => {}); // 取消/关闭不算错误
+  const form = q('#modal-root .dialog:last-child form');
+  form.elements.netmode.addEventListener('change', () => {
+    form.elements.neturl.hidden = form.elements.netmode.value !== 'custom';
+  });
+}
+
+// 启停账号（2026-11-19）：providers.json 账号级 disabled 字段写回 +
+// 热重载——planner accountsOf 直接剔除停用账号，余额探测一并跳过。
+async function toggleAccount(provID, accName, sw) {
+  sw.disabled = true;
+  try {
+    await putProvidersDoc((cur) => {
+      const t = (cur.providers || []).find((x) => x.id === provID);
+      const a = t && (t.accounts || []).find((x) => x.name === accName);
+      if (!a) throw new Error(`账号 ${provID}/${accName} 不存在`);
+      if (a.disabled) delete a.disabled; else a.disabled = true;
+      return cur;
+    });
+    status(`账号 ${provID}/${accName} 已${sw.classList.contains('on') ? '停用，路由将跳过' : '启用，重新参与路由'}（热生效）`, 'ok');
+    await afterWrite();
+  } catch (err) {
+    status('切换失败: ' + err.message, 'err', 8000);
+    sw.disabled = false;
+  }
 }
 
 // ---------- 路由（融合视图：意图 = 一条有序调用链，2026-11 原型定稿） ----------
@@ -2516,6 +2679,12 @@ $('prov-list').addEventListener('click', (e) => {
   if (um) { acctDetailModal(um.dataset.p, um.dataset.a); return; }
   const del = e.target.closest('.del-acct');
   if (del) { removeAccount(del.dataset.p, del.dataset.a); return; }
+  // 账号启停开关（2026-11-19）：写 providers.json disabled 字段热生效
+  const sw = e.target.closest('.acc-sw');
+  if (sw) { toggleAccount(sw.dataset.p, sw.dataset.a, sw); return; }
+  // 卡内添加账号（2026-11-19）：直达追加表单
+  const addAcc = e.target.closest('.acc-add');
+  if (addAcc) { addAccountModal(addAcc.dataset.p); return; }
   // 账号折叠：纯 class 切换（grid-rows 动画播得出来；不重绘）
   const more = e.target.closest('.acc-more');
   if (more) {
@@ -2526,6 +2695,63 @@ $('prov-list').addEventListener('click', (e) => {
     more.querySelector('span').textContent = open ? '收起账号' : `展开其余 ${fold.querySelectorAll('.row').length} 个账号`;
     if (open) accFolds.add(more.dataset.fold);
     else accFolds.delete(more.dataset.fold);
+  }
+});
+// 账号拖拽排序（2026-11-19）：仅握把可拖，仅同卡 .accs 内重排；落点即
+// 写回 providers.json 账号顺序（首个 = 主力 = 轮转首选，rotate/smart/
+// order 各策略的账号次序同源）。折叠段账号不参与拖拽但保持原相对次序。
+let accDragRow = null;
+$('prov-list').addEventListener('dragstart', (e) => {
+  const grip = e.target.closest && e.target.closest('.grip');
+  if (!grip) { e.preventDefault(); return; }
+  accDragRow = grip.closest('.arow');
+  if (!accDragRow) { e.preventDefault(); return; }
+  accDragRow.classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move';
+  try { e.dataTransfer.setData('text/plain', ''); } catch (_) { /* IE 兼容态可空 */ }
+});
+$('prov-list').addEventListener('dragend', () => {
+  if (accDragRow) accDragRow.classList.remove('dragging');
+  document.querySelectorAll('.arow.drag-over').forEach((x) => x.classList.remove('drag-over'));
+  accDragRow = null;
+});
+$('prov-list').addEventListener('dragover', (e) => {
+  const row = e.target.closest('.arow');
+  if (!accDragRow || !row || row === accDragRow || row.parentNode !== accDragRow.parentNode) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  document.querySelectorAll('.arow.drag-over').forEach((x) => x.classList.remove('drag-over'));
+  row.classList.add('drag-over');
+});
+$('prov-list').addEventListener('drop', async (e) => {
+  const row = e.target.closest('.arow');
+  if (!accDragRow || !row || row === accDragRow || row.parentNode !== accDragRow.parentNode) return;
+  e.preventDefault();
+  row.classList.remove('drag-over');
+  const a = accDragRow.getBoundingClientRect(), b = row.getBoundingClientRect();
+  accDragRow.parentNode.insertBefore(accDragRow, a.top < b.top ? row : row.nextSibling);
+  // DOM 重排 → 按新顺序写回账号数组（含折叠段整体次序）
+  const accsEl = accDragRow.closest('.accs');
+  const pid = accDragRow.closest('.list')?.dataset.pid;
+  const names = [...accsEl.querySelectorAll('.arow')].map((r) => r.dataset.acc);
+  const dragRow = accDragRow;
+  accDragRow = null;
+  try {
+    await putProvidersDoc((cur) => {
+      const t = (cur.providers || []).find((x) => x.id === pid);
+      if (!t) throw new Error(`服务商 ${pid} 不存在`);
+      const byName = new Map((t.accounts || []).map((x) => [x.name, x]));
+      const next = names.map((n) => byName.get(n)).filter(Boolean);
+      if (next.length !== (t.accounts || []).length) throw new Error('账号清单已变化，排序取消（请刷新后重试）');
+      t.accounts = next;
+      return cur;
+    });
+    status(`账号顺序已保存：首位 ${names[0]} = 主力（热生效）`, 'ok');
+    await afterWrite();
+  } catch (err) {
+    status('排序保存失败: ' + err.message, 'err', 8000);
+    dragRow.classList.remove('dragging');
+    await loadProviders(); // 回滚到服务端真实顺序
   }
 });
 // 模型清单展开态（toggle 不冒泡，捕获段接住）

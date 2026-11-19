@@ -115,6 +115,11 @@ type Account struct {
 	RestingUntil int64         `json:"resting_until,omitempty"` // Unix 秒；休眠至 T
 	Auth         AuthKind      `json:"auth,omitempty"`          // 空=api_key；oauth=订阅凭证（M3-W1）
 	OAuth        *OAuthMeta    `json:"oauth,omitempty"`         // auth=oauth 时的非密钥元数据
+	// Disabled 是用户级停用（2026-11-19 多账户管理）：配置态，与运行态
+	// Status（休眠/prefail/bad-credential）正交。停用账号被路由直接跳过
+	//（accountsOf 过滤）、余额探测一并跳过；控制台账号行开关切换，
+	// 经 PUT /api/config/providers 全文档写回热生效。
+	Disabled bool `json:"disabled,omitempty"`
 
 	// 当日用量（W6 由响应 usage 填充）：smart 策略按剩余比例排序。
 	// QuotaTokensDay<=0 视为无数据（smart 回落 rotate）。
