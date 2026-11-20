@@ -201,7 +201,7 @@
 
     <!-- 路由（融合：意图 = 一条有序调用链，2026-11 原型定稿） -->
     <section id="page-routing" class="view" hidden>
-      <div class="label"><span class="tick"></span><b>意图分配</b><span class="note">意图由网关内置识别；每类任务配一条有序模型链，按策略自动分配</span><span class="sp"></span><button type="button" class="text add" id="btn-quick-alloc" hidden>一键分配推荐链</button></div>
+      <div class="label"><span class="tick"></span><b>意图分配</b><span class="note">意图由网关内置识别；每类任务配一条有序模型链，按策略自动分配</span><span class="sp"></span><button type="button" class="text" id="btn-group-audit" title="逐个实测被组引用的成员模型，确定性不可用（套餐未开放/无权限/模型不存在）者自动移出组，覆写前留底">组员体检</button><button type="button" class="text add" id="btn-quick-alloc" hidden>一键分配推荐链</button></div>
       <div class="list" id="list-intents"></div>
       <!-- 智能路由（2026-11-16）：智能代理与其余意图分开管理——分类脑接管开关 -->
       <div class="label" id="sec-agent-label" hidden><span class="tick"></span><b>智能路由</b><span class="note">开启接管后由分类脑先行判定意图（自定义关键词规则仍最优先）</span></div>

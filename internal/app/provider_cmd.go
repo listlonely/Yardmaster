@@ -544,6 +544,9 @@ func providerProbe(paths store.Paths, args []string, stdout, stderr io.Writer) e
 	if err := saveProvidersFile(paths, cfg); err != nil {
 		return err
 	}
+	// 预检成功后自动组员体检（2026-11-20）：实测被组引用的该 provider
+	// 成员，确定性不可用者自动移出组（留底写回，与控制台同规）。
+	auditGroupsAfterProbe(paths, &cfg, id, stdout)
 	if failed > 0 {
 		return fmt.Errorf("%d 个账号预检失败", failed)
 	}
@@ -551,6 +554,45 @@ func providerProbe(paths store.Paths, args []string, stdout, stderr io.Writer) e
 		fmt.Fprintf(stdout, "模型清单已落盘：%s\n", strings.Join(target.ModelIDs(), ", "))
 	}
 	return nil
+}
+
+// auditGroupsAfterProbe 预检落盘后的自动组员体检（2026-11-20）：实测
+// 被组引用的该 provider 成员，确定性不可用者移出组并留底写回。仅报告
+// 失败不改变命令退出码（预检本身成功，体检是增值动作）。
+func auditGroupsAfterProbe(paths store.Paths, cfg *store.ProvidersFile, id string, stdout io.Writer) {
+	settings, err := store.LoadSettings(paths)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	probe := func(prov *provider.Provider, acc provider.Account, model string) (int, string, error) {
+		ref, _ := gateway.ResolveProxyRef(string(acc.Proxy), string(prov.Proxy), settings.GlobalProxy)
+		rt, err := netproxy.SharedTransport(netproxy.Ref(ref))
+		if err != nil {
+			return 0, "", err
+		}
+		return gateway.ProbeModel(context.Background(), prov, acc, model, rt, prov.AuthStyle)
+	}
+	rep, changed := gateway.AuditGroups(cfg, id, probe)
+	if !changed {
+		return
+	}
+	if err := gateway.ApplyAuditWithBackup(paths.ProvidersPath(), paths.AppDir, cfg); err != nil {
+		fmt.Fprintf(stdout, "△ 组员体检写回失败（未改动）: %v\n", err)
+		return
+	}
+	fmt.Fprintf(stdout, "✓ 组员体检：移除 %d 个确定性不可用成员（覆写前已留底）\n", rep.Removed)
+	for _, it := range rep.Items {
+		switch {
+		case it.Skipped != "":
+			fmt.Fprintf(stdout, "  △ %s 跳过（%s）\n", it.Ref, it.Skipped)
+		case it.Removed:
+			fmt.Fprintf(stdout, "  ✗ %s 已移除（%s）\n", it.Ref, it.Reason)
+		case it.OK:
+			fmt.Fprintf(stdout, "  ✓ %s %s\n", it.Ref, it.Reason)
+		default:
+			fmt.Fprintf(stdout, "  △ %s 保留（%s）\n", it.Ref, it.Reason)
+		}
+	}
 }
 
 // filterModels 把上游清单过滤为用户指定的模型集合；未出现在清单中的

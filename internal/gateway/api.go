@@ -550,6 +550,12 @@ func (s *Server) handleProviderProbe(w http.ResponseWriter, r *http.Request) {
 	for i, m := range models {
 		ids[i] = m.ID
 	}
+	// 预检成功后自动组员体检（2026-11-20）：预检只验证凭证与清单，
+	// 套餐不含的模型要到对话请求才暴露——后台实测被组引用的该
+	// provider 成员，确定性不可用者自动移出组（留底写回）。
+	if id := strings.TrimSpace(req.ProviderID); id != "" {
+		go s.autoAuditProvider(id)
+	}
 	writeJSON(w, map[string]any{"ok": true, "models": ids})
 }
 

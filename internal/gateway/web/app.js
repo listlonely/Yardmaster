@@ -2166,7 +2166,46 @@ async function reprobeModels(pid) {
     });
     status(`模型清单已刷新：上游 ${up.length} 个（新增 ${added}）${kept ? `，保留手动添加 ${kept} 个` : ''}`, 'ok', 8000);
     await afterWrite();
+    // 预检成功后自动组员体检（2026-11-20）：套餐不含的模型要到对话请求
+    // 才暴露——后台实测被组引用的该服务商成员，确定性不可用者自动移出
+    // 组（服务端覆写前留底）。不 await：不拖慢清单刷新的完成提示。
+    auditGroupMembers(pid);
   } catch (e) { status('重新检测失败: ' + e.message, 'err', 8000); }
+}
+
+// 组员体检（2026-11-20）：POST /api/groups/audit——逐成员发最小对话
+// 请求实测被组引用的模型，确定性不可用（套餐未开放/无权限/模型不存在）
+// 者自动移出组并写回（服务端覆写前留底 + 热重载）。401/429/5xx/超时
+// 一律保留。pid 非空时仅体检引用该服务商的成员；空串=全量。
+async function auditGroupMembers(pid) {
+  status('组员体检中：逐成员发最小请求实测（每个成员约 1~3 秒，确定性不可用者将自动移出组）…');
+  try {
+    const r = await api('/api/groups/audit', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(pid ? { provider_id: pid } : {}),
+    });
+    await afterWrite();
+    const rep = r.report || {};
+    const items = rep.items || [];
+    if (!items.length) {
+      status(pid ? `${pid} 的成员未被任何路由组引用，无需体检` : '当前没有路由组引用成员模型，无需体检', 'ok', 6000);
+      return r;
+    }
+    const lines = items.map((it) =>
+      it.skipped ? `△ ${it.ref} 跳过（${it.skipped}）`
+        : it.removed ? `✗ ${it.ref} 已移除（${it.reason}）`
+          : it.ok ? `✓ ${it.ref} 可用` : `△ ${it.ref} 保留（${it.reason}）`);
+    const head = `组员体检完成：共 ${items.length} 个成员，移除 ${rep.removed || 0} 个`;
+    console.log(head + '\n' + lines.join('\n'));
+    openDialog({
+      title: '组员体检报告',
+      body: `<div class="list" style="max-height:50vh;overflow:auto">${lines.map((l) => `<div class="item"><code>${l}</code></div>`).join('')}</div>`,
+      yes: '知道了',
+      onSubmit: async () => {},
+    });
+    status(head + (rep.removed ? '，配置已写回（覆写前已留底）' : '，全部保留或跳过'), rep.removed ? 'err' : 'ok', 12000);
+    return r;
+  } catch (e) { status('组员体检失败: ' + e.message, 'err', 8000); return null; }
 }
 
 async function afterWrite() {
@@ -2654,6 +2693,8 @@ $('list-intents').addEventListener('click', (e) => {
   if (!btn) return;
   intentChainModal(btn.dataset.chain, btn.dataset.label, btn.dataset.rec);
 });
+// 组员体检按钮（2026-11-20）：空串=全量审计所有被组引用的成员
+$('btn-group-audit').addEventListener('click', () => auditGroupMembers(''));
 // 批量一键分配（页头按钮：为全部未配置意图创建推荐链）
 $('btn-quick-alloc').addEventListener('click', async () => {
   const list = cache.pendingIntents || [];

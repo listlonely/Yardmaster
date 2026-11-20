@@ -151,6 +151,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/intent/preview", s.handleIntentPreview)    // 2026-11-13：意图试算（只读 dry-run）
 	mux.HandleFunc("GET /api/provider-presets", s.handleProviderPresets) // M9：前端「添加 Provider」预填数据源（只读）
 	mux.HandleFunc("POST /api/provider/probe", s.handleProviderProbe)    // 添加服务商「检测并获取模型」（凭证验证 + 上游清单）
+	mux.HandleFunc("POST /api/groups/audit", s.handleGroupsAudit)        // 2026-11-20：组员体检（实测成员模型，确定性不可用自动移出组）
 	mux.HandleFunc("POST /api/tokens", s.handleTokenCreate)              // 命名令牌：生成（plain 仅本次返回）
 	mux.HandleFunc("POST /api/tokens/{id}/rotate", func(w http.ResponseWriter, r *http.Request) {
 		s.handleTokenRotate(w, r.PathValue("id"))
