@@ -1249,19 +1249,30 @@ function renderProviders() {
 
 async function loadProviders() {
   try {
-    if (!cache.providers) {
-      skeleton($('prov-list'), 4);
-      cache.providers = await api('/api/config/providers');
-    }
+    if (!cache.providers) skeleton($('prov-list'), 4);
+    // 每次进入都重拉（2026-11-20）：体检/CLI 会服务端覆写 providers.json，
+    // 永不失效的跨页缓存会让模型清单徽标与席位池停留在旧态
+    cache.providers = await api('/api/config/providers');
     renderProviders();
   } catch (e) {
     $('prov-list').innerHTML = errBox('加载失败：' + e.message, 'providers');
   }
 }
 
-function ensureProviders() {
-  if (cache.providers) renderProviders();
-  else loadProviders();
+// 进入服务商页：先拉实时状态（额度窗口/余额开局即显示——启动即首轮
+// 探测的轮询器已把数据备好，不再依赖先去总览页），再重拉清单渲染。
+async function ensureProviders() {
+  try { await refreshState(); } catch { /* 状态拉取失败仍渲染配置清单 */ }
+  loadProviders();
+}
+
+// 服务商页轻轮询：只拉实时状态重绘（配置清单不动），额度窗口/余额随
+// 后台轮询结果自动跟新。
+async function refreshProvidersLive() {
+  try {
+    await refreshState();
+    if (cache.providers) renderProviders();
+  } catch { /* 轮询失败静默，下一轮再试 */ }
 }
 
 // ---------- 添加服务商（2026-11 定稿：无订阅预设 + 检测模型 + 模型勾选） ----------
@@ -1936,7 +1947,7 @@ async function loadRouting() {
     const [state, rules, intents, plugViews, provCfg, settings] = await Promise.all([
       api('/api/state'), api('/api/config/rules'), api('/api/config/intents'),
       api('/api/plugins').catch(() => ({ plugins: [] })),
-      cache.providers ? Promise.resolve(cache.providers) : api('/api/config/providers'),
+      api('/api/config/providers'), // 每次进入都重拉：体检/CLI 覆写后席位池与链行不落旧态
       api('/api/config/settings'),
     ]);
     cache.providers = provCfg;
@@ -2188,6 +2199,7 @@ async function auditGroupMembers(pid) {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(pid ? { provider_id: pid } : {}),
     });
+    cache.providers = null; // 体检已服务端覆写 providers.json，跨页缓存作废
     await afterWrite();
     const rep = r.report || {};
     const items = rep.items || [];
@@ -2279,6 +2291,9 @@ const STRATEGIES = [
 // 与服务商页配置的清单同步（保存时全量重建 chain-agent 成员，运行时由
 // Agent 插件按请求语境自主挑选），服务商页增删模型后重新保存即同步。
 async function agentChainModal(label) {
+  // 打开即拉最新服务商清单（2026-11-20）：候选/分类脑选项与体检覆写后
+  // 的 providers.json 同源（不可用条目不进候选）；失败沿用旧缓存。
+  try { cache.providers = await api('/api/config/providers'); } catch { /* 沿用旧缓存 */ }
   const provs = cache.providers?.providers || [];
   // 体检判定不可用的模型不进智能代理候选与分类脑选项（2026-11-20）：
   // 候选全量同步语义不变，但同步源剔除实测不可用条目。
@@ -2407,8 +2422,12 @@ async function agentChainModal(label) {
   });
 }
 
-function intentChainModal(intentId, label, recHint) {
+async function intentChainModal(intentId, label, recHint) {
   if (intentId === 'agent') { agentChainModal(label); return; } // 智能代理走专属形态
+  // 打开即拉最新服务商清单（2026-11-20）：席位池不再依赖跨页缓存——
+  // 组员体检覆写 providers.json（不可用徽标/移除成员）或 CLI 改配置后，
+  // 弹窗与服务商页保持同源；拉取失败沿用旧缓存不阻断弹窗。
+  try { cache.providers = await api('/api/config/providers'); } catch { /* 沿用旧缓存 */ }
   const provs = cache.providers?.providers || [];
   const chain = (cache.chainOf || {})[intentId] || {};
   const curStrategy = chain.group?.strategy || 'smart';
@@ -3259,7 +3278,7 @@ async function probeQuotas() {
     status(`余额探测完成：${ps.length - fail.length}/${ps.length} 成功` +
       (fail.length ? `（失败：${fail.map((p) => p.provider + '/' + p.account).join('、')}）` : ''),
       fail.length ? 'warn' : 'ok', 6000);
-    if (!q('#page-overview').hidden) loadOverview();
+    afterWrite(); // 状态+当前页刷新：额度窗口/余额就地跟新（不只总览）
   } catch (e) {
     status('余额探测失败: ' + e.message, 'err');
   }
@@ -3325,7 +3344,7 @@ async function probeBalanceModal(provID) {
     });
     const okN = ps.filter((x) => x.provider === provID && !x.error).length;
     status(`余额探测完成：${okN}/${accs.length} 个账号`, okN ? 'ok' : 'warn', 6000);
-    if (!q('#page-overview').hidden) loadOverview();
+    afterWrite(); // 状态+当前页刷新：额度窗口/余额就地跟新（不只总览）
   } catch (e) {
     q('#modal-root').querySelectorAll('.probe-res[data-acc]').forEach((el) => {
       el.innerHTML = `<span class="pill err">探测失败</span> ${esc(e.message)}`;
@@ -3487,7 +3506,9 @@ document.addEventListener('keydown', (e) => {
 show((location.hash || '').replace('#', '') || 'overview');
 loadSettings();
 
-// 总览 15s 轮询（仅总览激活且页面可见）
+// 总览 15s 轮询（仅总览激活且页面可见）；服务商页同频轻轮询：额度窗口/
+// 余额与今日用量自动跟新（2026-11-20 初始即给额度）
 setInterval(() => {
   if (activeAndVisible('overview')) loadOverview();
+  if (activeAndVisible('providers')) refreshProvidersLive();
 }, 15000);
