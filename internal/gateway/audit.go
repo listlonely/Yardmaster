@@ -132,6 +132,9 @@ type AuditItem struct {
 type AuditReport struct {
 	Items   []AuditItem `json:"items"`
 	Removed int         `json:"removed"`
+	// Marked 是清单不可用标记的实际变化数（置位 + 误标清除，2026-11-20）：
+	// 计入 changed——只标清单不动组（如空组保底）也要写回，否则徽标落盘。
+	Marked int `json:"marked,omitempty"`
 }
 
 // AuditGroups 审计 f.Groups 中被引用的成员模型（跨组按引用去重实测）：
@@ -219,9 +222,94 @@ func AuditGroups(f *store.ProvidersFile, onlyProvider string,
 		rep.Items[i].Removed = true
 		rep.Removed++
 	}
-	// changed 仅按「实际发生成员变更的组」判定（guard 组不算）
-	changed := rep.Removed > 0
+	// 清单同步标记（2026-11-20）：被判定确定性不可用的成员，按
+	// provider+模型 ID 给清单条目置位（席位引用剥 @seat 后同模型 ID，
+	// 同一模型被多组引用也只标一次）；实测通过的成员反向清除旧标记
+	//（上游暂时故障曾误标的自愈入口）。清单徽标与前端候选过滤都消费
+	// 该标记，故置/清的实际变化计入 changed，确保落盘。
+	marked := 0
+	for ref, reason := range removed {
+		if markModelUnavailable(provs, ref, reason) {
+			marked++
+		}
+	}
+	for i := range rep.Items {
+		if rep.Items[i].OK && clearModelUnavailable(provs, rep.Items[i].Ref) {
+			marked++
+		}
+	}
+	rep.Marked = marked
+	// changed 按「组员实际移除」或「清单标记实际变化」判定（guard 组
+	// 不算成员变更，但 guard 成员的清单标记已计入 marked）。
+	changed := rep.Removed > 0 || marked > 0
 	return rep, changed
+}
+
+// markModelUnavailable 按成员引用（provider/model[@seat]）定位清单条目
+// 置不可用标记；返回是否发生实际变化（幂等，重复置位不重复计数）。
+func markModelUnavailable(provs map[string]*provider.Provider, ref, reason string) bool {
+	id, _, _ := strings.Cut(ref, "/")
+	p := provs[id]
+	if p == nil {
+		return false
+	}
+	model := upstreamModel(ref)
+	for i := range p.Models {
+		if p.Models[i].ID != model {
+			continue
+		}
+		if p.Models[i].Unavailable && p.Models[i].UnavailReason == reason {
+			return false
+		}
+		p.Models[i].Unavailable = true
+		p.Models[i].UnavailReason = reason
+		return true
+	}
+	return false // 模型不在清单（手动引用/清单已刷新），无处可标
+}
+
+// clearModelUnavailable 按成员引用清除清单条目的不可用标记（体检实测
+// 通过 = 上游恢复或曾误标）；返回是否发生实际变化。
+func clearModelUnavailable(provs map[string]*provider.Provider, ref string) bool {
+	id, _, _ := strings.Cut(ref, "/")
+	p := provs[id]
+	if p == nil {
+		return false
+	}
+	model := upstreamModel(ref)
+	for i := range p.Models {
+		if p.Models[i].ID == model && p.Models[i].Unavailable {
+			p.Models[i].Unavailable = false
+			p.Models[i].UnavailReason = ""
+			return true
+		}
+	}
+	return false
+}
+
+// MergeUnavailableInto 把旧清单中同 ID 条目的不可用标记继承到新清单
+//（2026-11-20）：预检重拉与控制台勾选保存都会整体重建 Models，不做
+// 继承则一次普通操作就抹掉体检徽标。按模型 ID 匹配（模型从上游消失
+// 则条目自然不在，无从继承）；新条目已带的标记不覆盖。显式 false 与
+// 缺省无法区分（omitempty），统一按零值继承——清除标记的唯一入口是
+// 组员体检实测通过。API 写回（handleConfigPut）与 CLI 预检共用本函数。
+func MergeUnavailableInto(dst, old []provider.Model) []provider.Model {
+	oldMarks := make(map[string]string, len(old)) // id → reason（仅已标记条目）
+	for _, m := range old {
+		if m.Unavailable {
+			oldMarks[m.ID] = m.UnavailReason
+		}
+	}
+	for i := range dst {
+		if dst[i].Unavailable {
+			continue
+		}
+		if reason, ok := oldMarks[dst[i].ID]; ok {
+			dst[i].Unavailable = true
+			dst[i].UnavailReason = reason
+		}
+	}
+	return dst
 }
 
 // memberTouches 判断成员引用是否落在 onlyProvider 范围（""=全部）。
@@ -324,7 +412,7 @@ func (s *Server) handleGroupsAudit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.Planner.Reload(f.Providers, f.Groups)
-		slog.Info("组员体检完成并写回", "provider", req.ProviderID, "removed", rep.Removed)
+		slog.Info("组员体检完成并写回", "provider", req.ProviderID, "removed", rep.Removed, "marked", rep.Marked)
 	}
 	s.writeResultExtra(w, map[string]any{"report": rep, "changed": changed})
 }

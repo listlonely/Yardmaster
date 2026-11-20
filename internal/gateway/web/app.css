@@ -615,6 +615,15 @@ html.theming, html.theming body, html.theming body * { transition: background-co
 .models-row[open] summary .chev { transform: rotate(90deg); }
 .models-body { padding: 2px 0 12px; }
 .models-empty { font-size: 12px; color: var(--faint); padding: 4px 0 2px; }
+
+/* 模型清单「不可用」徽标（2026-11-20 组员体检）：实测确定性不可用的
+   模型灰显 + 红标，悬浮 title 展示判定原因；席位池/智能代理候选已剔除 */
+.chips code.m-off { color: var(--faint); opacity: .8; }
+.chips code.m-off .off-tag {
+  font-style: normal; font-size: 10px; margin-left: 4px;
+  color: var(--red); background: var(--red-soft);
+  border-radius: 6px; padding: 0 5px;
+}
 /* 模型清单行内管理（2026-11-13）：添加模型（勾选弹窗）+ 重新检测 */
 .models-add { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
 

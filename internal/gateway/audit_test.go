@@ -202,6 +202,7 @@ func TestAuditGroupsEmptyGuard(t *testing.T) {
 	defer srv.Close()
 	f := &store.ProvidersFile{
 		Providers: []provider.Provider{{ID: "p", Protocol: provider.ProtocolChat, BaseURL: srv.URL,
+			Models: []provider.Model{{ID: "bad"}}, // 清单含该模型：验证 guard 保留时同步置标记
 			Accounts: []provider.Account{{Name: "a", APIKey: "k"}}}},
 		Groups: []provider.Group{{ID: "solo", Members: []string{"p/bad"}}},
 	}
@@ -209,14 +210,19 @@ func TestAuditGroupsEmptyGuard(t *testing.T) {
 		return ProbeModel(context.Background(), prov, acc, model, srv.Client().Transport, "")
 	}
 	rep, changed := AuditGroups(f, "", probe)
-	if changed || rep.Removed != 0 {
-		t.Fatalf("空组保底应保留成员: changed=%v removed=%d", changed, rep.Removed)
+	// 成员保守保留（组不动），但清单标记已置位 → changed 为真（写回徽标）
+	if !changed || rep.Removed != 0 {
+		t.Fatalf("空组保底应保留成员且标记清单: changed=%v removed=%d marked=%d", changed, rep.Removed, rep.Marked)
 	}
 	if strings.Join(f.Groups[0].Members, ",") != "p/bad" {
 		t.Fatalf("成员不应变动: %v", f.Groups[0].Members)
 	}
 	if !strings.Contains(rep.Items[0].Reason, "保守保留") {
 		t.Fatalf("报告应标注保守保留: %+v", rep.Items[0])
+	}
+	if len(f.Providers[0].Models) != 1 || !f.Providers[0].Models[0].Unavailable ||
+		!strings.Contains(f.Providers[0].Models[0].UnavailReason, "404") {
+		t.Fatalf("保守保留的成员清单应置不可用标记: %+v", f.Providers[0].Models)
 	}
 }
 
@@ -264,5 +270,107 @@ func TestAuditGroupsScope(t *testing.T) {
 	}
 	if len(rep.Items) != 1 || !strings.Contains(rep.Items[0].Reason, "传输层失败") {
 		t.Fatalf("传输层失败成员应保留并说明: %+v", rep.Items)
+	}
+}
+
+// TestAuditGroupsMarksModels 移除成员时同步给清单条目置不可用标记
+//（2026-11-20）：普通成员与席位成员（剥 @seat 后按模型 ID）各自置位；
+// 实测通过的成员不带标记。
+func TestAuditGroupsMarksModels(t *testing.T) {
+	var seen []string
+	srv := auditFakeUpstream(t, map[string][2]any{
+		"ok":   {http.StatusOK, `{}`},
+		"bad":  {http.StatusForbidden, `1313 当前订阅套餐暂未开放权限`},
+		"bad2": {http.StatusBadRequest, `1113 余额不足或无可用资源包`},
+	}, &seen)
+	defer srv.Close()
+	f := &store.ProvidersFile{
+		Providers: []provider.Provider{{ID: "p", Protocol: provider.ProtocolChat, BaseURL: srv.URL,
+			Models: []provider.Model{{ID: "ok"}, {ID: "bad"}, {ID: "bad2"}},
+			Accounts: []provider.Account{{Name: "main", APIKey: "k1"}, {Name: "seat1", APIKey: "k2"}}}},
+		Groups: []provider.Group{
+			{ID: "g1", Members: []string{"p/ok", "p/bad"}},
+			// g2 挂一个可用成员兜底：避免 bad2 触发空组保底（否则不移除）
+			{ID: "g2", Members: []string{"p/ok", "p/bad2@seat1"}},
+		},
+	}
+	probe := func(prov *provider.Provider, acc provider.Account, model string) (int, string, error) {
+		return ProbeModel(context.Background(), prov, acc, model, srv.Client().Transport, "")
+	}
+	rep, changed := AuditGroups(f, "p", probe)
+	if !changed || rep.Removed != 2 || rep.Marked != 2 {
+		t.Fatalf("应移除 2 个成员并标记 2 条清单: removed=%d marked=%d items=%+v",
+			rep.Removed, rep.Marked, rep.Items)
+	}
+	ms := map[string]provider.Model{}
+	for _, m := range f.Providers[0].Models {
+		ms[m.ID] = m
+	}
+	if !ms["bad"].Unavailable || !strings.Contains(ms["bad"].UnavailReason, "403") {
+		t.Fatalf("p/bad 清单应置标记（403）: %+v", ms["bad"])
+	}
+	if !ms["bad2"].Unavailable || !strings.Contains(ms["bad2"].UnavailReason, "套餐") {
+		t.Fatalf("席位成员 p/bad2 清单应置标记（套餐语义）: %+v", ms["bad2"])
+	}
+	if ms["ok"].Unavailable {
+		t.Fatalf("实测通过的成员不应带标记: %+v", ms["ok"])
+	}
+}
+
+// TestAuditGroupsClearsStaleMark 体检实测通过的成员反向清除旧标记
+//（2026-11-20）：上游恢复或曾误标的自愈入口；标记变化计入 changed
+//（只清徽标不动组也要写回）。
+func TestAuditGroupsClearsStaleMark(t *testing.T) {
+	var seen []string
+	srv := auditFakeUpstream(t, map[string][2]any{"m": {http.StatusOK, `{}`}}, &seen)
+	defer srv.Close()
+	f := &store.ProvidersFile{
+		Providers: []provider.Provider{{ID: "p", Protocol: provider.ProtocolChat, BaseURL: srv.URL,
+			Models: []provider.Model{{ID: "m", Unavailable: true, UnavailReason: "HTTP 403（无权限/禁止）"}},
+			Accounts: []provider.Account{{Name: "a", APIKey: "k"}}}},
+		Groups: []provider.Group{{ID: "g", Members: []string{"p/m"}}},
+	}
+	probe := func(prov *provider.Provider, acc provider.Account, model string) (int, string, error) {
+		return ProbeModel(context.Background(), prov, acc, model, srv.Client().Transport, "")
+	}
+	rep, changed := AuditGroups(f, "", probe)
+	if !changed || rep.Marked != 1 {
+		t.Fatalf("清除误标应计入变化: changed=%v marked=%d", changed, rep.Marked)
+	}
+	m := f.Providers[0].Models[0]
+	if m.Unavailable || m.UnavailReason != "" {
+		t.Fatalf("旧标记应被清除: %+v", m)
+	}
+}
+
+// TestMergeUnavailableInto 预检/编辑写回的标记继承（2026-11-20）：
+// 按模型 ID 从旧清单继承；新条目已带的标记不覆盖；旧清单未标记的不传染。
+func TestMergeUnavailableInto(t *testing.T) {
+	old := []provider.Model{
+		{ID: "a", Unavailable: true, UnavailReason: "HTTP 404（模型不存在）"},
+		{ID: "b"},
+	}
+	dst := []provider.Model{
+		{ID: "a"},
+		{ID: "b"},
+		{ID: "c", Unavailable: true, UnavailReason: "新判定的原因"},
+	}
+	got := MergeUnavailableInto(dst, old)
+	if len(got) != 3 {
+		t.Fatalf("清单长度不应变: %d", len(got))
+	}
+	if !got[0].Unavailable || got[0].UnavailReason != "HTTP 404（模型不存在）" {
+		t.Fatalf("a 应继承旧标记: %+v", got[0])
+	}
+	if got[1].Unavailable {
+		t.Fatalf("b 未被标记过，不应传染: %+v", got[1])
+	}
+	if !got[2].Unavailable || got[2].UnavailReason != "新判定的原因" {
+		t.Fatalf("c 已带标记不应被覆盖: %+v", got[2])
+	}
+	// dst 与 old 同切片（CLI 场景 old 来自 target.Models 原值）：确认无别名写坏
+	_ = MergeUnavailableInto(old, old)
+	if !old[0].Unavailable || old[0].UnavailReason != "HTTP 404（模型不存在）" {
+		t.Fatalf("自合并应保持幂等: %+v", old[0])
 	}
 }

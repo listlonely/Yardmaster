@@ -1191,8 +1191,12 @@ function provCard(p, live, resting, global) {
     <span class="hint">⠿ 拖动调轮转顺序 · 开关停用即跳过 · 首个为「主力」</span>
   </div>`;
   const mlist = p.models || [];
+  // 不可用徽标（2026-11-20 组员体检）：实测确定性不可用的模型灰显打标，
+  // 悬浮说明判定原因；清单仍列出（上游还在），但不会被加入任何调用链。
   const modelChips = mlist.length
-    ? `<div class="chips">${mlist.map((m) => `<code>${esc(m.id)}</code>`).join(' ')}</div>`
+    ? `<div class="chips">${mlist.map((m) => m.unavailable
+        ? `<code class="m-off" title="实测不可用：${esc(m.unavail_reason || '组员体检判定')}">${esc(m.id)}<i class="off-tag">不可用</i></code>`
+        : `<code>${esc(m.id)}</code>`).join(' ')}</div>`
     : '<div class="models-empty">暂无模型——点「重新检测」拉取上游清单，或在下方手动添加</div>';
   const models = `
     <details class="models-row" data-mrow="${esc(p.id)}" ${modelOpens.has(p.id) ? 'open' : ''}>
@@ -2203,7 +2207,10 @@ async function auditGroupMembers(pid) {
       yes: '知道了',
       onSubmit: async () => {},
     });
-    status(head + (rep.removed ? '，配置已写回（覆写前已留底）' : '，全部保留或跳过'), rep.removed ? 'err' : 'ok', 12000);
+    const tail = [];
+    if (rep.removed) tail.push('配置已写回（覆写前已留底）');
+    if (rep.marked) tail.push(`模型清单已标记 ${rep.marked} 个不可用徽标`);
+    status(head + (tail.length ? '，' + tail.join('；') : '，全部保留或跳过'), rep.removed ? 'err' : 'ok', 12000);
     return r;
   } catch (e) { status('组员体检失败: ' + e.message, 'err', 8000); return null; }
 }
@@ -2240,10 +2247,14 @@ function memberClientCheck(m, provs, otherGroupIDs) {
 const frow = (label, field, hint) =>
   `<div class="frow"><span>${label}</span>${field}${hint ? `<div class="hint">${hint}</div>` : ''}</div>`;
 
-// 推荐成员（前端启发式）：第一个有模型清单的服务商的第一个模型
+// 推荐成员（前端启发式）：第一个有可用模型的服务商的第一个可用模型
+//（2026-11-20 跳过体检判定不可用的条目，推荐不再指向已知不可用模型）
 function recMember(provs) {
-  const p = (provs || []).find((x) => (x.models || []).length);
-  return p ? `${p.id}/${p.models[0].id}` : '';
+  for (const p of provs || []) {
+    const m = (p.models || []).find((mm) => !mm.unavailable);
+    if (m) return `${p.id}/${m.id}`;
+  }
+  return '';
 }
 
 // 隐式组 ID（UI 生成的链组统一 chain- 前缀；用户同名组直接复用）
@@ -2269,7 +2280,9 @@ const STRATEGIES = [
 // Agent 插件按请求语境自主挑选），服务商页增删模型后重新保存即同步。
 async function agentChainModal(label) {
   const provs = cache.providers?.providers || [];
-  const members = provs.flatMap((p) => (p.models || []).map((m) => `${p.id}/${m.id}`));
+  // 体检判定不可用的模型不进智能代理候选与分类脑选项（2026-11-20）：
+  // 候选全量同步语义不变，但同步源剔除实测不可用条目。
+  const members = provs.flatMap((p) => (p.models || []).filter((m) => !m.unavailable).map((m) => `${p.id}/${m.id}`));
   const accTotal = provs.reduce((n, p) => n + (p.accounts || []).length, 0);
   // 分类脑 = classify 插件的 options.model（读当前值，保存时整体写回）。
   // 未配置 → 插件仅内置关键词规则（与握手日志同口径）。视图不可达时按
@@ -2436,11 +2449,14 @@ function intentChainModal(intentId, label, recHint) {
   const root = q('#modal-root .dialog:last-child');
 
   function renderCandidates() {
+    // 体检判定不可用的模型不进席位池（2026-11-20）：加进去也会被路由
+    // 打到不可用上游；清单仍可勾选其余可用模型。
     root.querySelector('#pick-provs').innerHTML = provs.map((p) => {
       const accs = (p.accounts || []).length ? p.accounts : [{ name: '' }];
-      const vals = accs.flatMap((a) => (p.models || []).map((m) => a.name ? `${p.id}/${m.id}@${a.name}` : `${p.id}/${m.id}`));
+      const usable = (p.models || []).filter((m) => !m.unavailable);
+      const vals = accs.flatMap((a) => usable.map((m) => a.name ? `${p.id}/${m.id}@${a.name}` : `${p.id}/${m.id}`));
       const on = vals.filter((v) => picked.includes(v)).length;
-      const rows = accs.map((a) => (p.models || []).map((m) => {
+      const rows = accs.map((a) => usable.map((m) => {
         const val = a.name ? `${p.id}/${m.id}@${a.name}` : `${p.id}/${m.id}`;
         const vt = vendorTileOf(p.id);
         return `<label class="pick-row"><input type="checkbox" value="${esc(val)}"${picked.includes(val) ? ' checked' : ''}><span class="vtile inl v${vt.cls}">${esc(vt.txt)}</span><code>${esc(m.id)}${a.name ? `<i class="at">@${esc(a.name)}</i>` : ''}</code></label>`;
@@ -2448,7 +2464,7 @@ function intentChainModal(intentId, label, recHint) {
       const ht = vendorTileOf(p.id);
       return `<div class="pick-group">
         <label class="pick-head"><input type="checkbox" data-selall="${esc(p.id)}"><span class="vtile inl v${ht.cls}">${esc(ht.txt)}</span>${esc(p.name || p.id)}<span class="pill soft">${on}/${vals.length}</span></label>
-        ${rows || '<div class="pick-row muted2">清单为空（检测后生成）</div>'}
+        ${rows || '<div class="pick-row muted2">清单为空或模型均实测不可用（检测后生成）</div>'}
       </div>`;
     }).join('');
     root.querySelectorAll('#pick-provs input[type=checkbox]:not([data-selall])').forEach((inp) => {

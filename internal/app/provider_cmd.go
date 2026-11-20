@@ -539,7 +539,10 @@ func providerProbe(paths store.Paths, args []string, stdout, stderr io.Writer) e
 		fmt.Fprintf(stdout, "✓ %s/%s: %d 个模型\n", id, acc.Name, len(models))
 	}
 	if *account == "" {
-		target.Models = allModels
+		// 不可用标记继承（2026-11-20）：重拉清单整体重建 Models——按
+		// 模型 ID 从旧清单继承体检标记（手动添加条目同样继承），普通
+		// 预检不抹徽标；清除唯一入口是组员体检实测通过。
+		target.Models = gateway.MergeUnavailableInto(allModels, target.Models)
 	}
 	if err := saveProvidersFile(paths, cfg); err != nil {
 		return err
@@ -580,7 +583,7 @@ func auditGroupsAfterProbe(paths store.Paths, cfg *store.ProvidersFile, id strin
 		fmt.Fprintf(stdout, "△ 组员体检写回失败（未改动）: %v\n", err)
 		return
 	}
-	fmt.Fprintf(stdout, "✓ 组员体检：移除 %d 个确定性不可用成员（覆写前已留底）\n", rep.Removed)
+	fmt.Fprintf(stdout, "✓ 组员体检：移除 %d 个成员、清单不可用标记变化 %d 处（覆写前已留底）\n", rep.Removed, rep.Marked)
 	for _, it := range rep.Items {
 		switch {
 		case it.Skipped != "":

@@ -135,6 +135,18 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, name st
 			return
 		}
 		keepProviderKeys(&f, &cur)
+		// 不可用标记继承（2026-11-20）：控制台清单写回（重新检测/勾选
+		// 保存/编辑表单）都整体重建 Models——逐服务商从现盘清单按模型
+		// ID 继承体检标记，普通操作不抹徽标；清除唯一入口是体检实测
+		// 通过（AuditGroups 反向清除）。
+		for i := range f.Providers {
+			for j := range cur.Providers {
+				if cur.Providers[j].ID == f.Providers[i].ID {
+					f.Providers[i].Models = MergeUnavailableInto(f.Providers[i].Models, cur.Providers[j].Models)
+					break
+				}
+			}
+		}
 		if err := validateProviders(f); err != nil {
 			writeAPIErr(w, badRequest(err))
 			return
