@@ -23,9 +23,11 @@ if (new URLSearchParams(location.search).get('app') === '1') {
   document.body.classList.add('app');
   document.title = 'Yardmaster';
 }
-// Windows 字体栈（:root.win）。
+// Windows 字体栈（:root.is-win）。类名曾用 win——与额度窗口卡组件类
+// .win（max-width:460px 等）撞名，html 命中后整页收缩为 460px 窄条
+// （2026-11-20 窗口窄条问题的真正根因），故更名 is-win。
 if (/Windows/i.test(navigator.userAgent)) {
-  document.documentElement.classList.add('win');
+  document.documentElement.classList.add('is-win');
 }
 
 // ---------- 主题：三态 auto/light/dark，localStorage 持久化；侧栏脚部三态切换（E） ----------

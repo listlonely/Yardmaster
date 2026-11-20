@@ -118,6 +118,28 @@ func runWailsShell(st *serveSetup, ctx context.Context, stop context.CancelFunc,
 
 	app := application.New(application.Options{
 		Name: "Yardmaster",
+		// 病根切换（2026-11-20 v21）：窄条病与 resize 时序无关（v19 创建
+		// 尺寸即终态、零 post-attach resize 仍病），Chrome 子窗口 HWND 满
+		// 宽而内容恒挤 ~470px 绝对宽度——windowed（HWND 子窗口）hosting
+		// 的渲染 surface 缺陷家族。改走 IDCompositionVisual hosting：
+		// wails 在 WebView2 环境创建前置入 COREWEBVIEW2_FORCED_HOSTING_
+		// MODE=WINDOW_TO_VISUAL，上游文档明示 windowed hosting 在 DPI 上
+		// 下文不匹配时卡死重光栅化（WebView2Feedback #5248/#4485），与本
+		// 病吻合。须在 app.Run() 前设置——New 即满足。副作用：Chrome_
+		// WidgetWin_* 子窗口不再存在，伺服几何比对恒空转至超时（仅一条
+		// WARN 日志，无害；若 hosting 切换治愈则伺服体系整体退役）。
+		Windows: application.WindowsOptions{
+			UseVisualHosting: true,
+			// 诊断临时（v34，窄条根治后删除）：WebView2 Fixed Version
+			// 154.0.4258.62 降级实验（155 已证病，封死版本因素链尾）。
+			WebviewBrowserPath: `C:\Users\jasse\AppData\Local\Temp\wv2fv\extract154\Microsoft.WebView2.FixedVersionRuntime.154.0.4258.62.x64`,
+			// 渲染参数保持最小（v26-v31 已证 GPU/ANGLE/DC/occlusion
+			// flag 全部无效），仅保留 CDP 调试口供自动化测试取证。
+			AdditionalBrowserArgs: []string{
+				"--remote-debugging-port=9222",
+				"--remote-allow-origins=*",
+			},
+		},
 		// 单实例互斥（2026-11-10，兑现 §二「勿自建」盘点）：锁在 New 时
 		// 获取，二次启动进程通知首实例后自动 os.Exit——不再出现第二个
 		// 窗口/第二份托盘（二次启动早期托盘图标会短暂闪现 ~1s，锁在此
@@ -141,7 +163,6 @@ func runWailsShell(st *serveSetup, ctx context.Context, stop context.CancelFunc,
 	// 窗口状态记忆（M8-W3）：恢复上次尺寸/位置/最大化；初始背景色跟
 	// 系统深浅色（防主题不符闪色；运行中切换由页面自身全覆盖背景承接）。
 	state := loadWindowState(st.paths.AppDir)
-	maximise := false
 	opts := application.WebviewWindowOptions{
 		Name:      "console",
 		Title:     "Yardmaster",
@@ -157,29 +178,91 @@ func runWailsShell(st *serveSetup, ctx context.Context, stop context.CancelFunc,
 	} else {
 		opts.BackgroundColour = application.RGBA{Red: 0x14, Green: 0x18, Blue: 0x21, Alpha: 0xff}
 	}
-	if state != nil {
+	if state != nil && state.Max {
+		// 防病路线（2026-11-20 v19）：窄条根因=wails 创建流程固定为
+		// CreateWindowEx(还原尺寸)→setupChromium 按「当前」rect 附件
+		// （v3.1.0 webview_window_windows.go L620）→StartState（L706）/
+		// 延迟 Maximise 全部发生在附件之后——渲染 surface 永远先卡在还
+		// 原尺寸（上游 #5544 「until a manual resize」；v11-v18 八种窗
+		// 口级事后修复全无效实锤，StartState 即原始窄条入口）。唯一不
+		// 败顺序=创建尺寸即终态尺寸：按主屏最大化几何直接创建正常态窗
+		// 口，终身零 post-attach resize，竞态入口消失。视觉与真最大化
+		// 无法区分；代价：IsMaximised 恒 false（状态记忆自洽回落为该
+		// rect，行为不变）、多显示器时假最大化固定落主屏（留档）。
+		// StartState=WindowMaximised 禁用——wails 内部 maximise() 是
+		// post-attach resize，必踩竞态。
+		fx, fy, fw, fh := fakeMaxRectLogical()
+		opts.X, opts.Y, opts.Width, opts.Height = fx, fy, fw, fh
+	} else if state != nil {
+		// 还原态恢复：创建尺寸=终态尺寸，同样零 post-attach resize。
 		opts.X, opts.Y, opts.Width, opts.Height = state.X, state.Y, state.W, state.H
-		maximise = state.Max
 	} else {
 		opts.Width, opts.Height = 1200, 820
 	}
 	win := app.Window.NewWithOptions(opts)
-	// 最大化延后触发（2026-11-19 窄条修复）：不再走 StartState=Maximised
-	// 创建期参数——双击（explorer 父进程）启动的个别实例里，该参数在
-	// WebView2 controller 就绪前处理，bounds 同步丢失，页面视口停在初始
-	// 窄尺寸（~460px，窗口本体正常铺满）。改为轮询 hwnd 就绪后显式
-	// Maximise：WM_SIZE 必然在 WebView2 就绪后到达并同步 bounds。
-	if maximise {
-		go func() {
-			for i := 0; i < 50; i++ { // ~5s 上限（窗口 impl 在 app.Run() 才创建）
-				if win.NativeWindow() != nil {
-					win.Maximise()
-					return
-				}
-				time.Sleep(100 * time.Millisecond)
+	// 窗口渲染面同步保障（2026-11-20 v19 防病版）：根治改为「创建尺寸
+	// 即终态尺寸」（见上方状态恢复块），post-attach resize 竞态入口消
+	// 失。伺服降级为安全网：探针异常才修复（NavigationCompleted 的
+	// Hide/Show hack 在 rect 恒定时无过期 rect 可用，理论上不再致病；
+	// 一旦仍复现窄条，修复链按 zoomed 分流，详见 webview_sync_windows.go
+	// 头注取证链）。结果留观测日志。
+	// v35b 定案实验（2026-11-20）：伺服=窄条制造者实锤——minweb 最小
+	// 复现（同 wails/WebView2/UseVisualHosting/假最大化几何）无伺服则
+	// 完全正常；yardmaster 唯一差异是伺服链。探针误报 → 触发拖拽模拟
+	// + Min/Restore「修复」→ 危险操作族自己打卡死 surface。本实验停用
+	// 伺服验证治愈；根治后伺服体系整体退役。
+	go func() {
+		if true { // v35b：伺服停用
+			slog.Info("伺服停用（v35b 实验层）")
+			return
+		}
+		for i := 0; i < 100; i++ { // ~10s 上限（impl 在 app.Run() 才创建）
+			if win.NativeWindow() != nil {
+				break
 			}
-		}()
-	}
+			time.Sleep(100 * time.Millisecond)
+		}
+		h := win.NativeWindow()
+		if h == nil {
+			return
+		}
+		repair := func(zoomed bool) {
+			if win.NativeWindow() == nil {
+				return
+			}
+			// 修复后不再 re-Maximise（v13/v14 实证：SC_SIZE|2 sizing 循
+			// 环摆动生效、窗口 rect 真实跟随光标（wMin/wMax 摆幅 120px
+			// 实锤），但 WM_SIZE 流不足以驱动 WebView2 重光栅化——渲染
+			// surface 依旧卡窄条）。补刀 Hide/Show：按当前稳定 rect 重挂
+			// 渲染树（wails NavigationCompleted #1077 hack 的正确时序版
+			// ——此刻无导航竞态，Show 重挂即按新尺寸重建 surface）。
+			// 窗口停在还原态（≈1696 宽）完全可用。
+			webviewDragResize(uintptr(h))
+			time.Sleep(1500 * time.Millisecond)
+			blank := webviewHeaderLooksBlank(uintptr(h))
+			if blank {
+				// Minimize/Restore：走 wails WM_SIZE 处理内置的 #5544
+				// 修复链——SIZE_RESTORED 分支会 resyncWebviewDPIAfterUnminimise
+				// + chromium.Show()（v3.1.0 webview_window_windows.go，
+				// 官方针对「devicePixelRatio 卡错显示器值直到手动 resize」
+				// 的重同步路径）。SC_SIZE/Hide/Show 只更新 rect 不重建
+				// surface（v13-15 实证全无效），此处直接重置光栅化上下文。
+				// SW_RESTORE 恢复到最小化前的还原态 rect，不碰 rcNormalPosition。
+				procShowWindowSync.Call(uintptr(h), 6) // SW_MINIMIZE
+				time.Sleep(300 * time.Millisecond)
+				procShowWindowSync.Call(uintptr(h), 9) // SW_RESTORE
+				time.Sleep(1500 * time.Millisecond)
+				blank = webviewHeaderLooksBlank(uintptr(h))
+				slog.Info("修复复验：Min/Restore 后", "blank", blank)
+			}
+			slog.Info("修复复验：拖拽后", "zoomed", zoomed, "blank", blank)
+		}
+		if webviewSurfaceServo(uintptr(h), repair) {
+			slog.Info("WebView2 渲染面伺服收敛")
+		} else {
+			slog.Warn("WebView2 渲染面伺服超时（窄条未确认收敛，手动拖拽窗口可即时恢复）")
+		}
+	}()
 	snapshot := func() { saveWindowState(st.paths.AppDir, snapshotWindowBounds(win)) }
 	// 关窗行为（settings.close_action，2026-11-10）：关窗事件时实时读盘
 	//——设置保存后下次关窗即生效，无需重启。hide=隐藏到托盘（缺省，

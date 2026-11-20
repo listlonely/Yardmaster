@@ -252,9 +252,11 @@ h1 { font-size: 15px; font-weight: 650; letter-spacing: -.01em; min-width: 0; wh
 .status.warn { color: var(--amber); }
 
 /* ---------- 视图（应用壳内独立滚动；E：淡入 + 上移 4px） ---------- */
-/* 窄视口防御（2026-11-19）：停靠面板/扩展侧栏把视口挤成窄条时，内容
-   保持最小可读宽度横向滚动，绝不竖排挤压成一字一行（桌面工具语义）。
-   main 出横滚条承接；真窄屏（<740px）放开仍走纵向堆叠。 */
+/* 窄视口防御（2026-11-19 二次定稿）：停靠面板/扩展侧栏挤窄视口，或
+   WebView2 视口卡死在初始窄尺寸（~470px）时，内容保持最小可读宽度
+   横向滚动，绝不竖排挤压成一字一行（桌面工具语义）。min-width 无条件
+   生效——首轮的 <740px 豁免恰好在视口卡死场景把防御整体废掉（卡死
+   视口 ~470px 必命中该媒体查询，min-width:0）。main 出横滚条承接。 */
 main { flex: 1; min-height: 0; position: relative; overflow-x: auto; }
 .view {
   height: 100%; overflow-y: auto;
@@ -263,7 +265,6 @@ main { flex: 1; min-height: 0; position: relative; overflow-x: auto; }
   animation: fade-in .2s ease;
   view-transition-name: page;
 }
-@media (max-width: 739px) { .view { min-width: 0; } }
 @keyframes fade-in { from { opacity: 0; transform: translateY(4px); } }
 @media (prefers-reduced-motion: reduce) { .view { animation: none } }
 
