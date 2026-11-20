@@ -46,6 +46,17 @@ jobs:
           # 数据全在包内（本地 bin\portable 同构）。
           port="pack-portable/Yardmaster-portable"
           mkdir -p "$port/data"
+          # data 预置 README（2026-11-20）：纯空目录 zip 条目在部分
+          # 解压路径（资源管理器拖拽单个文件、个别第三方工具）下不
+          # 被还原——exe 同级检测不到 data\ 便落回用户主目录，便携
+          # 失效。预置文件保证任何解压方式都还原 data 目录，用户打
+          # 开即知此处用途（v0.2.5 用户实测踩坑）。
+          cat > "$port/data/README.txt" <<EOF
+          此目录是便携数据目录：启动后自动生成 settings.json /
+          providers.json / rules.json 与 backup\ 留底快照。请勿删
+          除本目录——它的存在即便携模式标记（数据随包走，不写用
+          户主目录；删掉后数据会落到 ~/.yardmaster）。
+          EOF
           cp pack/yardmaster-windows-amd64.exe "$port/yardmaster.exe"
           cp pack/yardmaster-windows-app.exe   "$port/yardmaster-app.exe"
           cat > "$port/说明.txt" <<EOF
