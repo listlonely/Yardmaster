@@ -2259,11 +2259,36 @@ function memberClientCheck(m, provs, otherGroupIDs) {
 const frow = (label, field, hint) =>
   `<div class="frow"><span>${label}</span>${field}${hint ? `<div class="hint">${hint}</div>` : ''}</div>`;
 
-// 推荐成员（前端启发式）：第一个有可用模型的服务商的第一个可用模型
-//（2026-11-20 跳过体检判定不可用的条目，推荐不再指向已知不可用模型）
+// 模型名版本序（2026-11-20）：提取 id 首个版本号段比较——glm-5.3 >
+// glm-5.1 > glm-4.5；无版本号的排有版本号之后；都无版本号保持清单原序。
+function modelVersionRank(id) {
+  const m = /(\d+)(?:\.(\d+))?(?:\.(\d+))?/.exec(String(id));
+  if (!m) return null;
+  return [Number(m[1]), Number(m[2] || 0), Number(m[3] || 0)];
+}
+
+// 推荐成员（前端启发式）：第一个有可用模型的服务商的「最新」可用模型——
+// 版本号降序（glm-5.3 优先于 glm-4.5），同版本取无后缀旗舰（glm-5.3 >
+// glm-5.3-flash）；跳过体检判定不可用的条目（2026-11-20）。
+function newestModel(models) {
+  const usable = (models || []).filter((mm) => !mm.unavailable);
+  if (!usable.length) return null;
+  let best = null;
+  for (const mm of usable) {
+    if (!best) { best = mm; continue; }
+    const a = modelVersionRank(mm.id), b = modelVersionRank(best.id);
+    if (a && !b) { best = mm; continue; } // 有版本号 > 无版本号
+    if (!a || !b) continue; // 一方无版本号：保持清单原序
+    const c = a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+    if (c > 0) { best = mm; continue; }
+    if (c === 0 && !/-/.test(mm.id) && /-/.test(best.id)) best = mm; // 同版本取无后缀
+  }
+  return best;
+}
+
 function recMember(provs) {
   for (const p of provs || []) {
-    const m = (p.models || []).find((mm) => !mm.unavailable);
+    const m = newestModel(p.models);
     if (m) return `${p.id}/${m.id}`;
   }
   return '';
