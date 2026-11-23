@@ -1050,9 +1050,10 @@ function acctRefs(pid, accName, groups) {
 }
 
 // pvHealthHTML：厂商头健康摘要 = 账号数 + 状态点阵 + 分布 + 当日合计/
-// 余额合计——多账号时不必逐行扫即可判整体健康。
+// 剩余 tok（订阅形态）或余额合计 ¥（按量形态）——多账号时不必逐行扫
+// 即可判整体健康。
 function pvHealthHTML(p, accs, live, resting) {
-  let ok = 0, warn = 0, rest = 0, used = 0, bal = 0;
+  let ok = 0, warn = 0, rest = 0, used = 0, bal = 0, tok = 0;
   const dots = accs.map((a) => {
     const key = `${p.id}/${a.name}`;
     const lv = live[key] || {};
@@ -1061,7 +1062,12 @@ function pvHealthHTML(p, accs, live, resting) {
     else if (cls === 'warn') warn++;
     else rest++;
     used += usedTodayOf(a, lv);
-    if (lv.balance_at) bal += Number(lv.balance) || 0;
+    // 订阅窗口形态（Coding Plan）：balance=最紧窗口剩余 token，非货币，
+    // 单独按 token 合计；按量账号才进 ¥ 余额合计（2026-11-23 用户反馈）
+    if (lv.balance_at) {
+      if ((lv.windows || []).length) tok += Number(lv.balance) || 0;
+      else bal += Number(lv.balance) || 0;
+    }
     return `<i class="${cls}"></i>`;
   }).join('');
   const parts = [`${accs.length} 个账号`];
@@ -1072,6 +1078,7 @@ function pvHealthHTML(p, accs, live, resting) {
   if (rest) dist.push(`${rest} 休眠/停用`);
   if (dist.length) parts.push(`<span class="sum">${esc(dist.join(' · '))}</span>`);
   if (used > 0) parts.push(`<span class="sum">今日合计 <b>${fmtTokens(used)}</b> tok</span>`);
+  if (tok > 0) parts.push(`<span class="sum">剩余 <b>${fmtTokens(tok)}</b> tok</span>`);
   if (bal > 0) parts.push(`<span class="sum">余额合计 <b>¥${bal.toFixed(2)}</b></span>`);
   return parts.join(' ');
 }

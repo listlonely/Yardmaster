@@ -314,7 +314,14 @@ func (st *serveSetup) trayQuotaLines() []string {
 				parts = append(parts, "额度未探测")
 			}
 			if acc.BalanceAt > 0 {
-				parts = append(parts, fmt.Sprintf("¥%.2f", acc.Balance))
+				if len(acc.Windows) > 0 {
+					// 订阅窗口形态（Coding Plan）：Balance=最紧窗口剩余
+					// token 数（extractPlanQuota 的 min remaining），非货
+					// 币——不带 ¥ 符号（2026-11-23 用户反馈）。
+					parts = append(parts, fmt.Sprintf("余 %.0f tok", acc.Balance))
+				} else {
+					parts = append(parts, fmt.Sprintf("¥%.2f", acc.Balance))
+				}
 			}
 			lines = append(lines, strings.Join(parts, " · "))
 			if len(lines) >= trayQuotaMax {
