@@ -278,14 +278,64 @@ func (st *serveSetup) trayStatus() string {
 	return fmt.Sprintf("休眠 %d", resting)
 }
 
+// trayQuotaLines 托盘额度菜单行（2026-11-23）：每启用账号一行——
+// 订阅窗口百分比（5小时/周）+ 余额，数据与控制台 /api/state 同源
+// （Planner 运行态：额度轮询器 30min + 保存即探写入）。托盘 30s 重
+// 渲染，探测结果落盘即跟新；未探测的账号标注提示。无账号返回空
+// （托盘隐藏整段）。
+func (st *serveSetup) trayQuotaLines() []string {
+	var lines []string
+	for _, prov := range st.srv.Planner.Providers() {
+		for _, acc := range prov.Accounts {
+			if acc.Disabled {
+				continue
+			}
+			parts := []string{prov.ID + "/" + acc.Name}
+			n := 0
+			for _, w := range acc.Windows {
+				pct := -1.0
+				if w.Pct != nil {
+					pct = *w.Pct
+				} else if w.Total > 0 {
+					pct = w.Used / w.Total * 100
+				}
+				if pct < 0 {
+					continue
+				}
+				parts = append(parts, fmt.Sprintf("%s %.0f%%", w.Name, pct))
+				n++
+				if n >= 2 {
+					break // 托盘菜单行宽有限，最多两个窗口
+				}
+			}
+			if n == 0 {
+				parts = append(parts, "额度未探测")
+			}
+			if acc.BalanceAt > 0 {
+				parts = append(parts, fmt.Sprintf("¥%.2f", acc.Balance))
+			}
+			lines = append(lines, strings.Join(parts, " · "))
+			if len(lines) >= trayQuotaMax {
+				return lines
+			}
+		}
+	}
+	return lines
+}
+
+// trayQuotaMax 托盘额度行上限（预建菜单项池大小；超出截断，控制台看全量）。
+const trayQuotaMax = 8
+
 // trayUpdateLabel 托盘升级菜单项文本（M9-W4）：有新版本返回「升级到
 // vX.Y.Z」，已是最新/查询失败/dev 态返回 ""（菜单隐藏）。查询失败
-// 静默——升级提示是增强信息，不打扰。
-func trayUpdateLabel() string {
+// 静默——升级提示是增强信息，不打扰。2026-11-23 起查询走代理链
+// （updateHTTPClient：全局代理→系统代理→直连），直连不可达的网络
+// 不再静默失效。
+func (st *serveSetup) trayUpdateLabel() string {
 	if Version == "dev" {
 		return ""
 	}
-	tag, _, err := latestRelease()
+	tag, _, err := latestRelease(st.settings.GlobalProxy)
 	if err != nil {
 		return ""
 	}
@@ -303,7 +353,7 @@ func (st *serveSetup) trayUpdateQuery() string {
 	if st.settings.UpdateMode() == store.UpdateOff {
 		return "" // off 态彻底静默——连版本查询都不发
 	}
-	label := trayUpdateLabel()
+	label := st.trayUpdateLabel()
 	if label == "" || st.srv.OnUpdateInstall == nil || st.settings.UpdateMode() != store.UpdateAuto {
 		return label
 	}
@@ -349,16 +399,11 @@ func attachUpdateHooks(st *serveSetup, stop context.CancelFunc) {
 		if err != nil {
 			return err
 		}
-		client := &http.Client{}
-		if tr, terr := netproxy.Transport(netproxy.Ref(st.settings.GlobalProxy)); terr != nil {
-			slog.Warn("更新代理传输构造失败，回退直连", "err", terr)
-		} else if tr != nil {
-			client.Transport = tr
-		}
+		client := updateHTTPClient(st.settings.GlobalProxy)
 		if _, _, _, serr := stagePaths(dir); serr != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 			defer cancel()
-			rel, ferr := fetchRelease(ctx, client, repoAPI)
+			rel, ferr := fetchReleaseVia(ctx, st.settings.GlobalProxy) // 候选链：代理限流/不可达回退直连
 			if ferr != nil {
 				return ferr
 			}
@@ -438,6 +483,7 @@ func runServe(args []string, stdout io.Writer, relay relayState) error {
 				systray.Quit()
 			},
 			Status:           st.trayStatus,
+			Quotas:           st.trayQuotaLines,
 			Update:           st.trayUpdateQuery,
 			OnUpdateInstall:  st.srv.OnUpdateInstall,
 			AutostartEnabled: autoEnabled,
@@ -507,6 +553,7 @@ func runApp(args []string, stdout io.Writer, relay relayState) error {
 				systray.Quit()
 			},
 			Status:           st.trayStatus,
+			Quotas:           st.trayQuotaLines,
 			Update:           st.trayUpdateQuery,
 			OnUpdateInstall:  st.srv.OnUpdateInstall,
 			AutostartEnabled: autoEnabled,

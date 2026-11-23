@@ -52,6 +52,9 @@ type TrayOptions struct {
 	OnOpen func() // 点击「打开窗口」
 	OnExit func() // 点击「退出」（调用方负责停网关并退出进程）
 
+	// Quotas 返回托盘额度菜单行（2026-11-23，每启用账号一行：窗口
+	// 百分比 + 余额；30s 与状态摘要同频刷新）。nil=隐藏整段。
+	Quotas func() []string
 	// Status 返回状态摘要行文本（30s 刷新；禁用态展示）。
 	Status func() string
 	// Update 查询新版本：返回「升级到 v0.10.0」或 ""（15s 首查 + 每
@@ -107,6 +110,15 @@ func runTray(opts TrayOptions) {
 		mStatus.Disable()
 		if opts.Status == nil {
 			mStatus.Hide()
+		}
+		// 额度菜单项池（2026-11-23）：预建 trayQuotaMax 个隐藏项占位
+		//（动态 AddMenuItem 只能追加到菜单尾部「退出」之后，预建才能
+		// 停在状态摘要与分隔线之间）；刷新时按行数 Show/Hide 复用。
+		mQuotas := make([]*systray.MenuItem, trayQuotaMax)
+		for i := range mQuotas {
+			mQuotas[i] = systray.AddMenuItem("", "账号额度（额度探测结果，30s 自动跟新）")
+			mQuotas[i].Disable()
+			mQuotas[i].Hide()
 		}
 		systray.AddSeparator()
 		mQuit := systray.AddMenuItem("退出", "停止网关并退出")
@@ -183,6 +195,24 @@ func runTray(opts TrayOptions) {
 					mStatus.SetTitle(s)
 				}
 			}
+			refreshQuotas := func() {
+				if opts.Quotas == nil {
+					return
+				}
+				lines := opts.Quotas()
+				if len(lines) > trayQuotaMax {
+					lines = lines[:trayQuotaMax] // 上限截断（全量走控制台）
+				}
+				for i, line := range lines {
+					mQuotas[i].SetTitle(line)
+					mQuotas[i].Show()
+				}
+				for i := len(lines); i < len(mQuotas); i++ {
+					mQuotas[i].Hide()
+				}
+			}
+			refreshStatus()
+			refreshQuotas()
 			time.AfterFunc(15*time.Second, checkUpdate)
 			tickStatus := time.NewTicker(30 * time.Second)
 			defer tickStatus.Stop()
@@ -192,6 +222,7 @@ func runTray(opts TrayOptions) {
 				select {
 				case <-tickStatus.C:
 					refreshStatus()
+					refreshQuotas()
 				case <-tickUpdate.C:
 					checkUpdate()
 				}
