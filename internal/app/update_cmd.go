@@ -48,6 +48,7 @@ func updateCheck(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stdout, "提示：三张出网卡（全局代理/系统代理/直连）全部失败。" +
 			"GitHub 直连不可达的网络下，请设置全局代理（控制台 设置 → 全局代理，" +
 			"如 http://127.0.0.1:7890），或开启代理工具的「系统代理」。")
+		fmt.Fprintf(stdout, "或直接到发布页手动下载：%s\n", releasesURL)
 		return err
 	}
 	latest := strings.TrimPrefix(tag, "v")

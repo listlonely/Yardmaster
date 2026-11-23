@@ -85,6 +85,21 @@ func platformAssetName() string {
 // release 查无此资产而自然缺省——暂存无桌面入口，仅换网关侧）。
 func appAssetName() string { return "yardmaster-windows-app.exe" }
 
+// openReleasePage 下载不可达时的手动兜底（2026-11-24 用户反馈）：
+// 系统浏览器跳转 GitHub 发布页，让用户自行下载资产手动替换。url 空=
+// 仓库 releases 列表页。打开失败只留痕（headless/无桌面环境不阻断主
+// 流程，错误信息里已附链接）。
+func openReleasePage(url string) {
+	if url == "" {
+		url = releasesURL
+	}
+	if err := openBrowser(url); err != nil {
+		slog.Warn("打开发布页失败（可手动访问）", "url", url, "err", err)
+		return
+	}
+	slog.Info("已打开发布页（下载失败手动兜底）", "url", url)
+}
+
 // defaultStageDir 返回默认暂存目录（exe 同级 update/）。
 func defaultStageDir() (string, error) {
 	exe, err := os.Executable()
@@ -328,7 +343,7 @@ func updateDownloadCmd(args []string, stdout, stderr io.Writer) error {
 	client := &http.Client{} // 无总超时（大文件慢链路），ctx 管总时限
 	rel, err := fetchRelease(ctx, client, repoAPI)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w（手动下载：%s）", err, releasesURL)
 	}
 	latest := strings.TrimPrefix(rel.Tag, "v")
 	if Version == "dev" {
@@ -342,7 +357,7 @@ func updateDownloadCmd(args []string, stdout, stderr io.Writer) error {
 	}
 	staged, err := stageUpdate(ctx, client, rel, stageDir, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w（手动下载：%s）", err, rel.URL)
 	}
 	fmt.Fprintf(stdout, "已下载并校验通过：%s（%.1f MB，SHA256 %s…）\n  暂存 %s\n  网关 %s\n",
 		staged.Tag, float64(staged.Size)/(1<<20), staged.SHA256[:12], staged.Dir, staged.GatewayExe)

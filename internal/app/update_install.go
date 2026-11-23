@@ -413,11 +413,11 @@ func updateInstallCmd(args []string, stdout, stderr io.Writer) error {
 		client := &http.Client{}
 		rel, ferr := fetchRelease(ctx, client, repoAPI)
 		if ferr != nil {
-			return ferr
+			return fmt.Errorf("%w（手动下载：%s）", ferr, releasesURL)
 		}
 		fmt.Fprintf(stdout, "最新版本 %s\n", strings.TrimPrefix(rel.Tag, "v"))
 		if _, ferr = stageUpdate(ctx, client, rel, stageDir, nil); ferr != nil {
-			return ferr
+			return fmt.Errorf("%w（手动下载：%s）", ferr, rel.URL)
 		}
 	}
 	if err := installStaged(stageDir, nil, *force); err != nil {

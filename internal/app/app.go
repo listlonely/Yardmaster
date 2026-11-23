@@ -91,11 +91,12 @@ func Run(args []string, stdout, stderr io.Writer) error {
 
 // serveSetup 是网关装配产物（serve 与 app 模式共用）。
 type serveSetup struct {
-	srv      *gateway.Server
-	planner  *gateway.Planner
-	paths    store.Paths
-	settings store.Settings
-	listen   string
+	srv       *gateway.Server
+	planner   *gateway.Planner
+	paths     store.Paths
+	settings  store.Settings
+	listen    string
+	updateStop context.CancelFunc // serve/app ctx stop（更新安装收尾；attachUpdateHooks 装配）
 }
 
 // setupGateway 完成网关装配（配置读取、安全基线、Server 构造）。
@@ -359,8 +360,8 @@ func (st *serveSetup) trayUpdateQuery() string {
 		return label
 	}
 	go func() {
-		if err := st.srv.OnUpdateInstall(); err != nil {
-			slog.Warn("auto 自动更新安装失败（1h 后重试）", "err", err)
+		if err := st.updateInstall(st.updateStop, false); err != nil {
+			slog.Warn("auto 自动更新安装失败（1h 后重试；手动下载见 releases 页）", "err", err)
 		}
 	}()
 	return label
@@ -394,35 +395,52 @@ func serveUntilDone(st *serveSetup, ctx context.Context) error {
 // 全局代理，W2 真机实证：release CDN 直连不可达）、锁单飞、aside 换侧
 // +spawn 接力，spawn 成功后延迟触发网关退出（响应送回余量）。auto 态
 // 托盘每轮版本查询命中新版即自动走此入口（无空闲保护，砍项留档）。
+// 用户主动触发（openOnFail=true）下载失败自动跳转 GitHub 发布页手动
+// 兜底（2026-11-24 用户反馈）；auto 静默模式不弹浏览器。
 func attachUpdateHooks(st *serveSetup, stop context.CancelFunc) {
-	st.srv.OnUpdateInstall = func() error {
-		dir, err := defaultStageDir()
-		if err != nil {
-			return err
-		}
-		client := updateHTTPClient(st.settings.GlobalProxy)
-		if _, _, _, serr := stagePaths(dir); serr != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-			defer cancel()
-			rel, ferr := fetchReleaseVia(ctx, st.settings.GlobalProxy) // 候选链：代理限流/不可达回退直连
-			if ferr != nil {
-				return ferr
-			}
-			slog.Info("自动更新：开始下载", "tag", rel.Tag)
-			if _, ferr = stageUpdate(ctx, client, rel, dir, nil); ferr != nil {
-				return ferr
-			}
-		}
-		if err := installStaged(dir, func() {}, false); err != nil {
-			return err
-		}
-		go func() {
-			time.Sleep(800 * time.Millisecond) // 响应送回余量
-			slog.Info("自动更新已安装，网关重启")
-			stop()
-		}()
-		return nil
+	st.updateStop = stop
+	st.srv.OnUpdateInstall = func() error { return st.updateInstall(stop, true) }
+}
+
+// updateInstall 自动更新安装主体：暂存缺失先下载校验（fetchReleaseVia
+// 候选链查询 + SHA256 边下边校验落位暂存）、锁单飞、aside 换侧 + spawn
+// 接力，spawn 成功后延迟触发网关退出（响应送回余量）。openOnFail=
+// 用户主动触发场景：查询/下载失败时系统浏览器跳转 GitHub 发布页（查
+// 询不可达跳 releases 列表，下载失败跳该版本页），错误信息附手动下载
+// 链接；后台 auto 静默轮询传 false——每小时弹一个标签页不可接受。
+func (st *serveSetup) updateInstall(stop context.CancelFunc, openOnFail bool) error {
+	dir, err := defaultStageDir()
+	if err != nil {
+		return err
 	}
+	client := updateHTTPClient(st.settings.GlobalProxy)
+	if _, _, _, serr := stagePaths(dir); serr != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		rel, ferr := fetchReleaseVia(ctx, st.settings.GlobalProxy) // 候选链：代理限流/不可达回退直连
+		if ferr != nil {
+			if openOnFail {
+				openReleasePage("") // 查询不可达：跳 releases 列表页手动下载
+			}
+			return fmt.Errorf("%w（手动下载：%s）", ferr, releasesURL)
+		}
+		slog.Info("自动更新：开始下载", "tag", rel.Tag)
+		if _, ferr = stageUpdate(ctx, client, rel, dir, nil); ferr != nil {
+			if openOnFail {
+				openReleasePage(rel.URL) // 下载/校验失败：跳该版本发布页手动下载
+			}
+			return fmt.Errorf("%w（手动下载：%s）", ferr, rel.URL)
+		}
+	}
+	if err := installStaged(dir, func() {}, false); err != nil {
+		return err
+	}
+	go func() {
+		time.Sleep(800 * time.Millisecond) // 响应送回余量
+		slog.Info("自动更新已安装，网关重启")
+		stop()
+	}()
+	return nil
 }
 
 // serveRelayWrap 接力态的 serve 收尾包装：启动失败回滚（新版退出、旧版
