@@ -1474,8 +1474,7 @@ yardmaster provider add-oauth gemini    -from gemini-cli</pre>` +
           return cur;
         });
         status(`服务商 ${editing.id} 已更新（热生效，写前备份已留底）`, 'ok');
-        if (key && !key.startsWith('***')) probeAfterWrite(editing.id); // 换 Key 即探额度
-        else await afterWrite();
+        await probeAfterWrite(editing.id); // 保存即探额度（换 Key/改代理/改端点一律刷新，2026-11-23）
         return;
       }
       const v = formVals(form);

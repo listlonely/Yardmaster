@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"yardmaster/internal/netproxy"
 	"yardmaster/internal/provider"
 )
 
@@ -437,7 +438,11 @@ func (s *Server) probeBalance(ctx context.Context, prov *provider.Provider, acc 
 	} else {
 		req.Header.Set("Authorization", "Bearer "+acc.APIKey)
 	}
-	hc := &http.Client{Timeout: 15 * time.Second}
+	tr, terr := s.probeTransport(acc, prov)
+	if terr != nil {
+		return 0, nil, terr
+	}
+	hc := &http.Client{Timeout: 15 * time.Second, Transport: tr}
 	resp, err := hc.Do(req)
 	if err != nil {
 		return 0, nil, err
@@ -462,4 +467,23 @@ func (s *Server) probeBalance(ctx context.Context, prov *provider.Provider, acc 
 		return bal, nil, nil
 	}
 	return bal, wins, nil
+}
+
+// probeTransport 额度探测的上游传输（F3 继承链；2026-11-23 修复）：
+// 此前探测用裸 http.Client（只认环境变量代理），与控制台展示的生效
+// 代理（effectiveProxy = 账号→Provider→全局→系统代理→直连）不一致——
+// 需要代理才可达的厂商额度永远探不到，而选「直连」的保存动作也与
+// 探测行为无关。此处与请求路径共用 ResolveProxyRef，空引用末端落到
+// 系统代理，再不行显式直连（零 Transport 不读环境变量）。
+func (s *Server) probeTransport(acc provider.Account, prov *provider.Provider) (http.RoundTripper, error) {
+	eff, _ := ResolveProxyRef(string(acc.Proxy), string(prov.Proxy), s.GlobalProxy)
+	if eff == "" {
+		if sys, ok := netproxy.SystemProxy(); ok {
+			eff = string(sys)
+		}
+	}
+	if eff == "" || eff == string(netproxy.Direct) {
+		return &http.Transport{}, nil
+	}
+	return netproxy.Transport(netproxy.Ref(eff))
 }

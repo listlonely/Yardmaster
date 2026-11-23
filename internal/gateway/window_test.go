@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"yardmaster/internal/netproxy"
 	"yardmaster/internal/provider"
 	"yardmaster/internal/store"
 )
@@ -330,6 +331,41 @@ func TestQuotaProbeAPI(t *testing.T) {
 	// 内存态已更新（后续 Plan 直接可见）
 	if acc := srv.Planner.Providers()[0].Accounts[0]; acc.Balance != 42.5 || acc.BalanceAt == 0 {
 		t.Fatalf("Planner 应落账: %+v", acc)
+	}
+}
+
+// 额度探测代理链（2026-11-23 修复）：此前探测用裸 http.Client（只认
+// 环境变量），Provider「直连」/全局代理均不生效。修复后与请求路径共用
+// F3 继承链：Provider 显式直连覆盖全局代理；死全局代理探测失败留痕。
+func TestQuotaProbeHonorsProxyChain(t *testing.T) {
+	appDir := t.TempDir()
+	paths := newPaths(appDir)
+	balSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"code":200,"data":{"total_balance":"7.7"}}`))
+	}))
+	defer balSrv.Close()
+
+	mk := func(proxy netproxy.Ref) *Server {
+		prov := provider.Provider{ID: "glm", Protocol: provider.ProtocolChat, Proxy: proxy,
+			QuotaProbe: &provider.QuotaProbe{URL: balSrv.URL},
+			Accounts:   []provider.Account{{Name: "main", APIKey: "k", Status: provider.AccountAvailable}}}
+		return &Server{Planner: NewPlanner([]provider.Provider{prov}, nil), AppDir: appDir,
+			ProvidersPath: paths.ProvidersPath(), GlobalProxy: "http://127.0.0.1:1"}
+	}
+
+	// Provider=direct 覆盖死全局代理：直连探测成功
+	srv := mk(netproxy.Direct)
+	srv.pollQuotas(context.Background())
+	if acc := srv.Planner.Providers()[0].Accounts[0]; acc.Balance != 7.7 || acc.ProbeErr != "" {
+		t.Fatalf("Provider=direct 应无视全局代理探测成功: bal=%v err=%q", acc.Balance, acc.ProbeErr)
+	}
+
+	// Provider=继承 → 死全局代理生效：探测失败并留痕（前端显示探测失败徽标）
+	srv = mk("")
+	srv.pollQuotas(context.Background())
+	acc := srv.Planner.Providers()[0].Accounts[0]
+	if acc.Balance != 0 || acc.ProbeErr == "" {
+		t.Fatalf("死全局代理应令探测失败并留痕: bal=%v err=%q", acc.Balance, acc.ProbeErr)
 	}
 }
 
