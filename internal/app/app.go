@@ -96,6 +96,7 @@ type serveSetup struct {
 	paths     store.Paths
 	settings  store.Settings
 	listen    string
+	notifier  *notifier // 桌面气泡通知器（beeep；setupGateway 创建——接力进程窗口未起/无托盘态也能发）
 	updateStop context.CancelFunc // serve/app ctx stop（更新安装收尾；attachUpdateHooks 装配）
 }
 
@@ -143,7 +144,8 @@ func setupGateway() (*serveSetup, error) {
 	// 智能路由接管（2026-11-16）：启动装载（settings 写钩子热切换）。
 	srv.Intents.SetAgentTakeover(settings.AgentTakeoverEnabled())
 
-	return &serveSetup{srv: srv, planner: planner, paths: paths, settings: settings, listen: listen}, nil
+	return &serveSetup{srv: srv, planner: planner, paths: paths, settings: settings,
+		listen: listen, notifier: newNotifier(settings.NotifyEnabled())}, nil
 }
 
 // wireSettingsHook 设置落盘钩子（2026-11-11）：壳层把需要进程外生效的
@@ -255,11 +257,11 @@ func (st *serveSetup) banner(stdout io.Writer) {
 	}
 }
 
-// wireDesktopHooks 装配桌面壳事件（M9-W4）：上游账号休眠气泡。n 为
-// 通知器（settings.notify 关闭时为禁用态 notifier，send 空操作）。
-func (st *serveSetup) wireDesktopHooks(n *notifier) {
+// wireDesktopHooks 装配桌面壳事件（M9-W4）：上游账号休眠气泡。通知器
+// 为 st.notifier（setupGateway 创建；settings.notify 关闭时空操作）。
+func (st *serveSetup) wireDesktopHooks() {
 	st.srv.OnAccountRest = func(key, reason string) {
-		n.send("rest/"+key, "上游账号休眠", key+" · "+reason)
+		st.notifier.send("rest/"+key, "上游账号休眠", key+" · "+reason)
 	}
 }
 
@@ -421,7 +423,8 @@ func (st *serveSetup) updateInstall(stop context.CancelFunc, openOnFail bool) er
 		return err
 	}
 	client := updateHTTPClient(st.settings.GlobalProxy)
-	if _, _, _, serr := stagePaths(dir); serr != nil {
+	_, _, ver, serr := stagePaths(dir)
+	if serr != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
 		rel, ferr := fetchReleaseVia(ctx, st.settings.GlobalProxy) // 候选链：代理限流/不可达回退直连
@@ -438,6 +441,7 @@ func (st *serveSetup) updateInstall(stop context.CancelFunc, openOnFail bool) er
 			}
 			return fmt.Errorf("%w（手动下载：%s）", ferr, rel.URL)
 		}
+		ver = strings.TrimPrefix(rel.Tag, "v")
 	}
 	if err := installStaged(dir, func() {}, false); err != nil {
 		return err
@@ -445,6 +449,11 @@ func (st *serveSetup) updateInstall(stop context.CancelFunc, openOnFail bool) er
 	go func() {
 		time.Sleep(800 * time.Millisecond) // 响应送回余量
 		slog.Info("自动更新已安装，网关重启")
+		// 接力窗口期气泡（2026-11-23 用户反馈）：旧进程即将退出、托盘
+		// 消失——用户需知悉交接在进行、何时结束（完成侧 relayFinalize
+		// 再发一条带时间戳的「接棒完成」；key 不同免 10min 限频互吞）。
+		st.notifier.send(relayStartKey, "Yardmaster 接力重启",
+			fmt.Sprintf("v%s 已就位 · 新进程数秒内接管网关（%s）", ver, time.Now().Format("15:04:05")))
 		stop()
 	}()
 	return nil
@@ -497,12 +506,11 @@ func runServe(args []string, stdout io.Writer, relay relayState) error {
 	defer st.startHelpers(ctx)()
 	st.banner(stdout)
 	serveUpdatePath(st, relay, stop)
-	st.srv.OnRestart = restartHook(stop, nil) // headless serve 也支持在线重启（接力语义）
+	st.srv.OnRestart = st.restartHook(stop, nil) // headless serve 也支持在线重启（接力语义）
 	if *tray {
-		n := newNotifier(st.settings.NotifyEnabled())
-		st.wireDesktopHooks(n)
+		st.wireDesktopHooks()
 		autoEnabled, autoToggle := st.autostartCallbacks()
-		st.srv.OnRestart = restartHook(stop, func() { systray.Quit() }) // 托盘态连托盘一并收尾
+		st.srv.OnRestart = st.restartHook(stop, func() { systray.Quit() }) // 托盘态连托盘一并收尾
 		go runTrayIsolated(TrayOptions{
 			OnOpen: func() { _ = openBrowser("http://" + st.listen + "/") },
 			OnExit: func() {
@@ -565,17 +573,16 @@ func runApp(args []string, stdout io.Writer, relay relayState) error {
 	defer st.startHelpers(ctx)()
 	st.banner(stdout)
 	serveUpdatePath(st, relay, stop)
-	st.srv.OnRestart = restartHook(stop, nil) // 兜底装配（无托盘场景也能在线重启）
+	st.srv.OnRestart = st.restartHook(stop, nil) // 兜底装配（无托盘场景也能在线重启）
 	consoleURL := "http://" + st.listen + "/?app=1"
 	onOpen := func() { _ = openAppWindow(consoleURL) }
 	if nativeReopen != nil {
 		onOpen = func() { nativeReopen(consoleURL) }
 	}
 	if !*noTray {
-		n := newNotifier(st.settings.NotifyEnabled())
-		st.wireDesktopHooks(n)
+		st.wireDesktopHooks()
 		autoEnabled, autoToggle := st.autostartCallbacks()
-		st.srv.OnRestart = restartHook(stop, func() { systray.Quit() }) // 桌面态连托盘一并收尾
+		st.srv.OnRestart = st.restartHook(stop, func() { systray.Quit() }) // 桌面态连托盘一并收尾
 		go runTrayIsolated(TrayOptions{
 			OnOpen: onOpen,
 			OnExit: func() {

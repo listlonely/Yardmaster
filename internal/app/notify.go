@@ -26,6 +26,14 @@ var notifyIconPNG []byte
 // restNotifyTTL 是同一 key 的通知限频窗口。
 const restNotifyTTL = 10 * time.Minute
 
+// 接力通知 key（2026-11-23 用户反馈：升级/重启的接力窗口期需可感知，
+// 接棒完成需带时间戳）。发起与完成必须用不同 key——同一 key 会被
+// 10min 限频吞掉第二条（发起→完成仅隔数秒）。
+const (
+	relayStartKey = "relay-start" // 旧进程退出前：新进程已就位、正在交接
+	relayDoneKey  = "relay-done"  // 接力进程：healthz 探活通过/失败回滚
+)
+
 // notifier 是桌面气泡通知器（nil 安全：零值不发送）。
 type notifier struct {
 	enabled bool

@@ -261,14 +261,18 @@ func spawnRestart() error {
 }
 
 // restartHook 装配用户触发重启回调（OnRestart 与托盘菜单共用）：spawn
-// 成功后延迟收尾（HTTP 响应送回 + 留痕余量），stop 令 serve ctx 结束、
-// quitTray 收托盘循环（nil=无托盘场景）。失败返回错误（当前进程继续
-// 运行，调用方按普通错误呈现）。
-func restartHook(stop context.CancelFunc, quitTray func()) func() error {
+// 成功后气泡告知接力窗口期（2026-11-23 用户反馈：托盘/窗口在交接期
+// 不可用，需可感知——「新进程已就位」+ 时间戳），延迟收尾（HTTP 响应
+// 送回 + 留痕余量），stop 令 serve ctx 结束、quitTray 收托盘循环
+// （nil=无托盘场景）。失败返回错误（当前进程继续运行，调用方按普通
+// 错误呈现）。
+func (st *serveSetup) restartHook(stop context.CancelFunc, quitTray func()) func() error {
 	return func() error {
 		if err := spawnRestart(); err != nil {
 			return err
 		}
+		st.notifier.send(relayStartKey, "Yardmaster 接力重启",
+			fmt.Sprintf("新进程已就位 · 数秒内接管网关（%s）", time.Now().Format("15:04:05")))
 		go func() {
 			time.Sleep(500 * time.Millisecond)
 			stop()
@@ -333,12 +337,20 @@ func relayFinalize(st *serveSetup, relay relayState) {
 					}
 				}
 				slog.Info("自动更新完成", "version", Version, "old_pid", relay.oldPid)
+				// 接棒完成气泡（2026-11-23 用户反馈）：交接窗口结束的
+				// 明确信号，带完成时刻——与发起通知用不同 key 免限频。
+				st.notifier.send(relayDoneKey, "Yardmaster 接棒完成",
+					fmt.Sprintf("v%s 已接管网关 · %s", Version, time.Now().Format("15:04:05")))
 				return
 			}
 		}
 		time.Sleep(2 * time.Second)
 	}
 	slog.Error("新版健康探活超时，回滚到旧版", "url", url)
+	// 接棒失败气泡（回滚 spawn 旧版是普通启动，不会再有完成通知——
+	// 失败必须显式闭环，否则用户面对无托盘窗口期不知何时恢复）。
+	st.notifier.send(relayDoneKey, "Yardmaster 接棒失败",
+		fmt.Sprintf("v%s 健康探活超时，已回滚旧版（详情见日志）", Version))
 	rollbackRelay()
 	os.Exit(1)
 }
