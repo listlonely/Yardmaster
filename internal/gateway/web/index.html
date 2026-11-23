@@ -164,6 +164,10 @@
           <input id="set-fx" class="set-field num" type="number" min="0" step="0.01" placeholder="如 7.24">
         </div>
         <div class="row pref">
+          <div class="who"><div class="name">额度刷新间隔（分钟）</div><div class="sub">后台探测各账号余额/订阅窗口的周期（1–720，默认 30）；保存即时生效，无需重启。控制台「探测余额」/保存服务商仍为即时触发</div></div>
+          <input id="set-quota-interval" class="set-field num" type="number" min="1" max="720" step="1" placeholder="30">
+        </div>
+        <div class="row pref">
           <div class="who"><div class="name">色盲友好色板</div><div class="sub">状态/徽章/进度条改用 Okabe-Ito 色系（仅本浏览器生效）</div></div>
           <label class="switch-line"><button type="button" class="lib-switch" id="set-colorblind" role="switch" aria-checked="false" aria-label="色盲友好色板"><i></i></button></label>
         </div>
@@ -171,12 +175,13 @@
       <div class="label"><span class="tick"></span><b>代理</b></div>
       <div class="list prefs">
         <div class="row pref" id="sec-proxy">
-          <div class="who"><div class="name">全局代理</div><div class="sub">只需在此设置一次；添加服务商/账号时选择是否走它。留空=跟随系统；direct=显式直连；http(s)/socks5://…</div></div>
+          <div class="who"><div class="name">全局代理</div><div class="sub wrap">只需在此设置一次；添加服务商/账号时选择是否走它。留空=跟随系统；direct=显式直连；http(s)/socks5://host:port（可带凭证）</div></div>
           <input id="set-proxy" class="set-field" spellcheck="false" autocomplete="off">
         </div>
       </div>
       <div class="after-list">
         <button type="button" class="btn-primary" id="btn-save-settings">保存设置</button>
+        <button type="button" class="text" id="btn-restart-app" title="重启 Yardmaster 进程（网关短暂离线，桌面窗口/托盘自动恢复）">⟳ 重启</button>
         <span class="sub" id="settings-msg"></span>
       </div>
       <p class="foot-note">保存后写入 settings.json；监听地址等装配期字段需重启 serve 完全生效，令牌变更即时生效。所有写路径经备份栈 + 审计。</p>

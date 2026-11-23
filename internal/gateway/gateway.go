@@ -106,6 +106,16 @@ type Server struct {
 	// 用于即时落地需进程外生效的偏好（开机自启动注册表 Run 键），网关
 	// 核心不感知注册表实现。
 	OnSettingsChange func(store.Settings)
+	// OnRestart 用户触发进程重启钩子（2026-11-23）：由壳层装配（spawn
+	// 接力进程 + 延迟收尾退出），POST /api/restart 的执行体。nil=未装
+	// 配（管理 API 返回 503）；网关核心不感知 exe/接力细节（依赖方向：
+	// app→gateway 单向）。
+	OnRestart func() error
+	// QuotaInterval 额度轮询周期（2026-11-23 可配）：StartQuotaPoller 的
+	// ticker 周期；0=默认 30 分钟。SetQuotaInterval 热切换（设置保存即
+	// 时生效，无需重启）。
+	QuotaInterval time.Duration
+	quotaReset    chan time.Duration // 热切换信号（StartQuotaPoller 装配）
 	// AgentPick（2026-11-13）：route.pick 钩子——Agent 插件按请求语境从
 	// 候选中选模型（payload {message,intent,candidates}，响应 {pick:序号}）。
 	// AttachPlugins 装配（经 Registry，自带 3 失败冷却 5 分钟）；nil=未挂
@@ -145,6 +155,7 @@ func (s *Server) routes() http.Handler {
 	})
 	mux.HandleFunc("POST /api/reload", s.handleReload)
 	mux.HandleFunc("POST /api/update/install", s.handleUpdateInstall) // M11-W3：应用内自动更新
+	mux.HandleFunc("POST /api/restart", s.handleRestart)              // 2026-11-23：用户触发进程重启
 	mux.HandleFunc("GET /api/cost", s.handleCost)
 	mux.HandleFunc("POST /api/pricing/sync", s.handlePricingSync)        // M7-W1：models.dev 单价同步
 	mux.HandleFunc("POST /api/quota/probe", s.handleQuotaProbe)          // M9-W3：手动触发余额轮询

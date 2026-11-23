@@ -254,6 +254,16 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, name st
 			writeAPIErr(w, badRequest(fmt.Errorf("close_action 取值非法 %q（合法：hide / exit）", f.CloseAction)))
 			return
 		}
+		// 额度刷新间隔（2026-11-23）：0=保留现值（表单未提供/清空即保
+		// 留——清间隔属罕见需求走 CLI）；显式值越界拒绝落盘（写入口把
+		// 关；读侧 Settings.QuotaIntervalOrDefault 另有兜底）。保存后
+		// SetQuotaInterval 热切换，无需重启。
+		if f.QuotaIntervalMin <= 0 {
+			f.QuotaIntervalMin = cur.QuotaIntervalMin
+		} else if f.QuotaIntervalMin > store.QuotaIntervalMax {
+			writeAPIErr(w, badRequest(fmt.Errorf("quota_interval_min 越界 %d（合法：1–%d 分钟）", f.QuotaIntervalMin, store.QuotaIntervalMax)))
+			return
+		}
 		// 安全基线（F10）：非回环监听必须带令牌；非法地址拒绝落盘。
 		if f.Listen != "" {
 			if _, _, err := net.SplitHostPort(f.Listen); err != nil {
@@ -275,6 +285,8 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, name st
 		}
 		// 命名令牌热替换：tokens 变更即时生效（listen 仍为装配期字段）。
 		s.SetTokenHashes(TokenHashesOf(f.Tokens))
+		// 额度刷新间隔热切换（2026-11-23）：保存即时生效，无需重启。
+		s.SetQuotaInterval(f.QuotaIntervalOrDefault())
 		// 设置落盘钩子（2026-11-11）：壳层即时落地进程外偏好（开机自
 		// 启动注册表 Run 键）；失败在钩子内降级留痕，不影响写响应。
 		if s.OnSettingsChange != nil {
@@ -463,6 +475,25 @@ func (s *Server) handleUpdateInstall(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	s.writeResultExtra(w, map[string]any{"update": "installed", "action": "网关正在重启，控制台将自动重连"})
+}
+
+// handleRestart POST /api/restart（2026-11-23）：用户触发的进程重启
+//（设置页/托盘「重启」按钮的执行体，壳层装配 OnRestart——spawn 接力
+// 进程等旧进程退出后按普通路径启动，语义同自动更新换代）。/api/* 令
+// 牌闸如常；同步段返回结果，重启由钩子层延迟执行（保证本响应先送回
+// 客户端）。留痕=slog 结构化（接力 pid 等，见 spawnRestart）。
+func (s *Server) handleRestart(w http.ResponseWriter, _ *http.Request) {
+	if s.OnRestart == nil {
+		writeAPIErr(w, &apiError{status: http.StatusServiceUnavailable,
+			Msg: "重启引擎未装配（桌面壳 serve/app 模式才提供 /api/restart；headless 场景请手动重启进程）"})
+		return
+	}
+	slog.Info("管理 API 触发进程重启", "version", s.Version)
+	if err := s.OnRestart(); err != nil {
+		writeAPIErr(w, &apiError{status: http.StatusConflict, Msg: "重启失败: " + err.Error()})
+		return
+	}
+	s.writeResultExtra(w, map[string]any{"restart": "requested", "action": "网关正在重启，桌面窗口/托盘将自动恢复"})
 }
 
 // handleProviderPresets 返回内置厂商预设表（只读）：前端「添加

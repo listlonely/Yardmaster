@@ -6,12 +6,27 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"yardmaster/internal/provider"
 )
 
 type conf struct {
 	Port int `json:"port"`
+}
+
+// QuotaIntervalOrDefault 归一（2026-11-23）：缺省 30 分钟、正值保留、
+// 越界收敛 720。
+func TestQuotaIntervalOrDefault(t *testing.T) {
+	if got := (Settings{}).QuotaIntervalOrDefault(); got != 30*time.Minute {
+		t.Fatalf("缺省应 30min: %v", got)
+	}
+	if got := (Settings{QuotaIntervalMin: 5}).QuotaIntervalOrDefault(); got != 5*time.Minute {
+		t.Fatalf("5min 应保留: %v", got)
+	}
+	if got := (Settings{QuotaIntervalMin: 5000}).QuotaIntervalOrDefault(); got != 720*time.Minute {
+		t.Fatalf("越界应收敛 720min: %v", got)
+	}
 }
 
 // DefaultPaths 数据目录可配（2026-11-17）：YM_DATA_DIR 覆盖默认

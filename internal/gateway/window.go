@@ -20,6 +20,7 @@ import (
 
 	"yardmaster/internal/netproxy"
 	"yardmaster/internal/provider"
+	"yardmaster/internal/store"
 )
 
 // parseWindowHeaders 从成功响应头解析厂商订阅窗口：
@@ -350,12 +351,13 @@ type probeResult struct {
 	Err      string               `json:"error,omitempty"`
 }
 
-// StartQuotaPoller 启动余额轮询后台任务（随 ctx 退出；30 分钟或
-// QuotaProbe.Interval）。
+// StartQuotaPoller 启动余额轮询后台任务（随 ctx 退出；周期=Server.
+// QuotaInterval，SetQuotaInterval 可热切换，缺省 30 分钟）。
 func (s *Server) StartQuotaPoller(ctx context.Context) {
+	s.quotaReset = make(chan time.Duration, 1)
 	go func() {
 		s.pollQuotas(ctx) // 启动即首轮：重启/新增服务商后无需等满一个轮询周期
-		ticker := time.NewTicker(30 * time.Minute)
+		ticker := time.NewTicker(s.quotaPeriod())
 		defer ticker.Stop()
 		for {
 			select {
@@ -363,9 +365,35 @@ func (s *Server) StartQuotaPoller(ctx context.Context) {
 				return
 			case <-ticker.C:
 				s.pollQuotas(ctx) // 后台轮询：结果仅日志留痕
+			case d := <-s.quotaReset:
+				ticker.Reset(d) // 新间隔即时生效（设置保存，无需重启）
 			}
 		}
 	}()
+}
+
+// quotaPeriod 当前额度轮询周期（未配置回落默认 30 分钟）。
+func (s *Server) quotaPeriod() time.Duration {
+	if s.QuotaInterval > 0 {
+		return s.QuotaInterval
+	}
+	return time.Duration(store.QuotaIntervalDefault) * time.Minute
+}
+
+// SetQuotaInterval 热切换额度轮询周期（设置保存后即时生效）；轮询器
+// 未启动时仅记录值（下次启动生效）。非正值忽略（读侧语义由 Settings.
+// QuotaIntervalOrDefault 兜底，此处不重复）。
+func (s *Server) SetQuotaInterval(d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	s.QuotaInterval = d
+	if s.quotaReset != nil {
+		select {
+		case s.quotaReset <- d:
+		default:
+		}
+	}
 }
 
 // pollQuotas 轮询所有配置了 QuotaProbe 的 provider 的各账号余额。

@@ -241,6 +241,45 @@ func installStaged(stageDir string, restart func(), allowSame bool) error {
 	return nil
 }
 
+// spawnRestart 用户触发的进程重启（2026-11-23 设置页/托盘「重启」）：
+// spawn 同入口形态的当前 exe（argv 原样透传 + relayEnv=旧 pid——接力
+// 进程等旧进程退出、端口让位后按普通路径启动，语义同自动更新换代，
+// 只是 exe 不换侧）。spawn 失败返回错误，当前进程不受影响。
+func spawnRestart() error {
+	curExe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("定位当前可执行文件失败: %w", err)
+	}
+	cmd := exec.Command(curExe, os.Args[1:]...)
+	cmd.Env = append(os.Environ(), relayEnv+"="+strconv.Itoa(os.Getpid()))
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr // 接力 banner 落同一终端
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("启动接力进程失败: %w", err)
+	}
+	slog.Info("用户触发重启（接力进程已就位）", "new_pid", cmd.Process.Pid, "old_pid", os.Getpid())
+	return nil
+}
+
+// restartHook 装配用户触发重启回调（OnRestart 与托盘菜单共用）：spawn
+// 成功后延迟收尾（HTTP 响应送回 + 留痕余量），stop 令 serve ctx 结束、
+// quitTray 收托盘循环（nil=无托盘场景）。失败返回错误（当前进程继续
+// 运行，调用方按普通错误呈现）。
+func restartHook(stop context.CancelFunc, quitTray func()) func() error {
+	return func() error {
+		if err := spawnRestart(); err != nil {
+			return err
+		}
+		go func() {
+			time.Sleep(500 * time.Millisecond)
+			stop()
+			if quitTray != nil {
+				quitTray()
+			}
+		}()
+		return nil
+	}
+}
+
 // relayInit 检测接力环境（relayEnv）：等待旧进程退出（端口让位）后返回
 // 接力上下文；普通启动返回零值（oldPid=0）。等待超时不阻断——残余占用
 // 会让 serve bind 失败，自然进入回滚。

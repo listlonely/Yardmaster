@@ -1,7 +1,10 @@
 // 用户设置（settings.json）：全局代理、L1 分类器、监听与访问令牌。
 package store
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // Settings 是用户级设置。
 type Settings struct {
@@ -68,6 +71,11 @@ type Settings struct {
 	// 兜底）。开启前置：启用中的 classify 插件且分类脑（options.model）
 	// 已配置——settings 写入口校验，插件失败由判定链自然降级。
 	AgentTakeover *bool `json:"agent_takeover,omitempty"`
+
+	// 额度刷新间隔（2026-11-23）：后台余额/订阅窗口探测的周期（分钟）。
+	// 0=缺省 30 分钟；1–720 合法，读侧越界收敛到 720。控制台设置页可
+	// 改，保存经 SetQuotaInterval 即时生效（无需重启）。
+	QuotaIntervalMin int `json:"quota_interval_min,omitempty"`
 }
 
 // TokenEntry 是一枚命名访问令牌（多令牌，按客户端隔离）：生成时返回
@@ -175,6 +183,26 @@ func (s Settings) CloseActionMode() string {
 // hide）。
 func ValidCloseAction(v string) bool {
 	return v == "" || v == CloseHide || v == CloseExit
+}
+
+// 额度刷新间隔边界（分钟）。
+const (
+	QuotaIntervalDefault = 30
+	QuotaIntervalMax     = 720
+)
+
+// QuotaIntervalOrDefault 归一额度刷新间隔：<=0 回落默认 30 分钟，越界
+// 收敛到 720（读不懂/读越界=最保守的可用行为——不给 0/负值制造忙轮
+// 询，也不放任超大值让额度长期失新）。
+func (s Settings) QuotaIntervalOrDefault() time.Duration {
+	m := s.QuotaIntervalMin
+	if m <= 0 {
+		m = QuotaIntervalDefault
+	}
+	if m > QuotaIntervalMax {
+		m = QuotaIntervalMax
+	}
+	return time.Duration(m) * time.Minute
 }
 
 // OTelSettings 是 OTLP 导出配置。

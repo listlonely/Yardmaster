@@ -605,6 +605,7 @@ async function loadSettings() {
     $('set-update').value = s.update || 'check';
     $('set-close').value = s.close_action || 'hide';
     $('set-fx').value = s.fx_usd_cny > 0 ? s.fx_usd_cny : '';
+    $('set-quota-interval').value = s.quota_interval_min > 0 ? s.quota_interval_min : '';
     $('set-notify').classList.toggle('on', s.notify !== false); // 指针语义：nil=开
     $('set-notify').setAttribute('aria-checked', String(s.notify !== false));
     $('set-autostart').classList.toggle('on', s.autostart === true); // 指针语义：nil=关
@@ -643,7 +644,9 @@ $('btn-save-settings').addEventListener('click', async () => {
     update: $('set-update').value,
     close_action: $('set-close').value,
     fx_usd_cny: parseFloat($('set-fx').value) || 0, // 0=保留现值（服务端语义）
+    quota_interval_min: parseInt($('set-quota-interval').value, 10) || 0, // 0=保留现值
   };
+  const proxyChanged = (cache.settings?.global_proxy || '') !== body.global_proxy;
   busy(b, true, '保存中…');
   try {
     const r = await api('/api/config/settings', {
@@ -652,6 +655,9 @@ $('btn-save-settings').addEventListener('click', async () => {
       body: JSON.stringify(body),
     });
     cache.settings = { ...cache.settings, ...body };
+    // 全局代理变更即探（2026-11-23）：网络路径变了，额度/窗口探测结果
+    // 可能随之变化——立即重探所有服务商并刷新，免等一个轮询周期。
+    if (proxyChanged) probeQuotas();
     // listen 待重启时点明双轨：当前服务地址（页面来源）与重启后将生效
     // 的配置地址——否则令牌弹框/引导的地址与监听字段「对不上」。
     const pending = listenPending();
@@ -665,6 +671,24 @@ $('btn-save-settings').addEventListener('click', async () => {
     renderSideGw(true);
   } catch (e) {
     status('保存失败: ' + e.message, 'err');
+  } finally {
+    busy(b, false);
+  }
+});
+
+// 重启按钮（2026-11-23）：POST /api/restart 触发接力重启（桌面窗口/
+// 托盘随新进程恢复；页面随进程重启自动重载）。确认框后发令。
+$('btn-restart-app').addEventListener('click', async () => {
+  const ok = await confirmModal('重启 Yardmaster', '网关会短暂离线，桌面窗口/托盘将随新进程自动恢复。', { yes: '重启', danger: false });
+  if (!ok) return;
+  const b = $('btn-restart-app');
+  busy(b, true, '重启中…');
+  try {
+    const r = await api('/api/restart', { method: 'POST' });
+    $('settings-msg').textContent = r.action || '网关正在重启…';
+    status('重启指令已发出，稍候自动恢复', 'ok');
+  } catch (e) {
+    status('重启失败: ' + e.message, 'err');
   } finally {
     busy(b, false);
   }

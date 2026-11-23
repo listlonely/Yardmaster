@@ -125,6 +125,7 @@ func setupGateway() (*serveSetup, error) {
 		Planner:       planner,
 		Version:       Version,
 		GlobalProxy:   settings.GlobalProxy,
+		QuotaInterval: settings.QuotaIntervalOrDefault(), // 额度刷新间隔（设置页可改，保存热切换）
 		Rules:         gateway.NewRuleEngine(paths.RulesPath()),
 		Keys:          gateway.NewKeyStore(paths.KeysPath()),
 		Traces:        gateway.NewTraceLog(paths.TraceDir()),
@@ -471,10 +472,12 @@ func runServe(args []string, stdout io.Writer, relay relayState) error {
 	defer st.startHelpers(ctx)()
 	st.banner(stdout)
 	serveUpdatePath(st, relay, stop)
+	st.srv.OnRestart = restartHook(stop, nil) // headless serve 也支持在线重启（接力语义）
 	if *tray {
 		n := newNotifier(st.settings.NotifyEnabled())
 		st.wireDesktopHooks(n)
 		autoEnabled, autoToggle := st.autostartCallbacks()
+		st.srv.OnRestart = restartHook(stop, func() { systray.Quit() }) // 托盘态连托盘一并收尾
 		go runTrayIsolated(TrayOptions{
 			OnOpen: func() { _ = openBrowser("http://" + st.listen + "/") },
 			OnExit: func() {
@@ -486,6 +489,7 @@ func runServe(args []string, stdout io.Writer, relay relayState) error {
 			Quotas:           st.trayQuotaLines,
 			Update:           st.trayUpdateQuery,
 			OnUpdateInstall:  st.srv.OnUpdateInstall,
+			OnRestart:        st.srv.OnRestart,
 			AutostartEnabled: autoEnabled,
 			AutostartToggle:  autoToggle,
 		})
@@ -536,6 +540,7 @@ func runApp(args []string, stdout io.Writer, relay relayState) error {
 	defer st.startHelpers(ctx)()
 	st.banner(stdout)
 	serveUpdatePath(st, relay, stop)
+	st.srv.OnRestart = restartHook(stop, nil) // 兜底装配（无托盘场景也能在线重启）
 	consoleURL := "http://" + st.listen + "/?app=1"
 	onOpen := func() { _ = openAppWindow(consoleURL) }
 	if nativeReopen != nil {
@@ -545,6 +550,7 @@ func runApp(args []string, stdout io.Writer, relay relayState) error {
 		n := newNotifier(st.settings.NotifyEnabled())
 		st.wireDesktopHooks(n)
 		autoEnabled, autoToggle := st.autostartCallbacks()
+		st.srv.OnRestart = restartHook(stop, func() { systray.Quit() }) // 桌面态连托盘一并收尾
 		go runTrayIsolated(TrayOptions{
 			OnOpen: onOpen,
 			OnExit: func() {
@@ -556,6 +562,7 @@ func runApp(args []string, stdout io.Writer, relay relayState) error {
 			Quotas:           st.trayQuotaLines,
 			Update:           st.trayUpdateQuery,
 			OnUpdateInstall:  st.srv.OnUpdateInstall,
+			OnRestart:        st.srv.OnRestart,
 			AutostartEnabled: autoEnabled,
 			AutostartToggle:  autoToggle,
 		})

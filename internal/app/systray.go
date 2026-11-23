@@ -64,6 +64,9 @@ type TrayOptions struct {
 	// nil=走自替换引擎（下载→换侧→接力重启），nil=回退打开 releases
 	// 页（无桌面壳装配的场景）。
 	OnUpdateInstall func() error
+	// OnRestart 点击「重启」菜单项（2026-11-23）：spawn 接力进程后旧
+	// 进程延迟收尾退出（桌面窗口/托盘随新进程恢复）。nil=隐藏该项。
+	OnRestart func() error
 	// AutostartEnabled 返回当前「开机自启动」偏好（2026-11-11，托盘
 	// checkbox 菜单项初态）。nil=隐藏该项（未装配壳层偏好的场景）。
 	AutostartEnabled func() bool
@@ -121,6 +124,10 @@ func runTray(opts TrayOptions) {
 			mQuotas[i].Hide()
 		}
 		systray.AddSeparator()
+		mRestart := systray.AddMenuItem("重启", "重启 Yardmaster（网关短暂离线，窗口/托盘自动恢复）")
+		if opts.OnRestart == nil {
+			mRestart.Hide()
+		}
 		mQuit := systray.AddMenuItem("退出", "停止网关并退出")
 		// nil-channel 惯用法：未装配自启动回调时 mAutoCh 为 nil，select
 		// 中该 case 永不就绪（不能在 case 表达式里做 mAuto != nil && 判
@@ -164,6 +171,21 @@ func runTray(opts TrayOptions) {
 							return
 						}
 						mUpdate.SetTitle("已更新，正在重启…")
+					}()
+				case <-mRestart.ClickedCh:
+					if opts.OnRestart == nil {
+						continue
+					}
+					// 菜单转「重启中…」禁用态（同更新安装语义）；失败恢
+					// 复可重试，成功后网关重启托盘随之消失。
+					mRestart.SetTitle("重启中…")
+					mRestart.Disable()
+					go func() {
+						if err := opts.OnRestart(); err != nil {
+							slog.Warn("托盘触发重启失败", "err", err)
+							mRestart.SetTitle("重启失败（点击重试，详情见日志）")
+							mRestart.Enable()
+						}
 					}()
 				case <-mQuit.ClickedCh:
 					if opts.OnExit != nil {
