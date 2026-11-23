@@ -1474,7 +1474,8 @@ yardmaster provider add-oauth gemini    -from gemini-cli</pre>` +
           return cur;
         });
         status(`服务商 ${editing.id} 已更新（热生效，写前备份已留底）`, 'ok');
-        afterWrite();
+        if (key && !key.startsWith('***')) probeAfterWrite(editing.id); // 换 Key 即探额度
+        else await afterWrite();
         return;
       }
       const v = formVals(form);
@@ -1524,7 +1525,7 @@ yardmaster provider add-oauth gemini    -from gemini-cli</pre>` +
         }] };
       });
       status(`服务商已保存：${id}/${accName}${models.length ? `（含 ${models.length} 个模型）` : ''}（${r.effect === 'immediate' ? '已热生效' : r.effect}，写前备份已留底）`, 'ok');
-      afterWrite();
+      probeAfterWrite(id); // 新账号即探额度，免等 30min 轮询
     },
   });
   dlg.catch(() => {}); // 取消/关闭不算错误（吞掉未处理 rejection）
@@ -1804,7 +1805,7 @@ function addAccountModal(provID) {
         return cur;
       });
       status(`账号已添加：${provID}/${name}（热生效，写前备份已留底）`, 'ok');
-      await afterWrite();
+      await probeAfterWrite(provID); // 新账号即探额度，免等 30min 轮询
     },
   });
   dlg.catch(() => {}); // 取消/关闭不算错误
@@ -2232,6 +2233,19 @@ async function afterWrite() {
   if (!q('#page-overview').hidden) loadOverview();
   if (!q('#page-providers').hidden) loadProviders();
   if (!q('#page-routing').hidden) loadRouting();
+}
+
+// 保存新账号/换 Key 后静默探测该服务商余额并刷新（2026-11-23）：额度
+// 轮询器只在启动与每 30 分钟跑，新账号要等下一轮才见额度窗口/余额——
+// 保存即探，免手动「探测余额」；探测失败不打断保存流程（下一轮兜底）。
+async function probeAfterWrite(provID) {
+  try {
+    await api('/api/quota/probe', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider_id: provID }),
+    });
+  } catch { /* 探测失败静默 */ }
+  afterWrite();
 }
 
 // 客户端成员校验（与服务端 validateProviders/validateMember 同规：
