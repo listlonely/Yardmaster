@@ -94,6 +94,14 @@ func runTray(opts TrayOptions) {
 		systray.SetIcon(trayIcon())
 		systray.SetTitle("Yardmaster")
 		systray.SetTooltip("Yardmaster 网关运行中")
+		// 左键直开窗口（2026-11-24 用户反馈「任务栏图标点击无反应」）：
+		// 库默认左键=弹菜单，用户体感即「点了没反应」；改为主流托盘
+		// 语义——左键打开/前置窗口，右键保持菜单。nil 时维持默认。
+		systray.SetOnTapped(func() {
+			if opts.OnOpen != nil {
+				opts.OnOpen()
+			}
+		})
 		mOpen := systray.AddMenuItem("打开窗口", "打开 Yardmaster 应用窗口/控制台")
 		var mAuto *systray.MenuItem
 		if opts.AutostartToggle != nil {
