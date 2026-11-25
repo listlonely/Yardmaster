@@ -23,6 +23,20 @@ const autostartValueName = "Yardmaster"
 // autostartRunKeyPath 是 HKCU 下的当前用户登录项路径。
 const autostartRunKeyPath = `Software\Microsoft\Windows\CurrentVersion\Run`
 
+// autostartValueExists 报告 Run 键当前是否已有 Yardmaster 条目（壳层
+// 看门狗周期校验用，2026-11-25：外部启动器/优化工具会清 Run 键——当日
+// 实测被删而进程日志无任何「已关闭」记录）。只读探测，失败=false（校验
+// 方将按缺失补写，幂等无害）。
+func autostartValueExists() bool {
+	key, err := registry.OpenKey(registry.CURRENT_USER, autostartRunKeyPath, registry.QUERY_VALUE)
+	if err != nil {
+		return false
+	}
+	defer key.Close()
+	_, _, err = key.GetStringValue(autostartValueName)
+	return err == nil
+}
+
 // applyAutostart 按偏好写/删注册表 Run 键（幂等；enable=true 确保存在，
 // false 确保不存在）。
 func applyAutostart(enable bool) {

@@ -173,3 +173,62 @@ func TestShellWatchdogStampGarbageNotCooling(t *testing.T) {
 		t.Fatal("非法戳内容不应视为冷却中")
 	}
 }
+
+// autostartVerifyFixture 注入键探测/补写对并返回计数闭包（t.Cleanup 恢复）。
+func autostartVerifyFixture(t *testing.T, exists bool) (st *serveSetup, applyCalls *int, verify func() bool) {
+	t.Helper()
+	oldExists, oldApply := autostartExistsFn, applyAutostartFn
+	calls := 0
+	autostartExistsFn = func() bool { return exists }
+	applyAutostartFn = func(bool) { calls++ }
+	t.Cleanup(func() { autostartExistsFn, applyAutostartFn = oldExists, oldApply })
+	st = &serveSetup{paths: store.Paths{AppDir: t.TempDir()}, notifier: newNotifier(false),
+		settings: store.Settings{}}
+	return st, &calls, st.autostartVerify
+}
+
+func TestAutostartVerifyPreferenceOffSkips(t *testing.T) {
+	// 偏好关闭：键不存在是目标态，不探测不补写。
+	st, calls, verify := autostartVerifyFixture(t, false)
+	st.settings.Autostart = nil
+	if verify() {
+		t.Fatal("偏好关闭应返回 false（不参与节流累计）")
+	}
+	if *calls != 0 {
+		t.Fatalf("偏好关闭不应补写，实际补写 %d 次", *calls)
+	}
+	off := false
+	st.settings.Autostart = &off
+	if verify() {
+		t.Fatal("显式 false 同样应跳过")
+	}
+	if *calls != 0 {
+		t.Fatalf("显式 false 不应补写，实际补写 %d 次", *calls)
+	}
+}
+
+func TestAutostartVerifyRestoresMissingKey(t *testing.T) {
+	// 偏好开 + 键被外删：幂等补写一次。
+	on := true
+	st, calls, verify := autostartVerifyFixture(t, false)
+	st.settings.Autostart = &on
+	if !verify() {
+		t.Fatal("偏好开启应返回 true（参与节流累计）")
+	}
+	if *calls != 1 {
+		t.Fatalf("键缺失应恰好补写一次，实际 %d", *calls)
+	}
+}
+
+func TestAutostartVerifyIntactKeyNoRewrite(t *testing.T) {
+	// 偏好开 + 键健在：零写放大（不重写）。
+	on := true
+	st, calls, verify := autostartVerifyFixture(t, true)
+	st.settings.Autostart = &on
+	if !verify() {
+		t.Fatal("偏好开启应返回 true")
+	}
+	if *calls != 0 {
+		t.Fatalf("键健在不应重写，实际补写 %d 次", *calls)
+	}
+}

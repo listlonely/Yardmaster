@@ -8,3 +8,7 @@ package app
 
 // applyAutostart 非 Windows 平台 no-op。
 func applyAutostart(bool) {}
+
+// autostartValueExists 非 Windows 无 Run 键可查（未落地壳层偏好的对称
+// 探测桩）：恒 true=视为存在，看门狗周期校验永不补写。
+func autostartValueExists() bool { return true }

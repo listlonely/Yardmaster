@@ -34,10 +34,11 @@ import (
 
 // 看门狗参数：探测节奏 / 触发阈值 / 冷却窗（见文件头注释）。
 const (
-	shellHangPollEvery = 15 * time.Second         // 单次探测间隔
-	shellHangStreak    = 4                        // 连续命中次数（≈60s）
-	shellHangCooldown  = 10 * time.Minute         // 跨进程冷却窗
-	shellHangStampName = "shell-hang-relay.stamp" // 数据目录下的冷却戳
+	shellHangPollEvery  = 15 * time.Second         // 单次探测间隔
+	shellHangStreak     = 4                        // 连续命中次数（≈60s）
+	shellHangCooldown   = 10 * time.Minute         // 跨进程冷却窗
+	shellHangStampName  = "shell-hang-relay.stamp" // 数据目录下的冷却戳
+	autostartCheckEvery = 10 * time.Minute         // 自启键周期校验间隔（2026-11-25 外删自愈）
 )
 
 // shellHealth 是单次壳层探测结论。
@@ -127,9 +128,35 @@ func (st *serveSetup) shellWatchdogStep(streak *int, relay func() error) bool {
 	return false
 }
 
+// autostartVerifyFn 是自启键周期校验的间接引用（测试注入点）：偏好开启
+// 但 Run 键被外部程序清掉时补写（applyAutostart 幂等）。返回 true=校验
+// 执行过（Windows 实装）；false=本平台/偏好关闭不校验。
+var autostartVerifyFn func() bool
+
+// existsApply 注入对（2026-11-25）：键存在探测与补写动作的间接引用，
+// 测试替换避免触碰真实注册表。
+var (
+	autostartExistsFn = autostartValueExists
+	applyAutostartFn  = applyAutostart
+)
+
+// autostartVerify 校验动作（仅偏好开启时）：键缺失=被外删，幂等补写。
+func (st *serveSetup) autostartVerify() bool {
+	if !st.settings.AutostartEnabled() {
+		return false // 偏好关闭=键不存在是目标态，不校验不补写
+	}
+	if !autostartExistsFn() {
+		slog.Warn("开机自启键被外部删除（Run 键缺失），自动补写")
+		applyAutostartFn(true) // 幂等；写入结果由 applyAutostart 留痕（含 exe 路径）
+	}
+	return true
+}
+
 // runShellWatchdog 看门狗主循环（桌面壳装配）。触发后接力钩子已异步
 // 收尾（stop/quitTray），本 goroutine 返回、进程随即退出。任何 panic
 // 被 recover 隔离并放弃本次运行的自动自愈（宁可不自愈也不拖垮网关）。
+// 兼挂自启键周期校验（2026-11-25：外部启动器/优化工具清 Run 键自愈，
+// 每 autostartCheckEvery 一次节流，与本进程时基独立）。
 func (st *serveSetup) runShellWatchdog(stop context.CancelFunc, quitTray func()) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -138,12 +165,28 @@ func (st *serveSetup) runShellWatchdog(stop context.CancelFunc, quitTray func())
 	}()
 	relay := st.restartHookNotify(stop, quitTray, shellHangKey,
 		"Yardmaster 检测到壳层卡死", "壳层持续无响应，已自动接力重启")
+	verify := autostartVerifyFn // 测试注入点；nil=用真实校验（不回写全局避免并发）
+	if verify == nil {
+		verify = st.autostartVerify
+	}
 	tick := time.NewTicker(shellHangPollEvery)
 	defer tick.Stop()
+	var sinceCheck time.Duration // 自启校验计时（跨 tick 累计，与壳探测共用 15s 时基）
 	streak := 0
-	for range tick.C {
-		if st.shellWatchdogStep(&streak, relay) {
-			return
+	for {
+		select {
+		case <-tick.C:
+			if st.shellWatchdogStep(&streak, relay) {
+				return
+			}
+			sinceCheck += shellHangPollEvery
+			if sinceCheck >= autostartCheckEvery {
+				sinceCheck = 0
+				go func() { // 校验含注册表 IO：异步执行不阻塞壳探测节奏
+					defer func() { _ = recover() }()
+					verify()
+				}()
+			}
 		}
 	}
 }
