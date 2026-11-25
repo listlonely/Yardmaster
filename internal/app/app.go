@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -98,6 +99,9 @@ type serveSetup struct {
 	listen    string
 	notifier  *notifier // 桌面气泡通知器（beeep；setupGateway 创建——接力进程窗口未起/无托盘态也能发）
 	updateStop context.CancelFunc // serve/app ctx stop（更新安装收尾；attachUpdateHooks 装配）
+	// watchdogOn 壳层看门狗开关（2026-11-25）：atomic 支持设置页保存
+	// 热切换（wireSettingsHook 落盘钩子即时 Store，无需重启）。
+	watchdogOn atomic.Bool
 }
 
 // setupGateway 完成网关装配（配置读取、安全基线、Server 构造）。
@@ -144,8 +148,10 @@ func setupGateway() (*serveSetup, error) {
 	// 智能路由接管（2026-11-16）：启动装载（settings 写钩子热切换）。
 	srv.Intents.SetAgentTakeover(settings.AgentTakeoverEnabled())
 
-	return &serveSetup{srv: srv, planner: planner, paths: paths, settings: settings,
-		listen: listen, notifier: newNotifier(settings.NotifyEnabled())}, nil
+	st := &serveSetup{srv: srv, planner: planner, paths: paths, settings: settings,
+		listen: listen, notifier: newNotifier(settings.NotifyEnabled())}
+	st.watchdogOn.Store(settings.ShellWatchdogEnabled()) // 壳层看门狗初态（nil=开）
+	return st, nil
 }
 
 // wireSettingsHook 设置落盘钩子（2026-11-11）：壳层把需要进程外生效的
@@ -154,6 +160,7 @@ func (st *serveSetup) wireSettingsHook() {
 	st.srv.OnSettingsChange = func(s store.Settings) {
 		st.srv.Intents.SetAgentTakeover(s.AgentTakeoverEnabled()) // 智能路由接管热切换
 		applyAutostart(s.AutostartEnabled())
+		st.watchdogOn.Store(s.ShellWatchdogEnabled()) // 壳层看门狗热切换（2026-11-25）
 	}
 }
 
@@ -511,6 +518,7 @@ func runServe(args []string, stdout io.Writer, relay relayState) error {
 		st.wireDesktopHooks()
 		autoEnabled, autoToggle := st.autostartCallbacks()
 		st.srv.OnRestart = st.restartHook(stop, func() { systray.Quit() }) // 托盘态连托盘一并收尾
+		go st.runShellWatchdog(stop, func() { systray.Quit() }) // 壳层卡死自动自愈（缺省开，设置页可关热切换）
 		go runTrayIsolated(TrayOptions{
 			OnOpen: func() { _ = openBrowser("http://" + st.listen + "/") },
 			OnExit: func() {
@@ -583,6 +591,7 @@ func runApp(args []string, stdout io.Writer, relay relayState) error {
 		st.wireDesktopHooks()
 		autoEnabled, autoToggle := st.autostartCallbacks()
 		st.srv.OnRestart = st.restartHook(stop, func() { systray.Quit() }) // 桌面态连托盘一并收尾
+		go st.runShellWatchdog(stop, func() { systray.Quit() }) // 壳层卡死自动自愈（缺省开，设置页可关热切换）
 		go runTrayIsolated(TrayOptions{
 			OnOpen: onOpen,
 			OnExit: func() {

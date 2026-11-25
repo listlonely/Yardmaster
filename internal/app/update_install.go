@@ -241,6 +241,10 @@ func installStaged(stageDir string, restart func(), allowSame bool) error {
 	return nil
 }
 
+// spawnRestartFn 是 spawnRestart 的间接引用（测试注入点：接力钩子/看门
+// 狗测试替换为假 spawn，避免真拉起子进程）。
+var spawnRestartFn = spawnRestart
+
 // spawnRestart 用户触发的进程重启（2026-11-23 设置页/托盘「重启」）：
 // spawn 同入口形态的当前 exe（argv 原样透传 + relayEnv=旧 pid——接力
 // 进程等旧进程退出、端口让位后按普通路径启动，语义同自动更新换代，
@@ -260,19 +264,27 @@ func spawnRestart() error {
 	return nil
 }
 
-// restartHook 装配用户触发重启回调（OnRestart 与托盘菜单共用）：spawn
-// 成功后气泡告知接力窗口期（2026-11-23 用户反馈：托盘/窗口在交接期
-// 不可用，需可感知——「新进程已就位」+ 时间戳），延迟收尾（HTTP 响应
-// 送回 + 留痕余量），stop 令 serve ctx 结束、quitTray 收托盘循环
+// restartHook 装配用户触发重启回调（OnRestart 与托盘菜单共用）：固定
+// 文案版（壳层看门狗走 restartHookNotify 自定义文案，2026-11-25）。
+func (st *serveSetup) restartHook(stop context.CancelFunc, quitTray func()) func() error {
+	return st.restartHookNotify(stop, quitTray, relayStartKey, "Yardmaster 接力重启",
+		"新进程已就位 · 数秒内接管网关")
+}
+
+// restartHookNotify 接力重启钩子（文案可定制变体，2026-11-25 壳层看门狗
+// 复用同一接力通道）：spawnRestartFn 成功后以 key/title/msg 发气泡告知
+// 接力窗口期（用户触发=「新进程已就位」；壳层卡死=「已自动接力重启」，
+// 独立 key 免与升级/手动重启通知被 10min 限频互吞），延迟收尾（HTTP
+// 响应送回 + 留痕余量），stop 令 serve ctx 结束、quitTray 收托盘循环
 // （nil=无托盘场景）。失败返回错误（当前进程继续运行，调用方按普通
 // 错误呈现）。
-func (st *serveSetup) restartHook(stop context.CancelFunc, quitTray func()) func() error {
+func (st *serveSetup) restartHookNotify(stop context.CancelFunc, quitTray func(), key, title, msg string) func() error {
 	return func() error {
-		if err := spawnRestart(); err != nil {
+		if err := spawnRestartFn(); err != nil {
 			return err
 		}
-		st.notifier.send(relayStartKey, "Yardmaster 接力重启",
-			fmt.Sprintf("新进程已就位 · 数秒内接管网关（%s）", time.Now().Format("15:04:05")))
+		st.notifier.send(key, title,
+			fmt.Sprintf("%s（%s）", msg, time.Now().Format("15:04:05")))
 		go func() {
 			time.Sleep(500 * time.Millisecond)
 			stop()

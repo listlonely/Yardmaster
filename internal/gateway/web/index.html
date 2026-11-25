@@ -145,6 +145,10 @@
           <label class="switch-line"><button type="button" class="lib-switch" id="set-autostart" role="switch" aria-checked="false" aria-label="开机自启动"><i></i></button></label>
         </div>
         <div class="row pref">
+          <div class="who"><div class="name">壳层卡死自愈</div><div class="sub">检测到 Explorer 挂起（连续约 60 秒无响应）时自动接力重启应用恢复托盘，10 分钟内不重复触发（仅 Windows；保存即时生效）</div></div>
+          <label class="switch-line"><button type="button" class="lib-switch on" id="set-shellwd" role="switch" aria-checked="true" aria-label="壳层卡死自愈"><i></i></button></label>
+        </div>
+        <div class="row pref">
           <div class="who"><div class="name">自动更新</div><div class="sub">off=完全静默；check=只提示（默认）；auto=发现新版自动下载安装并重启</div></div>
           <select id="set-update" class="sel">
             <option value="check">check · 只提示</option>

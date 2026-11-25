@@ -226,6 +226,11 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, name st
 		if f.Autostart == nil {
 			f.Autostart = cur.Autostart
 		}
+		// 壳层卡死看门狗（2026-11-25）：指针 nil=表单未提供，保留现值
+		//（同 Autostart 语义）；显式值经设置落盘钩子即时热切换，无需重启。
+		if f.ShellWatchdog == nil {
+			f.ShellWatchdog = cur.ShellWatchdog
+		}
 		// 智能路由接管（2026-11-16）：指针 nil=表单未提供，保留现值；
 		// 显式 true 校验前置——启用中的 classify 插件且分类脑已配置
 		//（关闭无前置，随时可退回默认意图链）。

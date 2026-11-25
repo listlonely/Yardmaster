@@ -65,6 +65,14 @@ type Settings struct {
 	// true）。非 Windows 平台为 no-op（壳层 build tag 隔离）。
 	Autostart *bool `json:"autostart,omitempty"`
 
+	// 壳层卡死看门狗（2026-11-25）：true/nil=开启——桌面壳每 15s 探测
+	// Explorer 是否「进程存活但窗口挂起」，连续 4 次（≈60s 持续挂起）
+	// 判定卡死并自动接力重启恢复托盘（10 分钟跨进程冷却防反复）。false=
+	// 关闭。指针语义同 Notify：管理 API PUT nil=未提供保留现值。缺省开
+	//（用户主动要求的自愈能力；判定保守+冷却窗+接力重启已多次验证）。
+	// 仅 Windows 实装（其他平台探测恒「未知」，看门狗空转不触发）。
+	ShellWatchdog *bool `json:"shell_watchdog,omitempty"`
+
 	// 智能路由接管（2026-11-16）：true=意图判定由智能代理分类脑先行
 	//（自定义 L0 关键词仍最优先，其后跳过内置 L0/L1 直达插件分类，
 	// 失败回落内置链）；nil/false=默认意图链（内置 L0 → L1 → 插件
@@ -155,6 +163,13 @@ func (s Settings) NotifyEnabled() bool {
 // 用户显式选择，缺省不悄悄注册开机项）。
 func (s Settings) AutostartEnabled() bool {
 	return s.Autostart != nil && *s.Autostart
+}
+
+// ShellWatchdogEnabled 返回壳层卡死看门狗是否开启（nil=缺省开启——
+// 自愈能力用户主动要求，且判定保守：连续 60 秒挂起 + 10 分钟冷却，
+// 误触发代价仅为一次已多次验证可靠的接力重启）。
+func (s Settings) ShellWatchdogEnabled() bool {
+	return s.ShellWatchdog == nil || *s.ShellWatchdog
 }
 
 // AgentTakeoverEnabled 返回智能路由接管是否开启（nil=缺省关闭——把

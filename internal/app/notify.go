@@ -32,6 +32,7 @@ const restNotifyTTL = 10 * time.Minute
 const (
 	relayStartKey = "relay-start" // 旧进程退出前：新进程已就位、正在交接
 	relayDoneKey  = "relay-done"  // 接力进程：healthz 探活通过/失败回滚
+	shellHangKey  = "shell-hang"  // 壳层卡死自动接力重启（2026-11-25，独立 key 免与升级/手动重启通知互吞）
 )
 
 // notifier 是桌面气泡通知器（nil 安全：零值不发送）。

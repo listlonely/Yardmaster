@@ -610,6 +610,8 @@ async function loadSettings() {
     $('set-notify').setAttribute('aria-checked', String(s.notify !== false));
     $('set-autostart').classList.toggle('on', s.autostart === true); // 指针语义：nil=关
     $('set-autostart').setAttribute('aria-checked', String(s.autostart === true));
+    $('set-shellwd').classList.toggle('on', s.shell_watchdog !== false); // 指针语义：nil=开
+    $('set-shellwd').setAttribute('aria-checked', String(s.shell_watchdog !== false));
     renderTokens(s.tokens || []);
   } catch { /* settings.json 不存在：保持空表单 */ }
 }
@@ -618,6 +620,7 @@ async function loadSettings() {
 
 bindSwitch($('set-notify'), () => {}); // 态随表单保存（无即时副作用）
 bindSwitch($('set-autostart'), () => {}); // 态随表单保存（保存后网关钩子写注册表）
+bindSwitch($('set-shellwd'), () => {}); // 态随表单保存（保存后看门狗热切换生效）
 $('set-colorblind').addEventListener('click', () => {
   const on = !$('set-colorblind').classList.contains('on');
   setColorblind(on);
@@ -641,6 +644,7 @@ $('btn-save-settings').addEventListener('click', async () => {
     listen: $('set-listen').value.trim(),
     notify: $('set-notify').classList.contains('on'),
     autostart: $('set-autostart').classList.contains('on'),
+    shell_watchdog: $('set-shellwd').classList.contains('on'),
     update: $('set-update').value,
     close_action: $('set-close').value,
     fx_usd_cny: parseFloat($('set-fx').value) || 0, // 0=保留现值（服务端语义）
